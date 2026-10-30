@@ -4,7 +4,7 @@
 [![Latest release](https://img.shields.io/github/v/release/TwoPlayz/MCToolKit?include_prereleases&label=release)](https://github.com/TwoPlayz/MCToolKit/releases/latest)
 [![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg?logo=rust)](https://www.rust-lang.org/tools/install)
 [![Open issues](https://img.shields.io/github/issues/TwoPlayz/MCToolKit)](https://github.com/TwoPlayz/MCToolKit/issues)
-[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#contributing)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 [![Join the Discord](https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?logo=discord&logoColor=white)](https://discord.gg/y5mECmtban)
 
 A Minecraft world toolkit written in Rust: convert worlds between Java, Bedrock and Legacy
@@ -109,33 +109,9 @@ cargo run --release -p mctk-cli -- --help   # the `mctoolkit` command-line tool
 
 Use `--release`: world conversion and map rendering are many times slower in a debug build.
 
-### 4. Test
+## Command line
 
-```
-cargo test --workspace
-```
-
-A few tests read sample worlds from `C:\Users\<you>\Desktop\Worlds`. They skip themselves when
-that folder is missing, so the suite passes without any worlds installed.
-
-### Maintainer notes
-
-- **Update checks.** The app asks `https://api.github.com/repos/<owner>/<repo>/releases/latest`
-  on startup. If you fork the project, change `REPO` in `crates/mctk-gui/src/update.rs`.
-- **Third-party licences.** After changing dependencies, refresh
-  `crates/mctk-gui/assets/rust-dependencies.tsv` and
-  [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md) (both list the crates from `Cargo.lock`
-  with their licences).
-
-## Contributing
-
-Bug reports, conversion problems, new mappings, extensions and pull requests are all welcome.
-Before opening a pull request, please make sure `cargo test --workspace` passes. For
-questions or to share a world that converts badly, join the
-[Discord](https://discord.gg/y5mECmtban). By contributing you agree that your work is released
-under the project's licence (LGPL-3.0-or-later).
-
-Command-line examples:
+The `mctoolkit` tool covers the same conversions, pruning, NBT and extension tasks without the window. Examples:
 
 ```
 mctoolkit convert java-to-bedrock "New World" out-bedrock
@@ -186,9 +162,6 @@ and Rust dependencies with their licences is in
   minecraft-data, pmmp/BedrockData).
 - [`crates/mctk-chunker/LICENSE-CHUNKER`](crates/mctk-chunker/LICENSE-CHUNKER): Chunker by Hive
   Games (MIT), ported to Rust in `mctk-chunker`.
-- [`crates/mctk-gui/assets/extensions/NOTICE.md`](crates/mctk-gui/assets/extensions/NOTICE.md)
-  and [`assets/icons/NOTICE.md`](crates/mctk-gui/assets/icons/NOTICE.md): the built-in
-  extensions and icons.
 
 Minecraft is a trademark of Mojang Synergies AB. MCToolKit is not affiliated with Mojang or
 Microsoft.
@@ -196,11 +169,12 @@ Microsoft.
 ## Licence
 
 MCToolKit is free software under the **GNU Lesser General Public License, version 3 or (at your
-option) any later version** (`LGPL-3.0-or-later`). The licence text is in [`LICENSE`](LICENSE)
-(identical to [`COPYING.LESSER`](COPYING.LESSER)), together with [`COPYING`](COPYING), the GNU
-GPL v3 that the LGPL builds on. In short: you can use, modify and share it; if you distribute a
-modified version of the MCToolKit code, its source must be available under the same licence.
+option) any later version** (`LGPL-3.0-or-later`); the full text is in [`LICENSE`](LICENSE). In
+short: you can use, modify and share it; if you distribute a modified version of the MCToolKit
+code, its source must be available under the same licence.
 
-Third-party code and data keep their own licences, all compatible with the LGPL (MIT, BSD, Apache
-2.0, Zlib, CC0, SIL OFL, CC BY 4.0), listed in [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).
-`mctk-chunker` stays under its MIT licence because it is a port of Chunker.
+Third-party code and data keep their own licences, all compatible with the LGPL, listed in
+[`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md). `mctk-chunker` stays under its MIT licence
+because it is a port of Chunker.
+
+Want to help? See [`CONTRIBUTING.md`](CONTRIBUTING.md).

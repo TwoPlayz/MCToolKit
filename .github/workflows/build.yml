@@ -1,0 +1,75 @@
+name: Build
+
+# Every push and pull request is built and tested. Pushing a tag like v0.2.0 also publishes a
+# GitHub release with the Windows app and command-line tool attached.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check that the tag matches the version in Cargo.toml
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}".TrimStart('v')
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          if ($tag -ne $version) {
+            Write-Error "Tag v$tag does not match the workspace version $version in Cargo.toml"
+            exit 1
+          }
+
+      - name: Test
+        run: cargo test --workspace --release
+
+      - name: Build
+        run: cargo build --release -p mctk-gui -p mctk-cli
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $name = "MCToolKit-${{ github.ref_name }}-windows-x64"
+          if ("${{ github.ref_type }}" -ne "tag") { $name = "MCToolKit-windows-x64" }
+          New-Item -ItemType Directory -Path dist/$name | Out-Null
+          Copy-Item target/release/MCToolKit.exe, target/release/mctoolkit.exe, LICENSE, THIRD_PARTY_LICENSES.md, README.md dist/$name
+          Compress-Archive -Path dist/$name/* -DestinationPath dist/$name.zip
+          "ASSET=dist/$name.zip" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MCToolKit-windows-x64
+          path: ${{ env.ASSET }}
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: MCToolKit-windows-x64
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: "*.zip"
+          generate_release_notes: true
+          # 0.x releases and tags with a suffix (v0.2.0-beta) are marked as pre-releases.
+          prerelease: ${{ startsWith(github.ref_name, 'v0.') || contains(github.ref_name, '-') }}

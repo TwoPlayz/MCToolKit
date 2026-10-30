@@ -329,8 +329,7 @@ fn folder_row(ui: &mut Ui, settings: &mut Settings, which: usize, title: &str, t
     changed
 }
 
-const LGPL_TEXT: &str = include_str!("../../../COPYING.LESSER");
-const GPL_TEXT: &str = include_str!("../../../COPYING");
+const LGPL_TEXT: &str = include_str!("../../../LICENSE");
 const CHUNKER_LICENSE: &str = include_str!("../../mctk-chunker/LICENSE-CHUNKER");
 const LATO_LICENSE: &str = include_str!("../assets/fonts/OFL.txt");
 /// `name<TAB>version<TAB>license<TAB>repository`, one Rust dependency per line (generated
@@ -339,7 +338,7 @@ const RUST_DEPENDENCIES: &str = include_str!("../assets/rust-dependencies.tsv");
 
 /// Non-Rust code, data and assets MCToolKit builds on: (name, what it is used for, licence,
 /// link, licence text when it ships with the app).
-const EXTERNAL: [(&str, &str, &str, &str, Option<&str>); 8] = [
+const EXTERNAL: [(&str, &str, &str, &str, Option<&str>); 7] = [
     (
         "Chunker",
         "Hive Games. Ported to Rust in mctk-chunker: block entities, items, entities, item frames and text conversion",
@@ -388,13 +387,6 @@ const EXTERNAL: [(&str, &str, &str, &str, Option<&str>); 8] = [
         "CC BY 4.0",
         "https://fontawesome.com/license/free",
         None,
-    ),
-    (
-        "GNU General Public License v3",
-        "The LGPL builds on it; its text is part of the MCToolKit licence",
-        "GPL-3.0",
-        "https://www.gnu.org/licenses/gpl-3.0.html",
-        Some(GPL_TEXT),
     ),
 ];
 

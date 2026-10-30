@@ -1,7 +1,6 @@
 # Third-party licenses
 
-MCToolKit itself is licensed under the **GNU LGPL v3 or later** (see [`LICENSE`](LICENSE) and
-[`COPYING`](COPYING)). It builds on the work below, each under its own licence, all compatible
+MCToolKit itself is licensed under the **GNU LGPL v3 or later** (see [`LICENSE`](LICENSE)). It builds on the work below, each under its own licence, all compatible
 with the LGPL. The same information is shown in the app under **Settings → About & Licenses**.
 
 ## Code, data and assets
