@@ -119,7 +119,8 @@ pub struct RawChunk {
 
 impl RawChunk {
     pub fn decompress(&self) -> Result<Vec<u8>, Error> {
-        let mut out = Vec::new();
+        // Chunk NBT inflates to several times its stored size.
+        let mut out = Vec::with_capacity(self.data.len() * 6);
         match self.compression {
             ChunkCompression::Gzip => {
                 GzDecoder::new(&self.data[..]).read_to_end(&mut out)?;

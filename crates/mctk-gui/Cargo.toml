@@ -30,6 +30,7 @@ zip.workspace = true
 serde_json.workspace = true
 mctk-leveldb.workspace = true
 raw-window-handle = "0.6"
+ureq = "2.12"
 
 [dev-dependencies]
 tiny-skia = "0.11"

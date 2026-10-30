@@ -374,7 +374,6 @@ fn image_name(icon: Icon) -> Option<&'static str> {
         Icon::Check => "EDITION_CHECK",
         Icon::ChevronLeft => "STEP_PREV",
         Icon::ChevronRight => "ARROW_RIGHT",
-        Icon::ChevronDown => "ARROW_DOWN",
         Icon::Save => "SAVE",
         Icon::Gear => "SETTINGS",
         Icon::Extensions => "EXTENSIONS",
@@ -398,7 +397,13 @@ fn image_name(icon: Icon) -> Option<&'static str> {
         Icon::Maximize | Icon::Restore => "MAX",
         Icon::User => "AUTHOR",
         Icon::ArrowRight => "CONVERTER_ARROW",
-        Icon::Logo | Icon::AppEditor | Icon::AppConverter | Icon::AppPruner => return None,
+        // Drawn as lines, so they take any colour and can point either way.
+        Icon::Logo
+        | Icon::AppEditor
+        | Icon::AppConverter
+        | Icon::AppPruner
+        | Icon::ChevronDown
+        | Icon::ChevronUp => return None,
     })
 }
 
@@ -439,6 +444,7 @@ pub enum Icon {
     ChevronLeft,
     ChevronRight,
     ChevronDown,
+    ChevronUp,
     Save,
     Gear,
     Extensions,
@@ -674,6 +680,7 @@ pub fn paint(p: &Painter, r: Rect, icon: Icon, c: Color32) {
         Icon::ChevronLeft => pen.line(&[(0.62, 0.2), (0.34, 0.5), (0.62, 0.8)]),
         Icon::ChevronRight => pen.line(&[(0.38, 0.2), (0.66, 0.5), (0.38, 0.8)]),
         Icon::ChevronDown => pen.line(&[(0.22, 0.38), (0.5, 0.64), (0.78, 0.38)]),
+        Icon::ChevronUp => pen.line(&[(0.22, 0.62), (0.5, 0.36), (0.78, 0.62)]),
         Icon::Save => {
             pen.rect_stroke(0.16, 0.16, 0.84, 0.84, 2);
             pen.rect_fill(0.3, 0.16, 0.66, 0.38, 0, c);

@@ -278,7 +278,8 @@ pub fn segmented(
         let r = Rect::from_min_size(egui::pos2(x, rect.top()), vec2(*w, rect.height()));
         let resp = ui.interact(
             r,
-            ui.id().with(("seg", opt, i, rect.left() as i32)),
+            ui.id()
+                .with(("seg", opt, i, rect.left() as i32, rect.top() as i32)),
             if enabled {
                 Sense::click()
             } else {

@@ -36,6 +36,8 @@ pub struct Settings {
     pub disabled_extensions: Vec<String>,
     /// A Minecraft resource pack folder whose textures draw block and item icons.
     pub resource_pack: String,
+    /// Look for a newer release on GitHub when the app starts.
+    pub check_updates: bool,
 }
 
 fn app_dir() -> PathBuf {
@@ -111,6 +113,7 @@ impl Default for Settings {
             resource_pack: crate::resource_pack::default_dir(&app_dir())
                 .display()
                 .to_string(),
+            check_updates: true,
         }
     }
 }
@@ -158,6 +161,7 @@ impl Settings {
                 .display()
                 .to_string();
         }
+        s.check_updates = b("check_updates", s.check_updates);
         s.show_log = b("show_log", s.show_log);
         s.log_right = b("log_right", s.log_right);
         s.editor_copy_bedrock = b("editor_copy_bedrock", s.editor_copy_bedrock);
@@ -197,6 +201,7 @@ impl Settings {
             "ps3_worlds": self.ps3_worlds,
             "working_dir": self.working_dir,
             "resource_pack": self.resource_pack,
+            "check_updates": self.check_updates,
             "show_log": self.show_log,
             "log_right": self.log_right,
             "editor_copy_bedrock": self.editor_copy_bedrock,
@@ -324,6 +329,184 @@ fn folder_row(ui: &mut Ui, settings: &mut Settings, which: usize, title: &str, t
     changed
 }
 
+const LGPL_TEXT: &str = include_str!("../../../COPYING.LESSER");
+const GPL_TEXT: &str = include_str!("../../../COPYING");
+const CHUNKER_LICENSE: &str = include_str!("../../mctk-chunker/LICENSE-CHUNKER");
+const LATO_LICENSE: &str = include_str!("../assets/fonts/OFL.txt");
+/// `name<TAB>version<TAB>license<TAB>repository`, one Rust dependency per line (generated
+/// from `cargo metadata`; see `THIRD_PARTY_LICENSES.md`).
+const RUST_DEPENDENCIES: &str = include_str!("../assets/rust-dependencies.tsv");
+
+/// Non-Rust code, data and assets MCToolKit builds on: (name, what it is used for, licence,
+/// link, licence text when it ships with the app).
+const EXTERNAL: [(&str, &str, &str, &str, Option<&str>); 8] = [
+    (
+        "Chunker",
+        "Hive Games. Ported to Rust in mctk-chunker: block entities, items, entities, item frames and text conversion",
+        "MIT",
+        "https://github.com/HiveGamesOSS/Chunker",
+        Some(CHUNKER_LICENSE),
+    ),
+    (
+        "GeyserMC mappings and Geyser",
+        "Java \u{2194} Bedrock block, biome and item tables",
+        "MIT",
+        "https://github.com/GeyserMC/mappings",
+        None,
+    ),
+    (
+        "PrismarineJS minecraft-data",
+        "Block and item ids from before Java 1.13",
+        "MIT",
+        "https://github.com/PrismarineJS/minecraft-data",
+        None,
+    ),
+    (
+        "pmmp BedrockData",
+        "Bedrock 1.12 block conversion table",
+        "CC0 1.0",
+        "https://github.com/pmmp/BedrockData",
+        None,
+    ),
+    (
+        "Lato font",
+        "The app's typeface, by \u{141}ukasz Dziedzic",
+        "SIL Open Font License 1.1",
+        "https://www.latofonts.com",
+        Some(LATO_LICENSE),
+    ),
+    (
+        "Universal Minecraft Tool extensions",
+        "The six built-in NBT editor extensions (Pryze Software LLC, OliverBroadbent); see Extensions \u{2192} More Info",
+        "BSD 2-Clause",
+        "https://universalminecrafttool.com",
+        None,
+    ),
+    (
+        "Font Awesome Free icons",
+        "Many of the general icons",
+        "CC BY 4.0",
+        "https://fontawesome.com/license/free",
+        None,
+    ),
+    (
+        "GNU General Public License v3",
+        "The LGPL builds on it; its text is part of the MCToolKit licence",
+        "GPL-3.0",
+        "https://www.gnu.org/licenses/gpl-3.0.html",
+        Some(GPL_TEXT),
+    ),
+];
+
+fn license_text(ui: &mut Ui, id: &str, text: &str) {
+    ui.add_space(4.0);
+    egui::ScrollArea::vertical()
+        .id_salt(id)
+        .max_height(240.0)
+        .show(ui, |ui| {
+            ui.add(
+                egui::Label::new(
+                    RichText::new(text.trim())
+                        .monospace()
+                        .size(11.5)
+                        .color(theme::TEXT_MUTED),
+                )
+                .wrap(),
+            );
+        });
+    ui.add_space(6.0);
+}
+
+/// "About & Licenses": the MCToolKit licence, then everything external it uses.
+fn licenses(ui: &mut Ui) {
+    ui.label(RichText::new("About & Licenses").font(theme::bold(16.0)));
+    ui.add_space(8.0);
+    ui.label(RichText::new(format!("MCToolKit {}", env!("CARGO_PKG_VERSION"))).color(theme::TEXT));
+    ui.label(
+        RichText::new("Minecraft is a trademark of Mojang Synergies AB; MCToolKit is not affiliated with Mojang or Microsoft.")
+            .color(theme::TEXT_DIM),
+    );
+    ui.add_space(14.0);
+
+    ui.label(RichText::new("MCToolKit License").font(theme::bold(14.0)));
+    ui.add(
+        egui::Label::new(
+            RichText::new("MCToolKit is free software under the GNU Lesser General Public License, version 3 or (at your option) any later version (LGPL-3.0-or-later). You can use, modify and share it; if you distribute a modified version of the MCToolKit code, its source must be available under the same licence.")
+                .size(13.5)
+                .color(theme::TEXT_MUTED),
+        )
+        .wrap(),
+    );
+    egui::CollapsingHeader::new("Full licence text")
+        .id_salt("license-lgpl")
+        .show(ui, |ui| license_text(ui, "license-lgpl-text", LGPL_TEXT));
+    ui.add_space(14.0);
+
+    ui.label(RichText::new("External Licenses").font(theme::bold(14.0)));
+    ui.add(
+        egui::Label::new(
+            RichText::new("MCToolKit builds on the following work. Each keeps its own licence, all compatible with the LGPL.")
+                .size(13.5)
+                .color(theme::TEXT_MUTED),
+        )
+        .wrap(),
+    );
+    ui.add_space(6.0);
+    for (name, what, license, url, text) in EXTERNAL {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new(name).font(theme::bold(13.5)).color(theme::TEXT));
+            ui.label(RichText::new(format!("\u{2014} {license}")).size(13.5).color(theme::TEXT_MUTED));
+            ui.hyperlink_to(RichText::new("link").size(13.0), url);
+        });
+        ui.add(egui::Label::new(RichText::new(what).size(13.0).color(theme::TEXT_DIM)).wrap());
+        if let Some(text) = text {
+            egui::CollapsingHeader::new("Licence text")
+                .id_salt(("license", name))
+                .show(ui, |ui| license_text(ui, name, text));
+        }
+        ui.add_space(6.0);
+    }
+
+    let deps: Vec<[&str; 4]> = RUST_DEPENDENCIES
+        .lines()
+        .filter_map(|l| {
+            let mut f = l.split('\t');
+            Some([f.next()?, f.next()?, f.next()?, f.next().unwrap_or("")])
+        })
+        .collect();
+    egui::CollapsingHeader::new(
+        RichText::new(format!("Rust dependencies ({})", deps.len())).font(theme::bold(13.5)),
+    )
+    .id_salt("license-rust")
+    .show(ui, |ui| {
+        ui.add(
+            egui::Label::new(
+                RichText::new("Crates compiled into MCToolKit, with the licence each one is published under (where a crate offers a choice, MCToolKit uses the permissive option). The same list is in THIRD_PARTY_LICENSES.md.")
+                    .size(13.0)
+                    .color(theme::TEXT_DIM),
+            )
+            .wrap(),
+        );
+        ui.add_space(4.0);
+        egui::ScrollArea::vertical()
+            .id_salt("license-rust-list")
+            .max_height(300.0)
+            .show(ui, |ui| {
+                for [name, version, license, repo] in &deps {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        if repo.is_empty() {
+                            ui.label(RichText::new(format!("{name} {version}")).size(12.5).color(theme::TEXT));
+                        } else {
+                            ui.hyperlink_to(RichText::new(format!("{name} {version}")).size(12.5), *repo);
+                        }
+                        ui.label(RichText::new(*license).size(12.5).color(theme::TEXT_MUTED));
+                    });
+                }
+            });
+    });
+}
+
 /// The Settings page. Returns true when something changed (and was saved).
 pub fn page(ui: &mut Ui, settings: &mut Settings) -> bool {
     let before = settings.clone();
@@ -351,6 +534,8 @@ pub fn page(ui: &mut Ui, settings: &mut Settings) -> bool {
             folder_row(ui, settings, 2, "Wii U Worlds Folder", "The directory the world selection dialog uses to search for dumped Wii U worlds.");
             folder_row(ui, settings, 3, "Working Directory", "The location where temporary files and extensions are stored while working within the application.");
             folder_row(ui, settings, 4, "Resource Pack", "A Minecraft resource pack folder whose block and item textures are used for icons and map colors. Defaults to MCToolKit's own pack, filled on first run from Universal Minecraft Tool or Minecraft Java when either is installed.");
+            widgets::toggle_bold(ui, &mut settings.check_updates, "Check for Updates on Startup");
+            describe(ui, "Ask GitHub for the newest MCToolKit release when the application starts and show a notice in the title bar when one is available. Nothing is downloaded automatically.");
             widgets::toggle_bold(ui, &mut settings.show_log, "Show Debug Log");
             describe(ui, "Displays useful information for finding bugs or developing scripts.");
             titled(ui, "Debug Log Position", "Set where the debug log should be positioned.");
@@ -388,13 +573,7 @@ pub fn page(ui: &mut Ui, settings: &mut Settings) -> bool {
             ui.add_space(16.0);
             ui.separator();
             ui.add_space(20.0);
-            ui.vertical_centered(|ui| {
-                ui.label(RichText::new("About & Licenses").font(theme::bold(16.0)));
-                ui.add_space(8.0);
-                ui.label(RichText::new(format!("MCToolKit {} — LGPL-3.0-or-later", env!("CARGO_PKG_VERSION"))).color(theme::TEXT_MUTED));
-                ui.label(RichText::new("Block and biome mappings: GeyserMC (MIT). Font: Lato (SIL Open Font License 1.1).").color(theme::TEXT_MUTED));
-                ui.label(RichText::new("Minecraft is a trademark of Mojang Synergies AB; MCToolKit is not affiliated with Mojang or Microsoft.").color(theme::TEXT_DIM));
-            });
+            licenses(ui);
             ui.add_space(30.0);
         });
     });

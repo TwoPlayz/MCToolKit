@@ -16,6 +16,7 @@ mod pruner;
 mod resource_pack;
 mod settings;
 mod theme;
+mod update;
 mod widgets;
 mod workspace;
 mod world;
@@ -63,6 +64,8 @@ struct App {
     log: Vec<String>,
     last_statuses: [String; 4],
     zoom: f32,
+    update_check: Option<jobs::Job<Option<update::Update>>>,
+    update: Option<update::Update>,
 }
 
 impl App {
@@ -81,8 +84,13 @@ impl App {
             3 => Some(Page::Pruner),
             _ => None,
         };
+        let update_check = settings
+            .check_updates
+            .then(|| jobs::Job::spawn("Update check", &cc.egui_ctx, update::check));
         App {
             page,
+            update_check,
+            update: None,
             converter: converter::ConverterPage::new(&settings),
             settings,
             editor: Default::default(),
@@ -163,6 +171,32 @@ impl App {
                     "max" => ctx.send_viewport_cmd(ViewportCommand::Maximized(!maximized)),
                     _ => ctx.send_viewport_cmd(ViewportCommand::Minimized(true)),
                 }
+            }
+        }
+        if let Some(u) = &self.update {
+            let font = theme::regular(13.0);
+            let text = format!("Update available: v{}", u.version);
+            let galley = ui
+                .painter()
+                .layout_no_wrap(text, font, Color32::WHITE);
+            let size = vec2(galley.size().x + 24.0, 24.0);
+            let r = Rect::from_center_size(pos2(x - 12.0 - size.x / 2.0, rect.center().y), size);
+            let resp = ui
+                .interact(r, egui::Id::new("update-pill"), Sense::click())
+                .on_hover_cursor(CursorIcon::PointingHand)
+                .on_hover_text("Open the download page on GitHub");
+            ui.painter().rect_filled(
+                r,
+                theme::radius(4),
+                if resp.hovered() { theme::BUTTON_HOVER } else { theme::BUTTON },
+            );
+            ui.painter().galley(
+                pos2(r.left() + 12.0, r.center().y - galley.size().y / 2.0),
+                galley,
+                Color32::WHITE,
+            );
+            if resp.clicked() {
+                ctx.open_url(egui::OpenUrl::new_tab(&u.url));
             }
         }
         if drag.double_clicked() {
@@ -473,6 +507,24 @@ impl eframe::App for App {
             if ctx.input(|i| i.viewport().close_requested()) {
                 self.settings.save();
             }
+        }
+        if let Some(r) = self.update_check.as_ref().and_then(jobs::Job::take) {
+            self.update_check = None;
+            match r {
+                Ok(Some(u)) => {
+                    self.log.push(format!("MCToolKit {} is available", u.version));
+                    self.update = Some(u);
+                }
+                Ok(None) => self.log.push("MCToolKit is up to date".into()),
+                Err(e) => self.log.push(format!("Update check failed: {e}")),
+            }
+        }
+        // A finished conversion, prune or save blinks the taskbar button when the window is
+        // in the background; Windows stops it once the window is focused again.
+        if jobs::take_finished() && !ctx.input(|i| i.focused) {
+            ctx.send_viewport_cmd(ViewportCommand::RequestUserAttention(
+                egui::UserAttentionType::Critical,
+            ));
         }
         Self::resize_edges(ctx);
         self.collect_log();

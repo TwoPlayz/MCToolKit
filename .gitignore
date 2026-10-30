@@ -1,1 +1,62 @@
+# Build output
 /target
+**/*.rs.bk
+
+# Release packaging
+/dist
+/release
+*.msi
+*.exe
+*.zip
+*.7z
+
+# Sample and test worlds (large, and often someone's real save). The tests that use them
+# skip themselves when the folder is absent.
+/Worlds
+/worlds
+/test-worlds
+*.mcworld
+*.mcpack
+*.mctemplate
+savegame.dat
+GAMEDATA
+PARAM.PFD
+
+# MCToolKit's own backups and working files
+*_MCTBackup*
+*.java-stage
+/workspaces
+
+# Editors and IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.iml
+
+# Claude Code and other local assistant state
+.claude/
+CLAUDE.local.md
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs, crash dumps, profiling
+*.log
+*.dmp
+*.pdb
+flamegraph.svg
+perf.data*
+
+# Local secrets and environment files
+.env
+.env.*
+*.pem
+*.key
+
+# Scratch
+/tmp
+/scratch

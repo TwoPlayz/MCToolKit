@@ -197,7 +197,7 @@ impl PrunerPage {
     pub fn open_world(&mut self, path: &Path, edition: UiEdition, settings: &Settings) {
         match Workspace::open(path, edition, settings, false, false) {
             Ok(ws) => {
-                self.status = format!("Opened {}", ws.name);
+                self.status.clear();
                 self.ws = Some(ws);
                 self.layers.clear();
                 self.selected = None;
@@ -219,7 +219,7 @@ impl PrunerPage {
                 return;
             }
         };
-        self.job = Some(Job::spawn("Pruning", ctx, move || {
+        self.job = Some(Job::spawn_notifying("Pruning", ctx, move || {
             let java_dim = match dim.as_str() {
                 "minecraft:the_nether" => -1,
                 "minecraft:the_end" => 1,
@@ -369,6 +369,7 @@ impl PrunerPage {
                         }
                         Err(e) => format!("Save failed: {e}"),
                     };
+                    crate::jobs::finished();
                 }
             }
         });

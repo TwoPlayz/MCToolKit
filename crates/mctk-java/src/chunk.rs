@@ -86,6 +86,16 @@ pub struct Chunk {
 
 impl Chunk {
     pub fn from_nbt(root: NamedTag) -> Result<Self, Error> {
+        Self::parse(root, true)
+    }
+
+    /// Like [`Chunk::from_nbt`] for code that only reads blocks: sections keep no copy of
+    /// their original NBT, so the chunk must not be written back with [`Chunk::to_nbt`].
+    pub fn from_nbt_read_only(root: NamedTag) -> Result<Self, Error> {
+        Self::parse(root, false)
+    }
+
+    fn parse(root: NamedTag, keep_original: bool) -> Result<Self, Error> {
         let top = root
             .tag
             .as_compound()
@@ -133,7 +143,11 @@ impl Chunk {
                 y,
                 blocks: None,
                 biomes: None,
-                original: c.clone(),
+                original: if keep_original {
+                    c.clone()
+                } else {
+                    Compound::new()
+                },
             };
             if modern {
                 if let Some(bs) = c.get("block_states").and_then(Tag::as_compound) {

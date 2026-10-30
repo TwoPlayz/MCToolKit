@@ -2,16 +2,20 @@
 //! chunk/block tooltip, the Locate bar, dimension buttons and the Slicer.
 
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use eframe::egui::{
-    self, Align2, Color32, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui, UiBuilder, Vec2,
-    pos2, vec2,
+    self, Align2, Color32, Pos2, Rect, Response, RichText, Sense, Stroke, StrokeKind, Ui,
+    UiBuilder, Vec2, pos2, vec2,
 };
 
 use crate::icons::{self, Icon};
 use crate::jobs::Job;
 use crate::theme;
-use crate::world::{self, Edition, MapImage};
+use crate::widgets;
+use crate::world::{self, Edition, MapImage, MapProgress};
 
 const RULER: f32 = 18.0;
 const DIMS: [&str; 3] = [
@@ -26,6 +30,10 @@ pub struct MapView {
     pub dimension: String,
     image: Option<(MapImage, egui::TextureHandle)>,
     job: Option<Job<MapImage>>,
+    progress: Option<Arc<MapProgress>>,
+    started: Option<Instant>,
+    stream_dirty: bool,
+    last_upload: Option<Instant>,
     error: Option<String>,
     /// Camera centre in block coordinates and scale in pixels per block.
     pub center: Vec2,
@@ -133,6 +141,10 @@ impl MapView {
             dimension: DIMS[0].to_string(),
             image: None,
             job: None,
+            progress: None,
+            started: None,
+            stream_dirty: false,
+            last_upload: None,
             error: None,
             center: Vec2::ZERO,
             zoom: 1.0,
@@ -149,8 +161,98 @@ impl MapView {
     /// Re-renders (after the world changed on disk).
     pub fn reload(&mut self, path: PathBuf) {
         self.path = path;
+        self.invalidate();
+    }
+
+    /// Drops the picture and stops any render in flight, so the next frame starts a new one.
+    fn invalidate(&mut self) {
+        if let Some(p) = self.progress.take() {
+            p.cancel();
+        }
         self.image = None;
         self.job = None;
+        self.error = None;
+    }
+
+    /// While a render runs, paints finished chunks into a provisional picture (uploaded at
+    /// most ten times a second) so the map fills in instead of appearing all at once.
+    fn stream(&mut self, ctx: &egui::Context) {
+        let Some(p) = self.progress.clone() else {
+            return;
+        };
+        let Some((min_x, min_z, width, height)) = *p.layout.lock().expect("map layout") else {
+            return;
+        };
+        let fresh = std::mem::take(&mut *p.fresh.lock().expect("map tiles"));
+        if self.image.is_none() {
+            let img = MapImage {
+                min_x,
+                min_z,
+                width,
+                height,
+                rgba: vec![0; width * height * 4],
+            };
+            let color = egui::ColorImage::from_rgba_unmultiplied([width, height], &img.rgba);
+            let tex = ctx.load_texture("world-map", color, egui::TextureOptions::NEAREST);
+            self.image = Some((img, tex));
+        }
+        let Some((img, tex)) = &mut self.image else {
+            return;
+        };
+        for (cx, cz, px) in &fresh {
+            let (gx, gz) = ((cx - img.min_x) as usize * 16, (cz - img.min_z) as usize * 16);
+            for row in 0..16 {
+                let dst = ((gz + row) * img.width + gx) * 4;
+                img.rgba[dst..dst + 64].copy_from_slice(&px[row * 64..row * 64 + 64]);
+            }
+        }
+        self.stream_dirty |= !fresh.is_empty();
+        if self.stream_dirty && self.last_upload.is_none_or(|t| t.elapsed().as_millis() >= 100) {
+            let color = egui::ColorImage::from_rgba_unmultiplied([img.width, img.height], &img.rgba);
+            tex.set(color, egui::TextureOptions::NEAREST);
+            self.stream_dirty = false;
+            self.last_upload = Some(Instant::now());
+        }
+    }
+
+    /// "Rendering Map" card with a progress bar, drawn while the picture is being made.
+    fn loading_card(&self, ui: &mut Ui, area: Rect) {
+        let card = vec2(420.0f32.min(area.width() - 24.0).max(200.0), 120.0);
+        let rect = Rect::from_center_size(area.center(), card);
+        let (fraction, done, total) = self.progress.as_ref().map_or((None, 0, 0), |p| {
+            (
+                p.fraction(),
+                p.done.load(Ordering::Relaxed),
+                p.total.load(Ordering::Relaxed),
+            )
+        });
+        let elapsed = self.started.map_or(0.0, |s| s.elapsed().as_secs_f32());
+        ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| {
+            widgets::card(ui, 19, |ui| {
+                ui.set_width(card.x - 40.0);
+                ui.vertical_centered(|ui| {
+                    let (headline, detail) = match fraction {
+                        Some(_) => (
+                            "Rendering Map".to_string(),
+                            format!("{done} of {total} chunks \u{b7} {elapsed:.0}s"),
+                        ),
+                        None => (
+                            "Reading World".to_string(),
+                            format!("Scanning chunks \u{b7} {elapsed:.0}s"),
+                        ),
+                    };
+                    ui.label(RichText::new(headline).size(16.0).color(theme::TEXT));
+                    ui.add_space(8.0);
+                    // Until the chunk count is known, a bar that keeps filling to show activity.
+                    let shown = fraction.unwrap_or_else(|| (elapsed * 0.6).fract());
+                    widgets::progress_bar(ui, shown, card.x - 40.0);
+                    ui.add_space(8.0);
+                    ui.label(RichText::new(detail).size(13.0).color(theme::TEXT_MUTED));
+                });
+            });
+        });
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(100));
     }
 
     /// Draws the map and handles pan/zoom. `primary_pans` is false while a drawing tool
@@ -169,8 +271,15 @@ impl MapView {
                     self.image = Some((img, tex));
                     self.error = None;
                 }
-                Err(e) => self.error = Some(e),
+                Err(e) => {
+                    self.image = None;
+                    self.error = Some(e);
+                }
             }
+        }
+        if self.job.is_some() {
+            self.stream(&ctx);
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
         if self.image.is_none() && self.job.is_none() && self.error.is_none() {
             let (p, e, d, s) = (
@@ -179,9 +288,13 @@ impl MapView {
                 self.dimension.clone(),
                 self.applied_slicer,
             );
+            let progress = Arc::new(MapProgress::default());
+            let shared = Arc::clone(&progress);
             self.job = Some(Job::spawn("Rendering map", &ctx, move || {
-                world::render_map(&p, e, &d, s)
+                world::render_map_with(&p, e, &d, s, &shared)
             }));
+            self.progress = Some(progress);
+            self.started = Some(Instant::now());
         }
 
         let outer = ui.available_rect_before_wrap();
@@ -215,16 +328,35 @@ impl MapView {
                 Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
                 Color32::WHITE,
             );
-        } else {
-            let msg = match &self.error {
-                Some(e) => format!("Could not render the map: {e}"),
-                None => "Rendering map…".to_string(),
-            };
+        } else if let Some(e) = &self.error {
             painter.text(
                 rect.center(),
                 Align2::CENTER_CENTER,
-                msg,
+                format!("Could not render the map: {e}"),
                 theme::regular(15.0),
+                theme::TEXT_MUTED,
+            );
+        } else {
+            self.loading_card(ui, rect);
+        }
+
+        // A small progress note while the picture is still filling in.
+        if self.job.is_some() && self.image.is_some() {
+            let pct = self
+                .progress
+                .as_ref()
+                .and_then(|p| p.fraction())
+                .map_or(0, |f| (f * 100.0) as u32);
+            let r = Rect::from_center_size(
+                pos2(rect.center().x, rect.top() + 22.0),
+                vec2(170.0, 26.0),
+            );
+            painter.rect_filled(r, theme::radius(4), theme::CARD);
+            painter.text(
+                r.center(),
+                Align2::CENTER_CENTER,
+                format!("Rendering map\u{2026} {pct}%"),
+                theme::regular(13.0),
                 theme::TEXT_MUTED,
             );
         }
@@ -449,7 +581,7 @@ impl MapView {
             );
             if resp.clicked() && !selected {
                 self.dimension = d.to_string();
-                self.image = None;
+                self.invalidate();
                 self.error = None;
                 self.fitted = false;
                 self.selected = None;
@@ -500,7 +632,7 @@ impl MapView {
                     );
                     if resp.drag_stopped() || (resp.changed() && !resp.dragged()) {
                         self.applied_slicer = (self.slicer < 320).then_some(self.slicer);
-                        self.image = None;
+                        self.invalidate();
                         self.error = None;
                     }
                 });

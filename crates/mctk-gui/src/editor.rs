@@ -81,7 +81,7 @@ impl EditorPage {
             settings.editor_copy_bedrock,
         ) {
             Ok(ws) => {
-                self.status = format!("Opened {}", ws.name);
+                self.status.clear();
                 self.workspaces.push(ws);
                 self.current = self.workspaces.len() - 1;
                 self.choosing = false;
@@ -145,22 +145,36 @@ impl EditorPage {
             let mut file_action: Option<bool> = None;
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(area));
             let mut more = |ui: &mut Ui| {
-                let r = ui
-                    .add(
-                        egui::Label::new(
-                            egui::RichText::new("More")
-                                .size(13.5)
-                                .color(theme::TEXT_MUTED),
-                        )
-                        .sense(Sense::click()),
-                    )
-                    .on_hover_cursor(egui::CursorIcon::PointingHand);
-                let chevron = Rect::from_center_size(
-                    r.rect.right_center() + vec2(9.0, 1.0),
-                    Vec2::splat(9.0),
+                // One click target for the word and its arrow. Both turn white while the
+                // pointer is over it or the menu is open, and the arrow points up while open.
+                let (area, r) = ui.allocate_exact_size(vec2(60.0, 22.0), Sense::click());
+                let r = r.on_hover_cursor(egui::CursorIcon::PointingHand);
+                let color = if more_open || r.hovered() {
+                    Color32::WHITE
+                } else {
+                    theme::TEXT_MUTED
+                };
+                ui.painter().text(
+                    area.left_center(),
+                    Align2::LEFT_CENTER,
+                    "More",
+                    theme::regular(13.5),
+                    color,
                 );
-                icons::paint(ui.painter(), chevron, Icon::ChevronDown, theme::TEXT_MUTED);
-                if r.clicked() {
+                let text_width = ui
+                    .painter()
+                    .layout_no_wrap("More".into(), theme::regular(13.5), color)
+                    .size()
+                    .x;
+                icons::paint(
+                    ui.painter(),
+                    Rect::from_center_size(
+                        pos2(area.left() + text_width + 11.0, area.center().y + 1.0),
+                        Vec2::splat(9.0),
+                    ),
+                    if more_open { Icon::ChevronUp } else { Icon::ChevronDown },
+                    color,
+                );                if r.clicked() {
                     more_open = !more_open;
                 }
                 if more_open {
@@ -357,6 +371,7 @@ impl EditorPage {
                         Ok(s) => s,
                         Err(e) => format!("Save failed: {e}"),
                     };
+                    crate::jobs::finished();
                 }
             }
         });

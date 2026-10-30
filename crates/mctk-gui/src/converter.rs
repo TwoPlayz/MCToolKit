@@ -1,4 +1,4 @@
-//! The Converter page: INPUT → OUTPUT → OPTIONS → CONVERT → SAVE.
+//! The Converter page: INPUT â†’ OUTPUT â†’ OPTIONS â†’ CONVERT â†’ SAVE.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -16,6 +16,16 @@ use crate::theme;
 use crate::widgets;
 use crate::workspace::copy_dir;
 use crate::world_picker::UiEdition;
+
+/// A card of `size` centred in `area`, never starting above it, so one taller than the area
+/// overflows downwards instead of up under the banner.
+fn centered(area: Rect, size: Vec2) -> Rect {
+    let mut r = Rect::from_center_size(area.center(), size);
+    if r.top() < area.top() {
+        r = r.translate(vec2(0.0, area.top() - r.top()));
+    }
+    r
+}
 
 const STEPS: [&str; 5] = ["INPUT", "OUTPUT", "OPTIONS", "CONVERT", "SAVE"];
 
@@ -140,7 +150,7 @@ impl ConverterPage {
         let progress = Arc::new(Progress::default());
         let p = Arc::clone(&progress);
         let target = out.clone();
-        self.job = Some(Job::spawn("Converting", ctx, move || {
+        self.job = Some(Job::spawn_notifying("Converting", ctx, move || {
             let chunks = |r: &mctk_convert::EditionReport| r.chunks.values().sum::<usize>();
             match (ed, out_ed) {
                 (UiEdition::Java, UiEdition::Bedrock) => {
@@ -249,28 +259,59 @@ impl ConverterPage {
         {
             self.step += 1;
         }
-        let body = Rect::from_min_max(pos2(full.left(), band.bottom()), full.max);
-        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(body));
-        match self.step {
-            0 => {
-                if let Some(e) = edition_chooser(&mut child, "Select a World to Convert", None) {
-                    request = ConverterRequest::PickWorld(e);
-                }
-            }
-            1 => self.output_step(&mut child),
-            2 => self.options_step(&mut child),
-            _ => self.convert_step(&mut child, settings),
-        }
-        // Conversion is new and has not been tried in the games yet.
+        // Conversion is new and has not been tried in the games yet. The banner sits in its
+        // own strip under the stepper, so it never covers the step's content.
         let text = "Early and untested: world conversion has not been verified in Minecraft. \
                     Keep a backup of your world, and expect missing or broken parts.";
         let font = theme::regular(13.0);
-        let galley = ui.painter().layout_no_wrap(text.into(), font, theme::YELLOW);
         let invite = vec2(150.0, 26.0);
-        let banner = Rect::from_center_size(
-            pos2(full.center().x, band.bottom() + 34.0),
-            vec2(galley.size().x + invite.x + 56.0, invite.y.max(galley.size().y) + 18.0),
+        let margin = 16.0;
+        // The banner spans the page between equal margins; the text wraps inside it and the
+        // button always sits centred underneath, so nothing jumps while the window resizes.
+        let width = (full.width() - 2.0 * margin).max(200.0);
+        let galley = ui
+            .painter()
+            .layout(text.into(), font, theme::YELLOW, width - 28.0);
+        let banner = Rect::from_min_size(
+            pos2(full.center().x - width / 2.0, band.bottom() + margin),
+            vec2(width, galley.size().y + invite.y + 36.0),
         );
+        // The same margin all round: below the banner and under the content.
+        let body = Rect::from_min_max(
+            pos2(full.left(), banner.bottom() + margin),
+            pos2(full.right(), full.bottom() - margin),
+        );
+        // A step taller than the window scrolls instead of being cut off.
+        let need = match self.step {
+            0 => 0.0,
+            1 => 300.0,
+            2 => 318.0,
+            _ if self.job.is_some() || self.result.is_some() => 420.0,
+            _ => 278.0,
+        };
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(body));
+        child.set_clip_rect(body.intersect(ui.clip_rect()));
+        egui::ScrollArea::vertical()
+            .auto_shrink(false)
+            .show(&mut child, |ui| {
+                let (area, _) = ui.allocate_exact_size(
+                    vec2(body.width(), body.height().max(need)),
+                    Sense::hover(),
+                );
+                let mut page = ui.new_child(egui::UiBuilder::new().max_rect(area));
+                match self.step {
+                    0 => {
+                        if let Some(e) =
+                            edition_chooser(&mut page, "Select a World to Convert", None)
+                        {
+                            request = ConverterRequest::PickWorld(e);
+                        }
+                    }
+                    1 => self.output_step(&mut page),
+                    2 => self.options_step(&mut page),
+                    _ => self.convert_step(&mut page, settings),
+                }
+            });
         ui.painter().rect_filled(banner, 6.0, theme::CARD);
         ui.painter().rect_stroke(
             banner,
@@ -279,12 +320,12 @@ impl ConverterPage {
             egui::StrokeKind::Inside,
         );
         ui.painter().galley(
-            pos2(banner.left() + 14.0, banner.center().y - galley.size().y / 2.0),
+            pos2(banner.left() + 14.0, banner.top() + 12.0),
             galley,
             theme::YELLOW,
         );
-        let button = Rect::from_min_size(
-            pos2(banner.right() - 14.0 - invite.x, banner.center().y - invite.y / 2.0),
+        let button = Rect::from_center_size(
+            pos2(banner.center().x, banner.bottom() - 12.0 - invite.y / 2.0),
             invite,
         );
         let resp = ui
@@ -320,7 +361,7 @@ impl ConverterPage {
 
     fn output_step(&mut self, ui: &mut Ui) {
         let card = vec2(680.0, 300.0);
-        let rect = Rect::from_center_size(ui.max_rect().center(), card);
+        let rect = centered(ui.max_rect(), card);
         ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
             widgets::card(ui, 19, |ui| {
                 ui.set_width(card.x - 40.0);
@@ -357,7 +398,7 @@ impl ConverterPage {
                             let version = match e {
                                 UiEdition::Java => "26.3 (Latest)",
                                 UiEdition::Bedrock => "1.26.60 (Latest)",
-                                _ => "TU — (n/a)",
+                                _ => "TU â€” (n/a)",
                             };
                             let (r, _) = ui.allocate_exact_size(vec2(120.0, 30.0), Sense::hover());
                             ui.painter().rect_filled(
@@ -403,7 +444,7 @@ impl ConverterPage {
 
     fn options_step(&mut self, ui: &mut Ui) {
         let card = vec2(680.0, 318.0);
-        let rect = Rect::from_center_size(ui.max_rect().center(), card);
+        let rect = centered(ui.max_rect(), card);
         ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
             widgets::card(ui, 19, |ui| {
                 ui.set_width(card.x - 40.0);
@@ -536,12 +577,12 @@ impl ConverterPage {
         let done = matches!(self.result, Some(Ok(_)));
         let tall = running || self.result.is_some();
         let card = vec2(680.0, if tall { 420.0 } else { 278.0 });
-        let rect = Rect::from_center_size(ui.max_rect().center(), card);
+        let rect = centered(ui.max_rect(), card);
         let ctx = ui.ctx().clone();
         ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
             widgets::card(ui, 19, |ui| {
                 ui.set_width(card.x - 40.0);
-                // Source → target.
+                // Source â†’ target.
                 let (r, _) = ui.allocate_exact_size(vec2(card.x - 40.0, 92.0), Sense::hover());
                 let (src, dst) = (self.input.as_ref().map(|i| i.1), self.output);
                 let p = ui.painter();
@@ -710,7 +751,7 @@ impl ConverterPage {
         };
         let cores = std::thread::available_parallelism().map_or(1, |c| c.get());
         let ram = if running {
-            memory_mb().map_or("—".into(), |m| format!("{m}MB"))
+            memory_mb().map_or("â€”".into(), |m| format!("{m}MB"))
         } else {
             String::new()
         };
@@ -779,7 +820,7 @@ impl ConverterPage {
             UiEdition::Java => &settings.java_worlds,
             _ => &settings.bedrock_worlds,
         };
-        let mut dialog = rfd::FileDialog::new().set_title("Save the converted world into…");
+        let mut dialog = rfd::FileDialog::new().set_title("Save the converted world intoâ€¦");
         if std::path::Path::new(default_dir).is_dir() {
             dialog = dialog.set_directory(default_dir);
         }
@@ -803,6 +844,7 @@ impl ConverterPage {
             Ok(()) => format!("Saved to {}", dest.display()),
             Err(e) => format!("Save failed: {e}"),
         };
+        crate::jobs::finished();
     }
 }
 

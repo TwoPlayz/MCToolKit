@@ -62,7 +62,7 @@ impl<R: Read> Reader<'_, R> {
 
     fn bytes(&mut self, n: usize) -> Result<Vec<u8>, Error> {
         // Read through `take` so a corrupt length cannot force a huge allocation up front.
-        let mut buf = Vec::new();
+        let mut buf = Vec::with_capacity(n.min(1 << 20));
         let got = self.inner.by_ref().take(n as u64).read_to_end(&mut buf)?;
         if got != n {
             return Err(Error::Io(std::io::ErrorKind::UnexpectedEof.into()));
@@ -125,19 +125,29 @@ impl<R: Read> Reader<'_, R> {
             }
             TagType::IntArray => {
                 let n = self.len()?;
-                let mut v = Vec::with_capacity(n.min(1 << 16));
-                for _ in 0..n {
-                    v.push(self.i32()?);
-                }
-                Tag::IntArray(v)
+                let raw = self.bytes(n.checked_mul(4).ok_or(Error::BadLength(n as i64))?)?;
+                let java = self.flavor == Flavor::Java;
+                Tag::IntArray(
+                    raw.chunks_exact(4)
+                        .map(|c| {
+                            let b = [c[0], c[1], c[2], c[3]];
+                            if java { i32::from_be_bytes(b) } else { i32::from_le_bytes(b) }
+                        })
+                        .collect(),
+                )
             }
             TagType::LongArray => {
                 let n = self.len()?;
-                let mut v = Vec::with_capacity(n.min(1 << 16));
-                for _ in 0..n {
-                    v.push(self.i64()?);
-                }
-                Tag::LongArray(v)
+                let raw = self.bytes(n.checked_mul(8).ok_or(Error::BadLength(n as i64))?)?;
+                let java = self.flavor == Flavor::Java;
+                Tag::LongArray(
+                    raw.chunks_exact(8)
+                        .map(|c| {
+                            let b = [c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]];
+                            if java { i64::from_be_bytes(b) } else { i64::from_le_bytes(b) }
+                        })
+                        .collect(),
+                )
             }
         })
     }
