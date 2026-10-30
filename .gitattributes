@@ -1,2 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# The built-in NBT editor extensions are third-party Lua scripts; keep them out of the language stats.
+crates/mctk-gui/assets/extensions/** linguist-vendored
