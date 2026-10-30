@@ -1,0 +1,12 @@
+[package]
+name = "mctk-anvil"
+description = "Java Edition Anvil region files (r.x.z.mca)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mctk-nbt.workspace = true
+flate2.workspace = true
+thiserror.workspace = true

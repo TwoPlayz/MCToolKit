@@ -1,0 +1,18 @@
+[package]
+name = "mctk-mapping"
+description = "Java <-> Bedrock block and biome mapping tables"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+include = ["src/**", "data/**", "examples/**", "Cargo.toml"]
+
+[dependencies]
+mctk-nbt.workspace = true
+mctk-java.workspace = true
+flate2.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+mctk-bedrock.workspace = true
+mctk-anvil.workspace = true

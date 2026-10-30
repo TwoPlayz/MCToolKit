@@ -1,0 +1,13 @@
+[package]
+name = "mctk-bedrock"
+description = "Bedrock Edition world model: .mcworld/db folders, chunk keys, subchunk palettes, biomes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mctk-nbt.workspace = true
+mctk-leveldb.workspace = true
+thiserror.workspace = true
+zip.workspace = true

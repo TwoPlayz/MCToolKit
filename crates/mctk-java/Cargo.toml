@@ -1,0 +1,13 @@
+[package]
+name = "mctk-java"
+description = "Java Edition world model: level.dat, dimensions, chunks, block states and palettes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mctk-nbt.workspace = true
+mctk-anvil.workspace = true
+thiserror.workspace = true
+indexmap.workspace = true

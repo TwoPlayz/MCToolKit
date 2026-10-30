@@ -1,0 +1,128 @@
+minecraft:allay	pickup_item	
+minecraft:area_effect_cloud		
+minecraft:armadillo	minecraft:adult,minecraft:adult_unrolled,minecraft:unrolled,minecraft:scanning	minecraft:baby,minecraft:baby_unrolled,minecraft:unrolled,minecraft:scanning
+minecraft:armor_stand		
+minecraft:arrow		
+minecraft:axolotl	axolotl_adult,axolotl_in_water,axolotl_wild	axolotl_adult,axolotl_in_water,axolotl_wild
+minecraft:bat		
+minecraft:bee	bee_adult,track_attacker,shelter_detection,look_for_food	bee_baby,track_attacker,shelter_detection,look_for_food
+minecraft:blaze	mode_switcher	
+minecraft:boat		
+minecraft:bogged		
+minecraft:breeze		
+minecraft:breeze_wind_charge_projectile		
+minecraft:camel	minecraft:camel_adult,minecraft:camel_standing	minecraft:camel_baby,minecraft:camel_baby_standing
+minecraft:camel_husk	minecraft:camel_husk_standing,minecraft:camel_husk_with_no_hostile_rider	
+minecraft:cat	minecraft:cat_adult,minecraft:cat_wild,minecraft:cat_jellie	minecraft:cat_baby,minecraft:cat_wild,minecraft:cat_jellie
+minecraft:cave_spider	minecraft:spider_neutral	
+minecraft:chest_boat		
+minecraft:chest_minecart		
+minecraft:chicken	minecraft:chicken_adult	minecraft:chicken_baby
+minecraft:cod		
+minecraft:command_block_minecart	minecraft:command_block_inactive	
+minecraft:copper_golem	minecraft:copper_oxidizing	
+minecraft:cow	minecraft:cow_adult	minecraft:cow_baby
+minecraft:creaking	minecraft:spawned_by_player,minecraft:neutral,minecraft:mobile	
+minecraft:creeper		
+minecraft:cushion		
+minecraft:dolphin	dolphin_adult,dolphin_swimming_navigation	dolphin_baby,dolphin_swimming_navigation
+minecraft:donkey	minecraft:donkey_adult,minecraft:donkey_wild	minecraft:donkey_baby
+minecraft:dragon_fireball		
+minecraft:drowned	minecraft:melee_equipment,minecraft:melee_mode,minecraft:adult_drowned,minecraft:wander_mode	minecraft:melee_equipment,minecraft:melee_mode,minecraft:baby_drowned,minecraft:wander_mode
+minecraft:egg		
+minecraft:elder_guardian		
+minecraft:ender_crystal		
+minecraft:ender_dragon	dragon_flying	
+minecraft:ender_pearl		
+minecraft:enderman	minecraft:enderman_calm,minecraft:not_riding	
+minecraft:endermite		
+minecraft:evocation_illager		
+minecraft:eye_of_ender_signal		
+minecraft:fireball		
+minecraft:fireworks_rocket		
+minecraft:fishing_hook		
+minecraft:fox	minecraft:fox_adult,minecraft:fox_with_item,minecraft:docile_fox	minecraft:fox_baby,minecraft:docile_fox
+minecraft:frog	temperate_frog	
+minecraft:ghast		
+minecraft:glow_squid	minecraft:squid_adult	minecraft:squid_baby
+minecraft:goat	goat_adult	goat_baby
+minecraft:guardian		
+minecraft:happy_ghast	minecraft:adult,minecraft:adult_mobile,minecraft:adult_unharnessed,minecraft:adult_without_passengers	minecraft:baby
+minecraft:hoglin	minecraft:hoglin_adult,huntable_adult,zombification_sensor	minecraft:hoglin_baby,zombification_sensor
+minecraft:hopper_minecart	minecraft:hopper_active	
+minecraft:horse	minecraft:horse_adult,minecraft:horse_wild,minecraft:base_darkbrown,minecraft:markings_black_dots	minecraft:horse_baby,minecraft:base_darkbrown,minecraft:markings_black_dots
+minecraft:husk	minecraft:zombie_husk_adult,minecraft:not_on_camel_husk	minecraft:zombie_husk_baby,minecraft:not_on_camel_husk
+minecraft:iron_golem		
+minecraft:lightning_bolt		
+minecraft:lingering_potion		
+minecraft:llama	minecraft:llama_adult,minecraft:llama_wild,minecraft:llama_unleashed,minecraft:strength_3,minecraft:llama_gray	minecraft:llama_baby,minecraft:llama_unleashed,minecraft:strength_3,minecraft:llama_gray
+minecraft:llama_spit		
+minecraft:magma_cube	minecraft:slime_large,minecraft:slime_calm	
+minecraft:minecart		
+minecraft:mooshroom	minecraft:cow_adult,minecraft:mooshroom_red	minecraft:cow_baby,minecraft:mooshroom_red
+minecraft:mule	minecraft:mule_adult,minecraft:mule_wild	minecraft:mule_baby
+minecraft:nautilus	minecraft:nautilus_adult,minecraft:nautilus_wild_adult_calm,minecraft:nautilus_ai_controlled,minecraft:nautilus_leashable	minecraft:nautilus_baby,minecraft:nautilus_leashable
+minecraft:npc		
+minecraft:ocelot	minecraft:ocelot_adult,minecraft:ocelot_wild,minecraft:wild_child_ocelot_spawn	minecraft:ocelot_baby,minecraft:ocelot_wild
+minecraft:ominous_item_spawner		
+minecraft:panda	minecraft:panda_adult	minecraft:panda_baby
+minecraft:parched		
+minecraft:parrot	minecraft:parrot_silver,minecraft:parrot_adult,minecraft:parrot_wild,minecraft:parrot_not_riding_player	
+minecraft:phantom		
+minecraft:pig	minecraft:pig_adult,minecraft:pig_unsaddled	minecraft:pig_baby
+minecraft:piglin	piglin_adult,zombification_sensor,alert_for_attack_targets,melee_unit,attack_cooldown,hunter,interactable_piglin	piglin_baby,zombification_sensor
+minecraft:piglin_brute	zombification_sensor,alert_for_attack_targets,melee_unit,go_back_to_spawn	
+minecraft:pillager	minecraft:ranged_attack	
+minecraft:player		
+minecraft:polar_bear	minecraft:adult,minecraft:adult_wild	minecraft:baby,minecraft:baby_wild
+minecraft:pufferfish	minecraft:normal_puff	
+minecraft:rabbit	adult,coat_brown	baby,coat_brown
+minecraft:ravager	minecraft:hostile	
+minecraft:salmon	adult,scale_normal	
+minecraft:sheep	minecraft:sheep_adult,minecraft:sheep_dyeable,minecraft:rideable_wooly,minecraft:loot_wooly	minecraft:sheep_baby,minecraft:sheep_dyeable
+minecraft:shulker	minecraft:shulker_undyed	
+minecraft:shulker_bullet		
+minecraft:silverfish	minecraft:silverfish_calm	
+minecraft:skeleton		
+minecraft:skeleton_horse	minecraft:skeleton_horse_adult	minecraft:skeleton_horse_baby
+minecraft:slime	minecraft:slime_large,minecraft:slime_calm	
+minecraft:small_fireball		
+minecraft:sniffer	sniffer_adult,pushable	sniffer_baby,pushable
+minecraft:snow_golem		
+minecraft:snowball		
+minecraft:spider	minecraft:spider_neutral	
+minecraft:splash_potion		
+minecraft:squid	minecraft:squid_adult	minecraft:squid_baby
+minecraft:stray		
+minecraft:strider	minecraft:strider_adult,minecraft:strider_unsaddled,minecraft:detect_suffocating,minecraft:strider_pathing_behaviors	minecraft:strider_baby,minecraft:detect_suffocating,minecraft:strider_pathing_behaviors
+minecraft:sulfur_cube	minecraft:sulfur_cube_ai,minecraft:sulfur_cube_medium,minecraft:sulfur_cube_medium_without_block,minecraft:sulfur_cube_medium_without_block_can_pickup,minecraft:sulfur_cube_without_target	
+minecraft:tadpole		
+minecraft:thrown_trident		
+minecraft:tnt		
+minecraft:tnt_minecart	minecraft:inactive	
+minecraft:trader_llama	minecraft:llama_adult,minecraft:llama_wild,minecraft:llama_unleashed,minecraft:strength_3,minecraft:llama_gray	minecraft:llama_baby,minecraft:llama_unleashed,minecraft:strength_3,minecraft:llama_gray
+minecraft:tripod_camera		
+minecraft:tropicalfish	adult,minecraft:tropicalfish_variant_b,minecraft:tropicalfish_variant_pattern_6,minecraft:tropicalfish_base_red,minecraft:tropicalfish_pattern_red	
+minecraft:turtle	minecraft:adult	minecraft:baby
+minecraft:vex		
+minecraft:villager	adult,cleric,behavior_non_peasant	baby,cleric,behavior_non_peasant
+minecraft:villager_v2	villager_skin_5,adult,make_and_receive_love,nitwit,behavior_peasant,jobless_schedule	villager_skin_5,baby,child_schedule
+minecraft:vindicator	minecraft:default_targeting	
+minecraft:wandering_trader		
+minecraft:warden	pushable	
+minecraft:wind_charge_projectile		
+minecraft:witch		
+minecraft:wither		
+minecraft:wither_skeleton		
+minecraft:wither_skull		
+minecraft:wither_skull_dangerous		
+minecraft:wolf	minecraft:wolf_adult,minecraft:wolf_wild,minecraft:wolf_leashable	minecraft:wolf_baby,minecraft:wolf_wild,minecraft:wolf_leashable
+minecraft:xp_bottle		
+minecraft:xp_orb		
+minecraft:zoglin	zoglin_adult	zoglin_baby
+minecraft:zombie	minecraft:zombie_default,minecraft:zombie_adult,minecraft:on_foot,minecraft:not_on_zombie_horse,minecraft:can_have_equipment	minecraft:zombie_default,minecraft:zombie_baby,minecraft:on_foot,minecraft:not_on_zombie_horse,minecraft:can_have_equipment
+minecraft:zombie_horse	minecraft:horse_adult,minecraft:horse_wild,minecraft:horse_can_be_leashed	minecraft:horse_baby
+minecraft:zombie_nautilus	minecraft:zombie_nautilus_wild,minecraft:zombie_nautilus_wild_unmounted,minecraft:zombie_nautilus_wild_calm,minecraft:zombie_nautilus_leashable,minecraft:zombie_nautilus_tameable,minecraft:zombie_nautilus_ai_controlled	
+minecraft:zombie_pigman	minecraft:pig_zombie_adult,minecraft:pig_zombie_calm	minecraft:pig_zombie_baby,minecraft:pig_zombie_calm
+minecraft:zombie_villager	adult,cleric	baby,cleric
+minecraft:zombie_villager_v2	adult,mason,villager_skin_5	baby,mason,villager_skin_5

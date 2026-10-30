@@ -1,0 +1,38 @@
+[package]
+name = "mctk-gui"
+description = "MCToolKit desktop app: world browser, NBT editor, converter, pruner and map"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "MCToolKit"
+path = "src/main.rs"
+
+[dependencies]
+mctk-nbt.workspace = true
+mctk-anvil.workspace = true
+mctk-java.workspace = true
+mctk-bedrock.workspace = true
+mctk-console.workspace = true
+mctk-convert.workspace = true
+mctk-prune.workspace = true
+mctk-mapping.workspace = true
+mctk-world.workspace = true
+mctk-lua.workspace = true
+eframe = "=0.31.1"
+rfd = "=0.15.3"
+flate2.workspace = true
+crc32fast = "1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+zip.workspace = true
+serde_json.workspace = true
+mctk-leveldb.workspace = true
+raw-window-handle = "0.6"
+
+[dev-dependencies]
+tiny-skia = "0.11"
+
+[build-dependencies]
+embed-resource = "3"

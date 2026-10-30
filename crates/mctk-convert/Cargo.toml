@@ -1,0 +1,23 @@
+[package]
+name = "mctk-convert"
+description = "World conversion between Minecraft editions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mctk-nbt.workspace = true
+mctk-anvil.workspace = true
+mctk-java.workspace = true
+mctk-console.workspace = true
+mctk-bedrock.workspace = true
+mctk-leveldb.workspace = true
+mctk-mapping.workspace = true
+mctk-chunker.workspace = true
+flate2.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+mctk-mapping.workspace = true

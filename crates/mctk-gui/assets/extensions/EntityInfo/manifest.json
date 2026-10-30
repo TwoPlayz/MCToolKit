@@ -1,0 +1,10 @@
+{
+  "link" : "https://github.com/OliverBroadbent/EntityInfo",
+  "name" : "Entity Info",
+  "version" : "1.3.0",
+  "author" : "Broadbent",
+  "description" : "Provides helpful icons, names, and descriptions for entities. Includes support for legacy mobs.",
+  "editions" : ["JAVA", "BEDROCK", "CONSOLE"],
+  "extension_types" : ["NBT_EDITOR_STYLE"],
+  "tags" : []
+}

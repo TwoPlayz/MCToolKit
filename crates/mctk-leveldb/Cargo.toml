@@ -1,0 +1,11 @@
+[package]
+name = "mctk-leveldb"
+description = "Pure-Rust LevelDB reader and compacting writer with Mojang's zlib compression (Bedrock worlds)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+flate2.workspace = true
+thiserror.workspace = true

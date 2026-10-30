@@ -1,0 +1,15 @@
+﻿[package]
+name = "mctk-chunker"
+description = "Edition-neutral model of Minecraft world data and its Java / Bedrock codecs, ported from Hive Games' Chunker (MIT)"
+version.workspace = true
+edition.workspace = true
+license = "MIT"
+rust-version.workspace = true
+include = ["src/**", "data/**", "Cargo.toml", "LICENSE-CHUNKER"]
+
+[dependencies]
+mctk-nbt.workspace = true
+mctk-java.workspace = true
+mctk-mapping.workspace = true
+serde_json.workspace = true
+

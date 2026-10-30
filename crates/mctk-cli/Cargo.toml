@@ -1,0 +1,22 @@
+[package]
+name = "mctk-cli"
+description = "mctoolkit: command-line Minecraft world toolkit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "mctoolkit"
+path = "src/main.rs"
+
+[dependencies]
+mctk-nbt.workspace = true
+mctk-anvil.workspace = true
+mctk-java.workspace = true
+mctk-bedrock.workspace = true
+mctk-console.workspace = true
+clap.workspace = true
+mctk-convert.workspace = true
+mctk-prune.workspace = true
+mctk-lua.workspace = true

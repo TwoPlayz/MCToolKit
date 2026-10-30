@@ -1,0 +1,166 @@
+acacia_boat	minecraft:acacia_boat	
+acacia_chest_boat	minecraft:acacia_chest_boat	
+allay	minecraft:allay	minecraft:allay
+area_effect_cloud	minecraft:area_effect_cloud	minecraft:area_effect_cloud
+armadillo	minecraft:armadillo	minecraft:armadillo
+armor_stand	minecraft:armor_stand	minecraft:armor_stand
+arrow	minecraft:arrow	minecraft:arrow
+axolotl	minecraft:axolotl	minecraft:axolotl
+bamboo_chest_raft	minecraft:bamboo_chest_raft	
+bamboo_raft	minecraft:bamboo_raft	
+bat	minecraft:bat	minecraft:bat
+bee	minecraft:bee	minecraft:bee
+birch_boat	minecraft:birch_boat	
+birch_chest_boat	minecraft:birch_chest_boat	
+blaze	minecraft:blaze	minecraft:blaze
+block_display	minecraft:block_display	
+bogged	minecraft:bogged	minecraft:bogged
+breeze	minecraft:breeze	minecraft:breeze
+breeze_wind_charge_projectile	minecraft:breeze_wind_charge	minecraft:breeze_wind_charge_projectile
+camel	minecraft:camel	minecraft:camel
+camel_husk	minecraft:camel_husk	minecraft:camel_husk
+cat	minecraft:cat	minecraft:cat
+cave_spider	minecraft:cave_spider	minecraft:cave_spider
+cherry_boat	minecraft:cherry_boat	
+cherry_chest_boat	minecraft:cherry_chest_boat	
+chest_minecart	minecraft:chest_minecart	minecraft:chest_minecart
+chicken	minecraft:chicken	minecraft:chicken
+cod	minecraft:cod	minecraft:cod
+command_block_minecart	minecraft:command_block_minecart	minecraft:command_block_minecart
+copper_golem	minecraft:copper_golem	minecraft:copper_golem
+cow	minecraft:cow	minecraft:cow
+creaking	minecraft:creaking	minecraft:creaking
+creeper	minecraft:creeper	minecraft:creeper
+cushion	minecraft:cushion	minecraft:cushion
+dark_oak_boat	minecraft:dark_oak_boat	
+dark_oak_chest_boat	minecraft:dark_oak_chest_boat	
+dolphin	minecraft:dolphin	minecraft:dolphin
+donkey	minecraft:donkey	minecraft:donkey
+dragon_fireball	minecraft:dragon_fireball	minecraft:dragon_fireball
+drowned	minecraft:drowned	minecraft:drowned
+egg	minecraft:egg	minecraft:egg
+elder_guardian	minecraft:elder_guardian	minecraft:elder_guardian
+elder_guardian_ghost		minecraft:elder_guardian_ghost
+enderman	minecraft:enderman	minecraft:enderman
+endermite	minecraft:endermite	minecraft:endermite
+ender_dragon	minecraft:ender_dragon	minecraft:ender_dragon
+ender_pearl	minecraft:ender_pearl	minecraft:ender_pearl
+end_crystal	minecraft:end_crystal	minecraft:ender_crystal
+evoker	minecraft:evoker	minecraft:evocation_illager
+evoker_fangs	minecraft:evoker_fangs	minecraft:evocation_fang
+experience_bottle	minecraft:experience_bottle	minecraft:xp_bottle
+experience_orb	minecraft:experience_orb	minecraft:xp_orb
+eye_of_ender	minecraft:eye_of_ender	minecraft:eye_of_ender_signal
+falling_block	minecraft:falling_block	minecraft:falling_block
+fireball	minecraft:fireball	minecraft:fireball
+firework_rocket	minecraft:firework_rocket	minecraft:fireworks_rocket
+fishing_bobber	minecraft:fishing_bobber	minecraft:fishing_hook
+fox	minecraft:fox	minecraft:fox
+frog	minecraft:frog	minecraft:frog
+frostbite		minecraft:frostbite
+furnace_minecart	minecraft:furnace_minecart	minecraft:furnace_minecart
+ghast	minecraft:ghast	minecraft:ghast
+giant	minecraft:giant	
+glow_item_frame	minecraft:glow_item_frame	
+glow_squid	minecraft:glow_squid	minecraft:glow_squid
+goat	minecraft:goat	minecraft:goat
+guardian	minecraft:guardian	minecraft:guardian
+happy_ghast	minecraft:happy_ghast	minecraft:happy_ghast
+hoglin	minecraft:hoglin	minecraft:hoglin
+hopper_minecart	minecraft:hopper_minecart	minecraft:hopper_minecart
+horse	minecraft:horse	minecraft:horse
+husk	minecraft:husk	minecraft:husk
+illusioner	minecraft:illusioner	
+interaction	minecraft:interaction	
+iron_golem	minecraft:iron_golem	minecraft:iron_golem
+item	minecraft:item	minecraft:item
+item_display	minecraft:item_display	
+item_frame	minecraft:item_frame	
+jungle_boat	minecraft:jungle_boat	
+jungle_chest_boat	minecraft:jungle_chest_boat	
+leash_knot	minecraft:leash_knot	minecraft:leash_knot
+lightning_bolt	minecraft:lightning_bolt	minecraft:lightning_bolt
+lingering_potion	minecraft:lingering_potion	minecraft:lingering_potion
+llama	minecraft:llama	minecraft:llama
+llama_spit	minecraft:llama_spit	minecraft:llama_spit
+magma_cube	minecraft:magma_cube	minecraft:magma_cube
+mangrove_boat	minecraft:mangrove_boat	
+mangrove_chest_boat	minecraft:mangrove_chest_boat	
+mannequin	minecraft:mannequin	
+marker	minecraft:marker	
+minecart	minecraft:minecart	minecraft:minecart
+mooshroom	minecraft:mooshroom	minecraft:mooshroom
+moving_block		minecraft:moving_block
+mule	minecraft:mule	minecraft:mule
+nautilus	minecraft:nautilus	minecraft:nautilus
+oak_boat	minecraft:oak_boat	minecraft:boat
+oak_chest_boat	minecraft:oak_chest_boat	minecraft:chest_boat
+ocelot	minecraft:ocelot	minecraft:ocelot
+ominous_item_spawner	minecraft:ominous_item_spawner	minecraft:ominous_item_spawner
+painting	minecraft:painting	minecraft:painting
+pale_oak_boat	minecraft:pale_oak_boat	
+pale_oak_chest_boat	minecraft:pale_oak_chest_boat	
+panda	minecraft:panda	minecraft:panda
+parched	minecraft:parched	minecraft:parched
+parrot	minecraft:parrot	minecraft:parrot
+phantom	minecraft:phantom	minecraft:phantom
+pig	minecraft:pig	minecraft:pig
+piglin	minecraft:piglin	minecraft:piglin
+piglin_brute	minecraft:piglin_brute	minecraft:piglin_brute
+pillager	minecraft:pillager	minecraft:pillager
+player	minecraft:player	minecraft:player
+polar_bear	minecraft:polar_bear	minecraft:polar_bear
+poplar_boat	minecraft:poplar_boat	
+poplar_chest_boat	minecraft:poplar_chest_boat	
+potion	minecraft:splash_potion	minecraft:splash_potion
+pufferfish	minecraft:pufferfish	minecraft:pufferfish
+rabbit	minecraft:rabbit	minecraft:rabbit
+ravager	minecraft:ravager	minecraft:ravager
+salmon	minecraft:salmon	minecraft:salmon
+sheep	minecraft:sheep	minecraft:sheep
+shield		minecraft:shield
+shulker	minecraft:shulker	minecraft:shulker
+shulker_bullet	minecraft:shulker_bullet	minecraft:shulker_bullet
+silverfish	minecraft:silverfish	minecraft:silverfish
+skeleton	minecraft:skeleton	minecraft:skeleton
+skeleton_horse	minecraft:skeleton_horse	minecraft:skeleton_horse
+slime	minecraft:slime	minecraft:slime
+small_fireball	minecraft:small_fireball	minecraft:small_fireball
+sniffer	minecraft:sniffer	minecraft:sniffer
+snowball	minecraft:snowball	minecraft:snowball
+snow_golem	minecraft:snow_golem	minecraft:snow_golem
+spawner_minecart	minecraft:spawner_minecart	
+spectral_arrow	minecraft:spectral_arrow	
+spider	minecraft:spider	minecraft:spider
+spruce_boat	minecraft:spruce_boat	
+spruce_chest_boat	minecraft:spruce_chest_boat	
+squid	minecraft:squid	minecraft:squid
+stray	minecraft:stray	minecraft:stray
+strider	minecraft:strider	minecraft:strider
+sulfur_cube	minecraft:sulfur_cube	minecraft:sulfur_cube
+tadpole	minecraft:tadpole	minecraft:tadpole
+text_display	minecraft:text_display	
+tnt	minecraft:tnt	minecraft:tnt
+tnt_minecart	minecraft:tnt_minecart	minecraft:tnt_minecart
+trader_llama	minecraft:trader_llama	minecraft:trader_llama
+trident	minecraft:trident	minecraft:thrown_trident
+tropical_fish	minecraft:tropical_fish	minecraft:tropicalfish
+turtle	minecraft:turtle	minecraft:turtle
+vex	minecraft:vex	minecraft:vex
+villager	minecraft:villager	minecraft:villager_v2
+vindicator	minecraft:vindicator	minecraft:vindicator
+wandering_trader	minecraft:wandering_trader	minecraft:wandering_trader
+warden	minecraft:warden	minecraft:warden
+wind_charge	minecraft:wind_charge	minecraft:wind_charge_projectile
+witch	minecraft:witch	minecraft:witch
+wither	minecraft:wither	minecraft:wither
+wither_skeleton	minecraft:wither_skeleton	minecraft:wither_skeleton
+wither_skull	minecraft:wither_skull	minecraft:wither_skull
+wither_skull_dangerous		minecraft:wither_skull_dangerous
+wolf	minecraft:wolf	minecraft:wolf
+zoglin	minecraft:zoglin	minecraft:zoglin
+zombie	minecraft:zombie	minecraft:zombie
+zombie_horse	minecraft:zombie_horse	minecraft:zombie_horse
+zombie_nautilus	minecraft:zombie_nautilus	minecraft:zombie_nautilus
+zombie_villager	minecraft:zombie_villager	minecraft:zombie_villager_v2
+zombified_piglin	minecraft:zombified_piglin	minecraft:zombie_pigman

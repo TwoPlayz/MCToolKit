@@ -1,0 +1,17 @@
+[package]
+name = "mctk-console"
+description = "Minecraft Legacy Console Edition saves: save archives, regions, chunk compression"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mctk-nbt.workspace = true
+flate2.workspace = true
+thiserror.workspace = true
+lzxd = "0.2"
+
+[dev-dependencies]
+flate2.workspace = true
+mctk-nbt.workspace = true

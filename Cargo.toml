@@ -1,0 +1,29 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "LGPL-3.0-or-later"
+rust-version = "1.85"
+
+[workspace.dependencies]
+mctk-nbt = { path = "crates/mctk-nbt" }
+mctk-anvil = { path = "crates/mctk-anvil" }
+mctk-java = { path = "crates/mctk-java" }
+mctk-leveldb = { path = "crates/mctk-leveldb" }
+mctk-bedrock = { path = "crates/mctk-bedrock" }
+mctk-console = { path = "crates/mctk-console" }
+mctk-convert = { path = "crates/mctk-convert" }
+mctk-prune = { path = "crates/mctk-prune" }
+mctk-mapping = { path = "crates/mctk-mapping" }
+mctk-lua = { path = "crates/mctk-lua" }
+mctk-world = { path = "crates/mctk-world" }
+mctk-chunker = { path = "crates/mctk-chunker" }
+zip = { version = "2.2.0", default-features = false, features = ["deflate"] }
+flate2 = "1.0.30"
+indexmap = "2.2.6"
+thiserror = "1.0.61"
+clap = { version = "4.5.4", features = ["derive"] }
+serde_json = "1.0.120"
