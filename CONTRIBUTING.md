@@ -54,10 +54,11 @@ any real-world testing is valuable.
 
 ## Releases (maintainers)
 
-Pushing a tag such as `v0.2.0` builds the Windows app and command-line tool on GitHub and
-publishes them as a release. The tag must match the `version` in the workspace `Cargo.toml`
-(`0.2.0` for `v0.2.0`), because the in-app update check compares the two. See
-`.github/workflows/build.yml`.
+Every push to `main` is built and tested on GitHub. To publish a release, raise `version` in
+the workspace `Cargo.toml` (for example to `0.2.0`) and push: GitHub builds the Windows app and
+command-line tool and publishes them as release `v0.2.0`. If that version is already released,
+nothing is published. The in-app update check compares the release tag with the running
+version, so always raise the version for a new release. See `.github/workflows/build.yml`.
 
 ## Licence
 
