@@ -1960,7 +1960,7 @@ dependencies = [
 
 [[package]]
 name = "mctk-anvil"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "flate2",
  "mctk-nbt",
@@ -1969,7 +1969,7 @@ dependencies = [
 
 [[package]]
 name = "mctk-bedrock"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "mctk-leveldb",
  "mctk-nbt",
@@ -1979,7 +1979,7 @@ dependencies = [
 
 [[package]]
 name = "mctk-chunker"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "mctk-java",
  "mctk-mapping",
@@ -1989,7 +1989,7 @@ dependencies = [
 
 [[package]]
 name = "mctk-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "clap",
  "mctk-anvil",
@@ -2004,7 +2004,7 @@ dependencies = [
 
 [[package]]
 name = "mctk-console"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "flate2",
  "lzxd",
@@ -2014,7 +2014,7 @@ dependencies = [
 
 [[package]]
 name = "mctk-convert"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "flate2",
  "mctk-anvil",
@@ -2031,7 +2031,7 @@ dependencies = [
 
 [[package]]
 name = "mctk-gui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "crc32fast",
  "eframe",
@@ -2059,7 +2059,7 @@ dependencies = [
 
 [[package]]
 name = "mctk-java"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "indexmap",
  "mctk-anvil",
@@ -2069,7 +2069,7 @@ dependencies = [
 
 [[package]]
 name = "mctk-leveldb"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "flate2",
  "thiserror 1.0.69",
@@ -2077,7 +2077,7 @@ dependencies = [
 
 [[package]]
 name = "mctk-lua"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "flate2",
  "mctk-anvil",
@@ -2094,7 +2094,7 @@ dependencies = [
 
 [[package]]
 name = "mctk-mapping"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "flate2",
  "mctk-anvil",
@@ -2106,7 +2106,7 @@ dependencies = [
 
 [[package]]
 name = "mctk-nbt"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "flate2",
  "indexmap",
@@ -2115,7 +2115,7 @@ dependencies = [
 
 [[package]]
 name = "mctk-prune"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "mctk-anvil",
  "mctk-bedrock",
@@ -2127,7 +2127,7 @@ dependencies = [
 
 [[package]]
 name = "mctk-world"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "mctk-anvil",
  "mctk-bedrock",
