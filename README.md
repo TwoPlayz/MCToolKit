@@ -5,13 +5,13 @@
 [![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg?logo=rust)](https://www.rust-lang.org/tools/install)
 [![Open issues](https://img.shields.io/github/issues/TwoPlayz/MCToolKit)](https://github.com/TwoPlayz/MCToolKit/issues)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
-[![Join the Discord](https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?logo=discord&logoColor=white)](https://discord.gg/y5mECmtban)
+[![Join the Discord](https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?logo=discord&logoColor=white)](https://discord.gg/wC6zC93fTS)
 
 A Minecraft world toolkit written in Rust: convert worlds between Java, Bedrock and Legacy
 Console editions, prune chunks, edit NBT, browse a 2D map, and extend it with Lua scripts.
 
 <p align="center">
-  <a href="https://discord.gg/y5mECmtban"><img alt="Join the MCToolKit Discord" src="https://img.shields.io/badge/Join%20the%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white"></a>
+  <a href="https://discord.gg/wC6zC93fTS"><img alt="Join the MCToolKit Discord" src="https://img.shields.io/badge/Join%20the%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white"></a>
 </p>
 
 ## Screenshots
@@ -25,7 +25,7 @@ Console editions, prune chunks, edit NBT, browse a 2D map, and extend it with Lu
 > **Early and untested.** World conversion has been checked against sample worlds on disk, but
 > converted worlds have **not** been opened in Minecraft yet. Keep a backup of your world and
 > expect missing or broken parts. Found a problem? Join the community on Discord:
-> <https://discord.gg/y5mECmtban>
+> <https://discord.gg/wC6zC93fTS>
 
 ## What it does
 

@@ -2,7 +2,7 @@
 
 Thanks for helping! Bug reports, conversion problems, new mappings, extensions and pull
 requests are all welcome. For questions, or to share a world that converts badly, join the
-[Discord](https://discord.gg/y5mECmtban).
+[Discord](https://discord.gg/wC6zC93fTS).
 
 ## Reporting a problem
 

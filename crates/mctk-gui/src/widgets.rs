@@ -47,7 +47,7 @@ pub fn elide(ui: &Ui, text: &str, font: &egui::FontId, max: f32) -> String {
 }
 
 /// Invite link to the MCToolKit Discord server.
-pub const DISCORD_URL: &str = "https://discord.gg/y5mECmtban";
+pub const DISCORD_URL: &str = "https://discord.gg/wC6zC93fTS";
 
 /// Opens the Discord invite in the default browser.
 pub fn open_discord(ui: &Ui) {
