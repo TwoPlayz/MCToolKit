@@ -6,7 +6,7 @@ use mctk_anvil::Region;
 use mctk_nbt::Flavor;
 
 #[derive(Parser)]
-#[command(name = "mctoolkit", version, about = "Minecraft world toolkit")]
+#[command(name = "mctk", version, about = "Minecraft world toolkit")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -46,34 +46,6 @@ enum Command {
     Convert {
         #[command(subcommand)]
         action: ConvertAction,
-    },
-    /// Lua extensions
-    Ext {
-        /// Extensions folder (default: %APPDATA%\MCToolKit\extensions)
-        #[arg(long, global = true)]
-        dir: Option<PathBuf>,
-        #[command(subcommand)]
-        action: ExtAction,
-    },
-}
-
-#[derive(Subcommand)]
-enum ExtAction {
-    /// List installed extensions
-    List,
-    /// Install an extension from a folder or a .zip
-    Install { source: PathBuf },
-    /// Remove an installed extension
-    Remove { id: String },
-    /// Run an installed extension (by id) or an extension folder
-    Run {
-        extension: String,
-        /// World the extension may read
-        #[arg(long)]
-        world: Option<PathBuf>,
-        /// Folder the extension may write into
-        #[arg(long)]
-        output: Option<PathBuf>,
     },
 }
 
@@ -513,69 +485,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 "wrote {} (pre-1.9 format: open it in Java Edition to upgrade)",
                 out.display()
             );
-        }
-        Command::Ext { dir, action } => {
-            let dir = dir.unwrap_or_else(mctk_lua::default_extensions_dir);
-            match action {
-                ExtAction::List => {
-                    let list = mctk_lua::list(&dir);
-                    if list.is_empty() {
-                        println!("no extensions in {}", dir.display());
-                    }
-                    for e in list {
-                        match e {
-                            Ok(e) => println!(
-                                "{:20} {} {} — {}",
-                                e.id, e.manifest.name, e.manifest.version, e.manifest.description
-                            ),
-                            Err((id, err)) => println!("{id:20} (broken: {err})"),
-                        }
-                    }
-                }
-                ExtAction::Install { source } => {
-                    let e = if source.is_dir() {
-                        mctk_lua::install_folder(&source, &dir)?
-                    } else {
-                        mctk_lua::install_zip(&source, &dir)?
-                    };
-                    println!(
-                        "installed {} as {} in {}",
-                        e.manifest.name,
-                        e.id,
-                        e.dir.display()
-                    );
-                }
-                ExtAction::Remove { id } => {
-                    mctk_lua::remove(&dir, &id)?;
-                    println!("removed {id}");
-                }
-                ExtAction::Run {
-                    extension,
-                    world,
-                    output,
-                } => {
-                    let path = PathBuf::from(&extension);
-                    let ext = if path.join("manifest.json").is_file() {
-                        mctk_lua::Extension::load(&path)?
-                    } else {
-                        mctk_lua::Extension::load(&dir.join(&extension))?
-                    };
-                    let out = mctk_lua::run(
-                        &ext,
-                        &mctk_lua::RunOptions {
-                            world,
-                            output,
-                            ..Default::default()
-                        },
-                    )?;
-                    for line in &out.log {
-                        println!("{line}");
-                    }
-                    if let Some(r) = out.result {
-                        println!("=> {r}");
-                    }
-                }
-            }
         }
         Command::Convert { action } => match action {
             ConvertAction::JavaToBedrock { world, out } => {

@@ -1,0 +1,1585 @@
+#mctk-registry 1
+edition java
+version 1.13.2
+data_version 1631
+B minecraft:acacia_button	face=floor|wall|ceiling,facing=north|south|west|east,powered=true|false	face=wall,facing=north,powered=false
+B minecraft:acacia_door	facing=north|south|west|east,half=upper|lower,hinge=left|right,open=true|false,powered=true|false	facing=north,half=lower,hinge=left,open=false,powered=false
+B minecraft:acacia_fence	east=true|false,north=true|false,south=true|false,waterlogged=true|false,west=true|false	east=false,north=false,south=false,waterlogged=false,west=false
+B minecraft:acacia_fence_gate	facing=north|south|west|east,in_wall=true|false,open=true|false,powered=true|false	facing=north,in_wall=false,open=false,powered=false
+B minecraft:acacia_leaves	distance=1|2|3|4|5|6|7,persistent=true|false	distance=7,persistent=false
+B minecraft:acacia_log	axis=x|y|z	axis=y
+B minecraft:acacia_planks		
+B minecraft:acacia_pressure_plate	powered=true|false	powered=false
+B minecraft:acacia_sapling	stage=0|1	stage=0
+B minecraft:acacia_slab	type=top|bottom|double,waterlogged=true|false	type=bottom,waterlogged=false
+B minecraft:acacia_stairs	facing=north|south|west|east,half=top|bottom,shape=straight|inner_left|inner_right|outer_left|outer_right,waterlogged=true|false	facing=north,half=bottom,shape=straight,waterlogged=false
+B minecraft:acacia_trapdoor	facing=north|south|west|east,half=top|bottom,open=true|false,powered=true|false,waterlogged=true|false	facing=north,half=bottom,open=false,powered=false,waterlogged=false
+B minecraft:acacia_wood	axis=x|y|z	axis=y
+B minecraft:activator_rail	powered=true|false,shape=north_south|east_west|ascending_east|ascending_west|ascending_north|ascending_south	powered=false,shape=north_south
+B minecraft:air		
+B minecraft:allium		
+B minecraft:andesite		
+B minecraft:anvil	facing=north|south|west|east	facing=north
+B minecraft:attached_melon_stem	facing=north|south|west|east	facing=north
+B minecraft:attached_pumpkin_stem	facing=north|south|west|east	facing=north
+B minecraft:azure_bluet		
+B minecraft:barrier		
+B minecraft:beacon		
+B minecraft:bedrock		
+B minecraft:beetroots	age=0|1|2|3	age=0
+B minecraft:birch_button	face=floor|wall|ceiling,facing=north|south|west|east,powered=true|false	face=wall,facing=north,powered=false
+B minecraft:birch_door	facing=north|south|west|east,half=upper|lower,hinge=left|right,open=true|false,powered=true|false	facing=north,half=lower,hinge=left,open=false,powered=false
+B minecraft:birch_fence	east=true|false,north=true|false,south=true|false,waterlogged=true|false,west=true|false	east=false,north=false,south=false,waterlogged=false,west=false
+B minecraft:birch_fence_gate	facing=north|south|west|east,in_wall=true|false,open=true|false,powered=true|false	facing=north,in_wall=false,open=false,powered=false
+B minecraft:birch_leaves	distance=1|2|3|4|5|6|7,persistent=true|false	distance=7,persistent=false
+B minecraft:birch_log	axis=x|y|z	axis=y
+B minecraft:birch_planks		
+B minecraft:birch_pressure_plate	powered=true|false	powered=false
+B minecraft:birch_sapling	stage=0|1	stage=0
+B minecraft:birch_slab	type=top|bottom|double,waterlogged=true|false	type=bottom,waterlogged=false
+B minecraft:birch_stairs	facing=north|south|west|east,half=top|bottom,shape=straight|inner_left|inner_right|outer_left|outer_right,waterlogged=true|false	facing=north,half=bottom,shape=straight,waterlogged=false
+B minecraft:birch_trapdoor	facing=north|south|west|east,half=top|bottom,open=true|false,powered=true|false,waterlogged=true|false	facing=north,half=bottom,open=false,powered=false,waterlogged=false
+B minecraft:birch_wood	axis=x|y|z	axis=y
+B minecraft:black_banner	rotation=0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15	rotation=0
+B minecraft:black_bed	facing=north|south|west|east,occupied=true|false,part=head|foot	facing=north,occupied=false,part=foot
+B minecraft:black_carpet		
+B minecraft:black_concrete		
+B minecraft:black_concrete_powder		
+B minecraft:black_glazed_terracotta	facing=north|south|west|east	facing=north
+B minecraft:black_shulker_box	facing=north|east|south|west|up|down	facing=up
+B minecraft:black_stained_glass		
+B minecraft:black_stained_glass_pane	east=true|false,north=true|false,south=true|false,waterlogged=true|false,west=true|false	east=false,north=false,south=false,waterlogged=false,west=false
+B minecraft:black_terracotta		
+B minecraft:black_wall_banner	facing=north|south|west|east	facing=north
+B minecraft:black_wool		
+B minecraft:blue_banner	rotation=0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15	rotation=0
+B minecraft:blue_bed	facing=north|south|west|east,occupied=true|false,part=head|foot	facing=north,occupied=false,part=foot
+B minecraft:blue_carpet		
+B minecraft:blue_concrete		
+B minecraft:blue_concrete_powder		
+B minecraft:blue_glazed_terracotta	facing=north|south|west|east	facing=north
+B minecraft:blue_ice		
+B minecraft:blue_orchid		
+B minecraft:blue_shulker_box	facing=north|east|south|west|up|down	facing=up
+B minecraft:blue_stained_glass		
+B minecraft:blue_stained_glass_pane	east=true|false,north=true|false,south=true|false,waterlogged=true|false,west=true|false	east=false,north=false,south=false,waterlogged=false,west=false
+B minecraft:blue_terracotta		
+B minecraft:blue_wall_banner	facing=north|south|west|east	facing=north
+B minecraft:blue_wool		
+B minecraft:bone_block	axis=x|y|z	axis=y
+B minecraft:bookshelf		
+B minecraft:brain_coral	waterlogged=true|false	waterlogged=true
+B minecraft:brain_coral_block		
+B minecraft:brain_coral_fan	waterlogged=true|false	waterlogged=true
+B minecraft:brain_coral_wall_fan	facing=north|south|west|east,waterlogged=true|false	facing=north,waterlogged=true
+B minecraft:brewing_stand	has_bottle_0=true|false,has_bottle_1=true|false,has_bottle_2=true|false	has_bottle_0=false,has_bottle_1=false,has_bottle_2=false
+B minecraft:brick_slab	type=top|bottom|double,waterlogged=true|false	type=bottom,waterlogged=false
+B minecraft:brick_stairs	facing=north|south|west|east,half=top|bottom,shape=straight|inner_left|inner_right|outer_left|outer_right,waterlogged=true|false	facing=north,half=bottom,shape=straight,waterlogged=false
+B minecraft:bricks		
+B minecraft:brown_banner	rotation=0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15	rotation=0
+B minecraft:brown_bed	facing=north|south|west|east,occupied=true|false,part=head|foot	facing=north,occupied=false,part=foot
+B minecraft:brown_carpet		
+B minecraft:brown_concrete		
+B minecraft:brown_concrete_powder		
+B minecraft:brown_glazed_terracotta	facing=north|south|west|east	facing=north
+B minecraft:brown_mushroom		
+B minecraft:brown_mushroom_block	down=true|false,east=true|false,north=true|false,south=true|false,up=true|false,west=true|false	down=true,east=true,north=true,south=true,up=true,west=true
+B minecraft:brown_shulker_box	facing=north|east|south|west|up|down	facing=up
+B minecraft:brown_stained_glass		
+B minecraft:brown_stained_glass_pane	east=true|false,north=true|false,south=true|false,waterlogged=true|false,west=true|false	east=false,north=false,south=false,waterlogged=false,west=false
+B minecraft:brown_terracotta		
+B minecraft:brown_wall_banner	facing=north|south|west|east	facing=north
+B minecraft:brown_wool		
+B minecraft:bubble_column	drag=true|false	drag=true
+B minecraft:bubble_coral	waterlogged=true|false	waterlogged=true
+B minecraft:bubble_coral_block		
+B minecraft:bubble_coral_fan	waterlogged=true|false	waterlogged=true
+B minecraft:bubble_coral_wall_fan	facing=north|south|west|east,waterlogged=true|false	facing=north,waterlogged=true
+B minecraft:cactus	age=0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15	age=0
+B minecraft:cake	bites=0|1|2|3|4|5|6	bites=0
+B minecraft:carrots	age=0|1|2|3|4|5|6|7	age=0
+B minecraft:carved_pumpkin	facing=north|south|west|east	facing=north
+B minecraft:cauldron	level=0|1|2|3	level=0
+B minecraft:cave_air		
+B minecraft:chain_command_block	conditional=true|false,facing=north|east|south|west|up|down	conditional=false,facing=north
+B minecraft:chest	facing=north|south|west|east,type=single|left|right,waterlogged=true|false	facing=north,type=single,waterlogged=false
+B minecraft:chipped_anvil	facing=north|south|west|east	facing=north
+B minecraft:chiseled_quartz_block		
+B minecraft:chiseled_red_sandstone		
+B minecraft:chiseled_sandstone		
+B minecraft:chiseled_stone_bricks		
+B minecraft:chorus_flower	age=0|1|2|3|4|5	age=0
+B minecraft:chorus_plant	down=true|false,east=true|false,north=true|false,south=true|false,up=true|false,west=true|false	down=false,east=false,north=false,south=false,up=false,west=false
+B minecraft:clay		
+B minecraft:coal_block		
+B minecraft:coal_ore		
+B minecraft:coarse_dirt		
+B minecraft:cobblestone		
+B minecraft:cobblestone_slab	type=top|bottom|double,waterlogged=true|false	type=bottom,waterlogged=false
+B minecraft:cobblestone_stairs	facing=north|south|west|east,half=top|bottom,shape=straight|inner_left|inner_right|outer_left|outer_right,waterlogged=true|false	facing=north,half=bottom,shape=straight,waterlogged=false
+B minecraft:cobblestone_wall	east=true|false,north=true|false,south=true|false,up=true|false,waterlogged=true|false,west=true|false	east=false,north=false,south=false,up=true,waterlogged=false,west=false
+B minecraft:cobweb		
+B minecraft:cocoa	age=0|1|2,facing=north|south|west|east	age=0,facing=north
+B minecraft:command_block	conditional=true|false,facing=north|east|south|west|up|down	conditional=false,facing=north
+B minecraft:comparator	facing=north|south|west|east,mode=compare|subtract,powered=true|false	facing=north,mode=compare,powered=false
+B minecraft:conduit	waterlogged=true|false	waterlogged=true
+B minecraft:cracked_stone_bricks		
+B minecraft:crafting_table		
+B minecraft:creeper_head	rotation=0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15	rotation=0
+B minecraft:creeper_wall_head	facing=north|south|west|east	facing=north
+B minecraft:cut_red_sandstone		
+B minecraft:cut_sandstone		
+B minecraft:cyan_banner	rotation=0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15	rotation=0
+B minecraft:cyan_bed	facing=north|south|west|east,occupied=true|false,part=head|foot	facing=north,occupied=false,part=foot
+B minecraft:cyan_carpet		
+B minecraft:cyan_concrete		
+B minecraft:cyan_concrete_powder		
+B minecraft:cyan_glazed_terracotta	facing=north|south|west|east	facing=north
+B minecraft:cyan_shulker_box	facing=north|east|south|west|up|down	facing=up
+B minecraft:cyan_stained_glass		
+B minecraft:cyan_stained_glass_pane	east=true|false,north=true|false,south=true|false,waterlogged=true|false,west=true|false	east=false,north=false,south=false,waterlogged=false,west=false
+B minecraft:cyan_terracotta		
+B minecraft:cyan_wall_banner	facing=north|south|west|east	facing=north
+B minecraft:cyan_wool		
+B minecraft:damaged_anvil	facing=north|south|west|east	facing=north
+B minecraft:dandelion		
+B minecraft:dark_oak_button	face=floor|wall|ceiling,facing=north|south|west|east,powered=true|false	face=wall,facing=north,powered=false
+B minecraft:dark_oak_door	facing=north|south|west|east,half=upper|lower,hinge=left|right,open=true|false,powered=true|false	facing=north,half=lower,hinge=left,open=false,powered=false
+B minecraft:dark_oak_fence	east=true|false,north=true|false,south=true|false,waterlogged=true|false,west=true|false	east=false,north=false,south=false,waterlogged=false,west=false
+B minecraft:dark_oak_fence_gate	facing=north|south|west|east,in_wall=true|false,open=true|false,powered=true|false	facing=north,in_wall=false,open=false,powered=false
+B minecraft:dark_oak_leaves	distance=1|2|3|4|5|6|7,persistent=true|false	distance=7,persistent=false
+B minecraft:dark_oak_log	axis=x|y|z	axis=y
+B minecraft:dark_oak_planks		
+B minecraft:dark_oak_pressure_plate	powered=true|false	powered=false
+B minecraft:dark_oak_sapling	stage=0|1	stage=0
+B minecraft:dark_oak_slab	type=top|bottom|double,waterlogged=true|false	type=bottom,waterlogged=false
+B minecraft:dark_oak_stairs	facing=north|south|west|east,half=top|bottom,shape=straight|inner_left|inner_right|outer_left|outer_right,waterlogged=true|false	facing=north,half=bottom,shape=straight,waterlogged=false
+B minecraft:dark_oak_trapdoor	facing=north|south|west|east,half=top|bottom,open=true|false,powered=true|false,waterlogged=true|false	facing=north,half=bottom,open=false,powered=false,waterlogged=false
+B minecraft:dark_oak_wood	axis=x|y|z	axis=y
+B minecraft:dark_prismarine		
+B minecraft:dark_prismarine_slab	type=top|bottom|double,waterlogged=true|false	type=bottom,waterlogged=false
+B minecraft:dark_prismarine_stairs	facing=north|south|west|east,half=top|bottom,shape=straight|inner_left|inner_right|outer_left|outer_right,waterlogged=true|false	facing=north,half=bottom,shape=straight,waterlogged=false
+B minecraft:daylight_detector	inverted=true|false,power=0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15	inverted=false,power=0
+B minecraft:dead_brain_coral	waterlogged=true|false	waterlogged=true
+B minecraft:dead_brain_coral_block		
+B minecraft:dead_brain_coral_fan	waterlogged=true|false	waterlogged=true
+B minecraft:dead_brain_coral_wall_fan	facing=north|south|west|east,waterlogged=true|false	facing=north,waterlogged=true
+B minecraft:dead_bubble_coral	waterlogged=true|false	waterlogged=true
+B minecraft:dead_bubble_coral_block		
+B minecraft:dead_bubble_coral_fan	waterlogged=true|false	waterlogged=true
+B minecraft:dead_bubble_coral_wall_fan	facing=north|south|west|east,waterlogged=true|false	facing=north,waterlogged=true
+B minecraft:dead_bush		
+B minecraft:dead_fire_coral	waterlogged=true|false	waterlogged=true
+B minecraft:dead_fire_coral_block		
+B minecraft:dead_fire_coral_fan	waterlogged=true|false	waterlogged=true
+B minecraft:dead_fire_coral_wall_fan	facing=north|south|west|east,waterlogged=true|false	facing=north,waterlogged=true
+B minecraft:dead_horn_coral	waterlogged=true|false	waterlogged=true
+B minecraft:dead_horn_coral_block		
+B minecraft:dead_horn_coral_fan	waterlogged=true|false	waterlogged=true
+B minecraft:dead_horn_coral_wall_fan	facing=north|south|west|east,waterlogged=true|false	facing=north,waterlogged=true
+B minecraft:dead_tube_coral	waterlogged=true|false	waterlogged=true
+B minecraft:dead_tube_coral_block		
+B minecraft:dead_tube_coral_fan	waterlogged=true|false	waterlogged=true
+B minecraft:dead_tube_coral_wall_fan	facing=north|south|west|east,waterlogged=true|false	facing=north,waterlogged=true
+B minecraft:detector_rail	powered=true|false,shape=north_south|east_west|ascending_east|ascending_west|ascending_north|ascending_south	powered=false,shape=north_south
+B minecraft:diamond_block		
+B minecraft:diamond_ore		
+B minecraft:diorite		
+B minecraft:dirt		
+B minecraft:dispenser	facing=north|east|south|west|up|down,triggered=true|false	facing=north,triggered=false
+B minecraft:dragon_egg		
+B minecraft:dragon_head	rotation=0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15	rotation=0
+B minecraft:dragon_wall_head	facing=north|south|west|east	facing=north
+B minecraft:dried_kelp_block		
+B minecraft:dropper	facing=north|east|south|west|up|down,triggered=true|false	facing=north,triggered=false
+B minecraft:emerald_block		
+B minecraft:emerald_ore		
+B minecraft:enchanting_table		
+B minecraft:end_gateway		
+B minecraft:end_portal		
+B minecraft:end_portal_frame	eye=true|false,facing=north|south|west|east	eye=false,facing=north
+B minecraft:end_rod	facing=north|east|south|west|up|down	facing=up
+B minecraft:end_stone		
+B minecraft:end_stone_bricks		
+B minecraft:ender_chest	facing=north|south|west|east,waterlogged=true|false	facing=north,waterlogged=false
+B minecraft:farmland	moisture=0|1|2|3|4|5|6|7	moisture=0
+B minecraft:fern		
+B minecraft:fire	age=0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15,east=true|false,north=true|false,south=true|false,up=true|false,west=true|false	age=0,east=false,north=false,south=false,up=false,west=false
+B minecraft:fire_coral	waterlogged=true|false	waterlogged=true
+B minecraft:fire_coral_block		
+B minecraft:fire_coral_fan	waterlogged=true|false	waterlogged=true
+B minecraft:fire_coral_wall_fan	facing=north|south|west|east,waterlogged=true|false	facing=north,waterlogged=true
+B minecraft:flower_pot		
+B minecraft:frosted_ice	age=0|1|2|3	age=0
+B minecraft:furnace	facing=north|south|west|east,lit=true|false	facing=north,lit=false
+B minecraft:glass		
+B minecraft:glass_pane	east=true|false,north=true|false,south=true|false,waterlogged=true|false,west=true|false	east=false,north=false,south=false,waterlogged=false,west=false
+B minecraft:glowstone		
+B minecraft:gold_block		
+B minecraft:gold_ore		
+B minecraft:granite		
+B minecraft:grass		
+B minecraft:grass_block	snowy=true|false	snowy=false
+B minecraft:grass_path		
+B minecraft:gravel		
+B minecraft:gray_banner	rotation=0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15	rotation=0
+B minecraft:gray_bed	facing=north|south|west|east,occupied=true|false,part=head|foot	facing=north,occupied=false,part=foot
+B minecraft:gray_carpet		
+B minecraft:gray_concrete		
+B minecraft:gray_concrete_powder		
+B minecraft:gray_glazed_terracotta	facing=north|south|west|east	facing=north
+B minecraft:gray_shulker_box	facing=north|east|south|west|up|down	facing=up
+B minecraft:gray_stained_glass		
+B minecraft:gray_stained_glass_pane	east=true|false,north=true|false,south=true|false,waterlogged=true|false,west=true|false	east=false,north=false,south=false,waterlogged=false,west=false
+B minecraft:gray_terracotta		
+B minecraft:gray_wall_banner	facing=north|south|west|east	facing=north
+B minecraft:gray_wool		
+B minecraft:green_banner	rotation=0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15	rotation=0
+B minecraft:green_bed	facing=north|south|west|east,occupied=true|false,part=head|foot	facing=north,occupied=false,part=foot
+B minecraft:green_carpet		
+B minecraft:green_concrete		
+B minecraft:green_concrete_powder		
+B minecraft:green_glazed_terracotta	facing=north|south|west|east	facing=north
+B minecraft:green_shulker_box	facing=north|east|south|west|up|down	facing=up
+B minecraft:green_stained_glass		
+B minecraft:green_stained_glass_pane	east=true|false,north=true|false,south=true|false,waterlogged=true|false,west=true|false	east=false,north=false,south=false,waterlogged=false,west=false
+B minecraft:green_terracotta		
+B minecraft:green_wall_banner	facing=north|south|west|east	facing=north
+B minecraft:green_wool		
+B minecraft:hay_block	axis=x|y|z	axis=y
+B minecraft:heavy_weighted_pressure_plate	power=0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15	power=0
+B minecraft:hopper	enabled=true|false,facing=down|north|south|west|east	enabled=true,facing=down
+B minecraft:horn_coral	waterlogged=true|false	waterlogged=true
+B minecraft:horn_coral_block		
+B minecraft:horn_coral_fan	waterlogged=true|false	waterlogged=true
+B minecraft:horn_coral_wall_fan	facing=north|south|west|east,waterlogged=true|false	facing=north,waterlogged=true
+B minecraft:ice		
+B minecraft:infested_chiseled_stone_bricks		
+B minecraft:infested_cobblestone		
+B minecraft:infested_cracked_stone_bricks		
+B minecraft:infested_mossy_stone_bricks		
+B minecraft:infested_stone		
+B minecraft:infested_stone_bricks		
+B minecraft:iron_bars	east=true|false,north=true|false,south=true|false,waterlogged=true|false,west=true|false	east=false,north=false,south=false,waterlogged=false,west=false
+B minecraft:iron_block		
+B minecraft:iron_door	facing=north|south|west|east,half=upper|lower,hinge=left|right,open=true|false,powered=true|false	facing=north,half=lower,hinge=left,open=false,powered=false
+B minecraft:iron_ore		
+B minecraft:iron_trapdoor	facing=north|south|west|east,half=top|bottom,open=true|false,powered=true|false,waterlogged=true|false	facing=north,half=bottom,open=false,powered=false,waterlogged=false
+B minecraft:jack_o_lantern	facing=north|south|west|east	facing=north
+B minecraft:jukebox	has_record=true|false	has_record=false
+B minecraft:jungle_button	face=floor|wall|ceiling,facing=north|south|west|east,powered=true|false	face=wall,facing=north,powered=false
+B minecraft:jungle_door	facing=north|south|west|east,half=upper|lower,hinge=left|right,open=true|false,powered=true|false	facing=north,half=lower,hinge=left,open=false,powered=false
+B minecraft:jungle_fence	east=true|false,north=true|false,south=true|false,waterlogged=true|false,west=true|false	east=false,north=false,south=false,waterlogged=false,west=false
+B minecraft:jungle_fence_gate	facing=north|south|west|east,in_wall=true|false,open=true|false,powered=true|false	facing=north,in_wall=false,open=false,powered=false
+B minecraft:jungle_leaves	distance=1|2|3|4|5|6|7,persistent=true|false	distance=7,persistent=false
+B minecraft:jungle_log	axis=x|y|z	axis=y
+B minecraft:jungle_planks		
+B minecraft:jungle_pressure_plate	powered=true|false	powered=false
+B minecraft:jungle_sapling	stage=0|1	stage=0
+B minecraft:jungle_slab	type=top|bottom|double,waterlogged=true|false	type=bottom,waterlogged=false
+B minecraft:jungle_stairs	facing=north|south|west|east,half=top|bottom,shape=straight|inner_left|inner_right|outer_left|outer_right,waterlogged=true|false	facing=north,half=bottom,shape=straight,waterlogged=false
+B minecraft:jungle_trapdoor	facing=north|south|west|east,half=top|bottom,open=true|false,powered=true|false,waterlogged=true|false	facing=north,half=bottom,open=false,powered=false,waterlogged=false
+B minecraft:jungle_wood	axis=x|y|z	axis=y
+B minecraft:kelp	age=0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19|20|21|22|23|24|25	age=0
+B minecraft:kelp_plant		
+B minecraft:ladder	facing=north|south|west|east,waterlogged=true|false	facing=north,waterlogged=false
+B minecraft:lapis_block		
+B minecraft:lapis_ore		
+B minecraft:large_fern	half=upper|lower	half=lower
+B minecraft:lava	level=0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15	level=0
+B minecraft:lever	face=floor|wall|ceiling,facing=north|south|west|east,powered=true|false	face=wall,facing=north,powered=false
+B minecraft:light_blue_banner	rotation=0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15	rotation=0
+B minecraft:light_blue_bed	facing=north|south|west|east,occupied=true|false,part=head|foot	facing=north,occupied=false,part=foot
+B minecraft:light_blue_carpet		
+B minecraft:light_blue_concrete		
+B minecraft:light_blue_concrete_powder		
+B minecraft:light_blue_glazed_terracotta	facing=north|south|west|east	facing=north
+B minecraft:light_blue_shulker_box	facing=north|east|south|west|up|down	facing=up
+B minecraft:light_blue_stained_glass		
+B minecraft:light_blue_stained_glass_pane	east=true|false,north=true|false,south=true|false,waterlogged=true|false,west=true|false	east=false,north=false,south=false,waterlogged=false,west=false
+B minecraft:light_blue_terracotta		
+B minecraft:light_blue_wall_banner	facing=north|south|west|east	facing=north
+B minecraft:light_blue_wool		
+B minecraft:light_gray_banner	rotation=0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15	rotation=0
+B minecraft:light_gray_bed	facing=north|south|west|east,occupied=true|false,part=head|foot	facing=north,occupied=false,part=foot
+B minecraft:light_gray_carpet		
+B minecraft:light_gray_concrete		
+B minecraft:light_gray_concrete_powder		
+B minecraft:light_gray_glazed_terracotta	facing=north|south|west|east	facing=north
+B minecraft:light_gray_shulker_box	facing=north|east|south|west|up|down	facing=up
+B minecraft:light_gray_stained_glass		
+B minecraft:light_gray_stained_glass_pane	east=true|false,north=true|false,south=true|false,waterlogged=true|false,west=true|false	east=false,north=false,south=false,waterlogged=false,west=false
+B minecraft:light_gray_terracotta		
+B minecraft:light_gray_wall_banner	facing=north|south|west|east	facing=north
+B minecraft:light_gray_wool		
+B minecraft:light_weighted_pressure_plate	power=0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15	power=0
+B minecraft:lilac	half=upper|lower	half=lower
+B minecraft:lily_pad		
+B minecraft:lime_banner	rotation=0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15	rotation=0
+B minecraft:lime_bed	facing=north|south|west|east,occupied=true|false,part=head|foot	facing=north,occupied=false,part=foot
+B minecraft:lime_carpet		
+B minecraft:lime_concrete		
+B minecraft:lime_concrete_powder		
+B minecraft:lime_glazed_terracotta	facing=north|south|west|east	facing=north
+B minecraft:lime_shulker_box	facing=north|east|south|west|up|down	facing=up
+B minecraft:lime_stained_glass		
+B minecraft:lime_stained_glass_pane	east=true|false,north=true|false,south=true|false,waterlogged=true|false,west=true|false	east=false,north=false,south=false,waterlogged=false,west=false
+B minecraft:lime_terracotta		
+B minecraft:lime_wall_banner	facing=north|south|west|east	facing=north
+B minecraft:lime_wool		
+B minecraft:magenta_banner	rotation=0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15	rotation=0
+B minecraft:magenta_bed	facing=north|south|west|east,occupied=true|false,part=head|foot	facing=north,occupied=false,part=foot
+B minecraft:magenta_carpet		
+B minecraft:magenta_concrete		
+B minecraft:magenta_concrete_powder		
+B minecraft:magenta_glazed_terracotta	facing=north|south|west|east	facing=north
+B minecraft:magenta_shulker_box	facing=north|east|south|west|up|down	facing=up
+B minecraft:magenta_stained_glass		
+B minecraft:magenta_stained_glass_pane	east=true|false,north=true|false,south=true|false,waterlogged=true|false,west=true|false	east=false,north=false,south=false,waterlogged=false,west=false
+B minecraft:magenta_terracotta		
+B minecraft:magenta_wall_banner	facing=north|south|west|east	facing=north
+B minecraft:magenta_wool		
+B minecraft:magma_block		
+B minecraft:melon		
+B minecraft:melon_stem	age=0|1|2|3|4|5|6|7	age=0
+B minecraft:mossy_cobblestone		
+B minecraft:mossy_cobblestone_wall	east=true|false,north=true|false,south=true|false,up=true|false,waterlogged=true|false,west=true|false	east=false,north=false,south=false,up=true,waterlogged=false,west=false
+B minecraft:mossy_stone_bricks		
+B minecraft:moving_piston	facing=north|east|south|west|up|down,type=normal|sticky	facing=north,type=normal
+B minecraft:mushroom_stem	down=true|false,east=true|false,north=true|false,south=true|false,up=true|false,west=true|false	down=true,east=true,north=true,south=true,up=true,west=true
+B minecraft:mycelium	snowy=true|false	snowy=false
+B minecraft:nether_brick_fence	east=true|false,north=true|false,south=true|false,waterlogged=true|false,west=true|false	east=false,north=false,south=false,waterlogged=false,west=false
+B minecraft:nether_brick_slab	type=top|bottom|double,waterlogged=true|false	type=bottom,waterlogged=false
+B minecraft:nether_brick_stairs	facing=north|south|west|east,half=top|bottom,shape=straight|inner_left|inner_right|outer_left|outer_right,waterlogged=true|false	facing=north,half=bottom,shape=straight,waterlogged=false
+B minecraft:nether_bricks		
+B minecraft:nether_portal	axis=x|z	axis=x
+B minecraft:nether_quartz_ore		
+B minecraft:nether_wart	age=0|1|2|3	age=0
+B minecraft:nether_wart_block		
+B minecraft:netherrack		
+B minecraft:note_block	instrument=harp|basedrum|snare|hat|bass|flute|bell|guitar|chime|xylophone,note=0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19|20|21|22|23|24,powered=true|false	instrument=harp,note=0,powered=false
+B minecraft:oak_button	face=floor|wall|ceiling,facing=north|south|west|east,powered=true|false	face=wall,facing=north,powered=false
+B minecraft:oak_door	facing=north|south|west|east,half=upper|lower,hinge=left|right,open=true|false,powered=true|false	facing=north,half=lower,hinge=left,open=false,powered=false
+B minecraft:oak_fence	east=true|false,north=true|false,south=true|false,waterlogged=true|false,west=true|false	east=false,north=false,south=false,waterlogged=false,west=false
+B minecraft:oak_fence_gate	facing=north|south|west|east,in_wall=true|false,open=true|false,powered=true|false	facing=north,in_wall=false,open=false,powered=false
+B minecraft:oak_leaves	distance=1|2|3|4|5|6|7,persistent=true|false	distance=7,persistent=false
+B minecraft:oak_log	axis=x|y|z	axis=y
+B minecraft:oak_planks		
+B minecraft:oak_pressure_plate	powered=true|false	powered=false
+B minecraft:oak_sapling	stage=0|1	stage=0
+B minecraft:oak_slab	type=top|bottom|double,waterlogged=true|false	type=bottom,waterlogged=false
+B minecraft:oak_stairs	facing=north|south|west|east,half=top|bottom,shape=straight|inner_left|inner_right|outer_left|outer_right,waterlogged=true|false	facing=north,half=bottom,shape=straight,waterlogged=false
+B minecraft:oak_trapdoor	facing=north|south|west|east,half=top|bottom,open=true|false,powered=true|false,waterlogged=true|false	facing=north,half=bottom,open=false,powered=false,waterlogged=false
+B minecraft:oak_wood	axis=x|y|z	axis=y
+B minecraft:observer	facing=north|east|south|west|up|down,powered=true|false	facing=south,powered=false
+B minecraft:obsidian		
+B minecraft:orange_banner	rotation=0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15	rotation=0
+B minecraft:orange_bed	facing=north|south|west|east,occupied=true|false,part=head|foot	facing=north,occupied=false,part=foot
+B minecraft:orange_carpet		
+B minecraft:orange_concrete		
+B minecraft:orange_concrete_powder		
+B minecraft:orange_glazed_terracotta	facing=north|south|west|east	facing=north
+B minecraft:orange_shulker_box	facing=north|east|south|west|up|down	facing=up
+B minecraft:orange_stained_glass		
+B minecraft:orange_stained_glass_pane	east=true|false,north=true|false,south=true|false,waterlogged=true|false,west=true|false	east=false,north=false,south=false,waterlogged=false,west=false
+B minecraft:orange_terracotta		
+B minecraft:orange_tulip		
+B minecraft:orange_wall_banner	facing=north|south|west|east	facing=north
+B minecraft:orange_wool		
+B minecraft:oxeye_daisy		
+B minecraft:packed_ice		
+B minecraft:peony	half=upper|lower	half=lower
+B minecraft:petrified_oak_slab	type=top|bottom|double,waterlogged=true|false	type=bottom,waterlogged=false
+B minecraft:pink_banner	rotation=0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15	rotation=0
+B minecraft:pink_bed	facing=north|south|west|east,occupied=true|false,part=head|foot	facing=north,occupied=false,part=foot
+B minecraft:pink_carpet		
+B minecraft:pink_concrete		
+B minecraft:pink_concrete_powder		
+B minecraft:pink_glazed_terracotta	facing=north|south|west|east	facing=north
+B minecraft:pink_shulker_box	facing=north|east|south|west|up|down	facing=up
+B minecraft:pink_stained_glass		
+B minecraft:pink_stained_glass_pane	east=true|false,north=true|false,south=true|false,waterlogged=true|false,west=true|false	east=false,north=false,south=false,waterlogged=false,west=false
+B minecraft:pink_terracotta		
+B minecraft:pink_tulip		
+B minecraft:pink_wall_banner	facing=north|south|west|east	facing=north
+B minecraft:pink_wool		
+B minecraft:piston	extended=true|false,facing=north|east|south|west|up|down	extended=false,facing=north
+B minecraft:piston_head	facing=north|east|south|west|up|down,short=true|false,type=normal|sticky	facing=north,short=false,type=normal
+B minecraft:player_head	rotation=0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15	rotation=0
+B minecraft:player_wall_head	facing=north|south|west|east	facing=north
+B minecraft:podzol	snowy=true|false	snowy=false
+B minecraft:polished_andesite		
+B minecraft:polished_diorite		
+B minecraft:polished_granite		
+B minecraft:poppy		
+B minecraft:potatoes	age=0|1|2|3|4|5|6|7	age=0
+B minecraft:potted_acacia_sapling		
+B minecraft:potted_allium		
+B minecraft:potted_azure_bluet		
+B minecraft:potted_birch_sapling		
+B minecraft:potted_blue_orchid		
+B minecraft:potted_brown_mushroom		
+B minecraft:potted_cactus		
+B minecraft:potted_dandelion		
+B minecraft:potted_dark_oak_sapling		
+B minecraft:potted_dead_bush		
+B minecraft:potted_fern		
+B minecraft:potted_jungle_sapling		
+B minecraft:potted_oak_sapling		
+B minecraft:potted_orange_tulip		
+B minecraft:potted_oxeye_daisy		
+B minecraft:potted_pink_tulip		
+B minecraft:potted_poppy		
+B minecraft:potted_red_mushroom		
+B minecraft:potted_red_tulip		
+B minecraft:potted_spruce_sapling		
+B minecraft:potted_white_tulip		
+B minecraft:powered_rail	powered=true|false,shape=north_south|east_west|ascending_east|ascending_west|ascending_north|ascending_south	powered=false,shape=north_south
+B minecraft:prismarine		
+B minecraft:prismarine_brick_slab	type=top|bottom|double,waterlogged=true|false	type=bottom,waterlogged=false
+B minecraft:prismarine_brick_stairs	facing=north|south|west|east,half=top|bottom,shape=straight|inner_left|inner_right|outer_left|outer_right,waterlogged=true|false	facing=north,half=bottom,shape=straight,waterlogged=false
+B minecraft:prismarine_bricks		
+B minecraft:prismarine_slab	type=top|bottom|double,waterlogged=true|false	type=bottom,waterlogged=false
+B minecraft:prismarine_stairs	facing=north|south|west|east,half=top|bottom,shape=straight|inner_left|inner_right|outer_left|outer_right,waterlogged=true|false	facing=north,half=bottom,shape=straight,waterlogged=false
+B minecraft:pumpkin		
+B minecraft:pumpkin_stem	age=0|1|2|3|4|5|6|7	age=0
+B minecraft:purple_banner	rotation=0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15	rotation=0
+B minecraft:purple_bed	facing=north|south|west|east,occupied=true|false,part=head|foot	facing=north,occupied=false,part=foot
+B minecraft:purple_carpet		
+B minecraft:purple_concrete		
+B minecraft:purple_concrete_powder		
+B minecraft:purple_glazed_terracotta	facing=north|south|west|east	facing=north
+B minecraft:purple_shulker_box	facing=north|east|south|west|up|down	facing=up
+B minecraft:purple_stained_glass		
+B minecraft:purple_stained_glass_pane	east=true|false,north=true|false,south=true|false,waterlogged=true|false,west=true|false	east=false,north=false,south=false,waterlogged=false,west=false
+B minecraft:purple_terracotta		
+B minecraft:purple_wall_banner	facing=north|south|west|east	facing=north
+B minecraft:purple_wool		
+B minecraft:purpur_block		
+B minecraft:purpur_pillar	axis=x|y|z	axis=y
+B minecraft:purpur_slab	type=top|bottom|double,waterlogged=true|false	type=bottom,waterlogged=false
+B minecraft:purpur_stairs	facing=north|south|west|east,half=top|bottom,shape=straight|inner_left|inner_right|outer_left|outer_right,waterlogged=true|false	facing=north,half=bottom,shape=straight,waterlogged=false
+B minecraft:quartz_block		
+B minecraft:quartz_pillar	axis=x|y|z	axis=y
+B minecraft:quartz_slab	type=top|bottom|double,waterlogged=true|false	type=bottom,waterlogged=false
+B minecraft:quartz_stairs	facing=north|south|west|east,half=top|bottom,shape=straight|inner_left|inner_right|outer_left|outer_right,waterlogged=true|false	facing=north,half=bottom,shape=straight,waterlogged=false
+B minecraft:rail	shape=north_south|east_west|ascending_east|ascending_west|ascending_north|ascending_south|south_east|south_west|north_west|north_east	shape=north_south
+B minecraft:red_banner	rotation=0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15	rotation=0
+B minecraft:red_bed	facing=north|south|west|east,occupied=true|false,part=head|foot	facing=north,occupied=false,part=foot
+B minecraft:red_carpet		
+B minecraft:red_concrete		
+B minecraft:red_concrete_powder		
+B minecraft:red_glazed_terracotta	facing=north|south|west|east	facing=north
+B minecraft:red_mushroom		
+B minecraft:red_mushroom_block	down=true|false,east=true|false,north=true|false,south=true|false,up=true|false,west=true|false	down=true,east=true,north=true,south=true,up=true,west=true
+B minecraft:red_nether_bricks		
+B minecraft:red_sand		
+B minecraft:red_sandstone		
+B minecraft:red_sandstone_slab	type=top|bottom|double,waterlogged=true|false	type=bottom,waterlogged=false
+B minecraft:red_sandstone_stairs	facing=north|south|west|east,half=top|bottom,shape=straight|inner_left|inner_right|outer_left|outer_right,waterlogged=true|false	facing=north,half=bottom,shape=straight,waterlogged=false
+B minecraft:red_shulker_box	facing=north|east|south|west|up|down	facing=up
+B minecraft:red_stained_glass		
+B minecraft:red_stained_glass_pane	east=true|false,north=true|false,south=true|false,waterlogged=true|false,west=true|false	east=false,north=false,south=false,waterlogged=false,west=false
+B minecraft:red_terracotta		
+B minecraft:red_tulip		
+B minecraft:red_wall_banner	facing=north|south|west|east	facing=north
+B minecraft:red_wool		
+B minecraft:redstone_block		
+B minecraft:redstone_lamp	lit=true|false	lit=false
+B minecraft:redstone_ore	lit=true|false	lit=false
+B minecraft:redstone_torch	lit=true|false	lit=true
+B minecraft:redstone_wall_torch	facing=north|south|west|east,lit=true|false	facing=north,lit=true
+B minecraft:redstone_wire	east=up|side|none,north=up|side|none,power=0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15,south=up|side|none,west=up|side|none	east=none,north=none,power=0,south=none,west=none
+B minecraft:repeater	delay=1|2|3|4,facing=north|south|west|east,locked=true|false,powered=true|false	delay=1,facing=north,locked=false,powered=false
+B minecraft:repeating_command_block	conditional=true|false,facing=north|east|south|west|up|down	conditional=false,facing=north
+B minecraft:rose_bush	half=upper|lower	half=lower
+B minecraft:sand		
+B minecraft:sandstone		
+B minecraft:sandstone_slab	type=top|bottom|double,waterlogged=true|false	type=bottom,waterlogged=false
+B minecraft:sandstone_stairs	facing=north|south|west|east,half=top|bottom,shape=straight|inner_left|inner_right|outer_left|outer_right,waterlogged=true|false	facing=north,half=bottom,shape=straight,waterlogged=false
+B minecraft:sea_lantern		
+B minecraft:sea_pickle	pickles=1|2|3|4,waterlogged=true|false	pickles=1,waterlogged=true
+B minecraft:seagrass		
+B minecraft:shulker_box	facing=north|east|south|west|up|down	facing=up
+B minecraft:sign	rotation=0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15,waterlogged=true|false	rotation=0,waterlogged=false
+B minecraft:skeleton_skull	rotation=0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15	rotation=0
+B minecraft:skeleton_wall_skull	facing=north|south|west|east	facing=north
+B minecraft:slime_block		
+B minecraft:smooth_quartz		
+B minecraft:smooth_red_sandstone		
+B minecraft:smooth_sandstone		
+B minecraft:smooth_stone		
+B minecraft:snow	layers=1|2|3|4|5|6|7|8	layers=1
+B minecraft:snow_block		
+B minecraft:soul_sand		
+B minecraft:spawner		
+B minecraft:sponge		
+B minecraft:spruce_button	face=floor|wall|ceiling,facing=north|south|west|east,powered=true|false	face=wall,facing=north,powered=false
+B minecraft:spruce_door	facing=north|south|west|east,half=upper|lower,hinge=left|right,open=true|false,powered=true|false	facing=north,half=lower,hinge=left,open=false,powered=false
+B minecraft:spruce_fence	east=true|false,north=true|false,south=true|false,waterlogged=true|false,west=true|false	east=false,north=false,south=false,waterlogged=false,west=false
+B minecraft:spruce_fence_gate	facing=north|south|west|east,in_wall=true|false,open=true|false,powered=true|false	facing=north,in_wall=false,open=false,powered=false
+B minecraft:spruce_leaves	distance=1|2|3|4|5|6|7,persistent=true|false	distance=7,persistent=false
+B minecraft:spruce_log	axis=x|y|z	axis=y
+B minecraft:spruce_planks		
+B minecraft:spruce_pressure_plate	powered=true|false	powered=false
+B minecraft:spruce_sapling	stage=0|1	stage=0
+B minecraft:spruce_slab	type=top|bottom|double,waterlogged=true|false	type=bottom,waterlogged=false
+B minecraft:spruce_stairs	facing=north|south|west|east,half=top|bottom,shape=straight|inner_left|inner_right|outer_left|outer_right,waterlogged=true|false	facing=north,half=bottom,shape=straight,waterlogged=false
+B minecraft:spruce_trapdoor	facing=north|south|west|east,half=top|bottom,open=true|false,powered=true|false,waterlogged=true|false	facing=north,half=bottom,open=false,powered=false,waterlogged=false
+B minecraft:spruce_wood	axis=x|y|z	axis=y
+B minecraft:sticky_piston	extended=true|false,facing=north|east|south|west|up|down	extended=false,facing=north
+B minecraft:stone		
+B minecraft:stone_brick_slab	type=top|bottom|double,waterlogged=true|false	type=bottom,waterlogged=false
+B minecraft:stone_brick_stairs	facing=north|south|west|east,half=top|bottom,shape=straight|inner_left|inner_right|outer_left|outer_right,waterlogged=true|false	facing=north,half=bottom,shape=straight,waterlogged=false
+B minecraft:stone_bricks		
+B minecraft:stone_button	face=floor|wall|ceiling,facing=north|south|west|east,powered=true|false	face=wall,facing=north,powered=false
+B minecraft:stone_pressure_plate	powered=true|false	powered=false
+B minecraft:stone_slab	type=top|bottom|double,waterlogged=true|false	type=bottom,waterlogged=false
+B minecraft:stripped_acacia_log	axis=x|y|z	axis=y
+B minecraft:stripped_acacia_wood	axis=x|y|z	axis=y
+B minecraft:stripped_birch_log	axis=x|y|z	axis=y
+B minecraft:stripped_birch_wood	axis=x|y|z	axis=y
+B minecraft:stripped_dark_oak_log	axis=x|y|z	axis=y
+B minecraft:stripped_dark_oak_wood	axis=x|y|z	axis=y
+B minecraft:stripped_jungle_log	axis=x|y|z	axis=y
+B minecraft:stripped_jungle_wood	axis=x|y|z	axis=y
+B minecraft:stripped_oak_log	axis=x|y|z	axis=y
+B minecraft:stripped_oak_wood	axis=x|y|z	axis=y
+B minecraft:stripped_spruce_log	axis=x|y|z	axis=y
+B minecraft:stripped_spruce_wood	axis=x|y|z	axis=y
+B minecraft:structure_block	mode=save|load|corner|data	mode=save
+B minecraft:structure_void		
+B minecraft:sugar_cane	age=0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15	age=0
+B minecraft:sunflower	half=upper|lower	half=lower
+B minecraft:tall_grass	half=upper|lower	half=lower
+B minecraft:tall_seagrass	half=upper|lower	half=lower
+B minecraft:terracotta		
+B minecraft:tnt	unstable=true|false	unstable=false
+B minecraft:torch		
+B minecraft:trapped_chest	facing=north|south|west|east,type=single|left|right,waterlogged=true|false	facing=north,type=single,waterlogged=false
+B minecraft:tripwire	attached=true|false,disarmed=true|false,east=true|false,north=true|false,powered=true|false,south=true|false,west=true|false	attached=false,disarmed=false,east=false,north=false,powered=false,south=false,west=false
+B minecraft:tripwire_hook	attached=true|false,facing=north|south|west|east,powered=true|false	attached=false,facing=north,powered=false
+B minecraft:tube_coral	waterlogged=true|false	waterlogged=true
+B minecraft:tube_coral_block		
+B minecraft:tube_coral_fan	waterlogged=true|false	waterlogged=true
+B minecraft:tube_coral_wall_fan	facing=north|south|west|east,waterlogged=true|false	facing=north,waterlogged=true
+B minecraft:turtle_egg	eggs=1|2|3|4,hatch=0|1|2	eggs=1,hatch=0
+B minecraft:vine	east=true|false,north=true|false,south=true|false,up=true|false,west=true|false	east=false,north=false,south=false,up=false,west=false
+B minecraft:void_air		
+B minecraft:wall_sign	facing=north|south|west|east,waterlogged=true|false	facing=north,waterlogged=false
+B minecraft:wall_torch	facing=north|south|west|east	facing=north
+B minecraft:water	level=0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15	level=0
+B minecraft:wet_sponge		
+B minecraft:wheat	age=0|1|2|3|4|5|6|7	age=0
+B minecraft:white_banner	rotation=0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15	rotation=0
+B minecraft:white_bed	facing=north|south|west|east,occupied=true|false,part=head|foot	facing=north,occupied=false,part=foot
+B minecraft:white_carpet		
+B minecraft:white_concrete		
+B minecraft:white_concrete_powder		
+B minecraft:white_glazed_terracotta	facing=north|south|west|east	facing=north
+B minecraft:white_shulker_box	facing=north|east|south|west|up|down	facing=up
+B minecraft:white_stained_glass		
+B minecraft:white_stained_glass_pane	east=true|false,north=true|false,south=true|false,waterlogged=true|false,west=true|false	east=false,north=false,south=false,waterlogged=false,west=false
+B minecraft:white_terracotta		
+B minecraft:white_tulip		
+B minecraft:white_wall_banner	facing=north|south|west|east	facing=north
+B minecraft:white_wool		
+B minecraft:wither_skeleton_skull	rotation=0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15	rotation=0
+B minecraft:wither_skeleton_wall_skull	facing=north|south|west|east	facing=north
+B minecraft:yellow_banner	rotation=0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15	rotation=0
+B minecraft:yellow_bed	facing=north|south|west|east,occupied=true|false,part=head|foot	facing=north,occupied=false,part=foot
+B minecraft:yellow_carpet		
+B minecraft:yellow_concrete		
+B minecraft:yellow_concrete_powder		
+B minecraft:yellow_glazed_terracotta	facing=north|south|west|east	facing=north
+B minecraft:yellow_shulker_box	facing=north|east|south|west|up|down	facing=up
+B minecraft:yellow_stained_glass		
+B minecraft:yellow_stained_glass_pane	east=true|false,north=true|false,south=true|false,waterlogged=true|false,west=true|false	east=false,north=false,south=false,waterlogged=false,west=false
+B minecraft:yellow_terracotta		
+B minecraft:yellow_wall_banner	facing=north|south|west|east	facing=north
+B minecraft:yellow_wool		
+B minecraft:zombie_head	rotation=0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15	rotation=0
+B minecraft:zombie_wall_head	facing=north|south|west|east	facing=north
+I minecraft:acacia_boat
+I minecraft:acacia_button
+I minecraft:acacia_door
+I minecraft:acacia_fence
+I minecraft:acacia_fence_gate
+I minecraft:acacia_leaves
+I minecraft:acacia_log
+I minecraft:acacia_planks
+I minecraft:acacia_pressure_plate
+I minecraft:acacia_sapling
+I minecraft:acacia_slab
+I minecraft:acacia_stairs
+I minecraft:acacia_trapdoor
+I minecraft:acacia_wood
+I minecraft:activator_rail
+I minecraft:air
+I minecraft:allium
+I minecraft:andesite
+I minecraft:anvil
+I minecraft:apple
+I minecraft:armor_stand
+I minecraft:arrow
+I minecraft:azure_bluet
+I minecraft:baked_potato
+I minecraft:barrier
+I minecraft:bat_spawn_egg
+I minecraft:beacon
+I minecraft:bedrock
+I minecraft:beef
+I minecraft:beetroot
+I minecraft:beetroot_seeds
+I minecraft:beetroot_soup
+I minecraft:birch_boat
+I minecraft:birch_button
+I minecraft:birch_door
+I minecraft:birch_fence
+I minecraft:birch_fence_gate
+I minecraft:birch_leaves
+I minecraft:birch_log
+I minecraft:birch_planks
+I minecraft:birch_pressure_plate
+I minecraft:birch_sapling
+I minecraft:birch_slab
+I minecraft:birch_stairs
+I minecraft:birch_trapdoor
+I minecraft:birch_wood
+I minecraft:black_banner
+I minecraft:black_bed
+I minecraft:black_carpet
+I minecraft:black_concrete
+I minecraft:black_concrete_powder
+I minecraft:black_glazed_terracotta
+I minecraft:black_shulker_box
+I minecraft:black_stained_glass
+I minecraft:black_stained_glass_pane
+I minecraft:black_terracotta
+I minecraft:black_wool
+I minecraft:blaze_powder
+I minecraft:blaze_rod
+I minecraft:blaze_spawn_egg
+I minecraft:blue_banner
+I minecraft:blue_bed
+I minecraft:blue_carpet
+I minecraft:blue_concrete
+I minecraft:blue_concrete_powder
+I minecraft:blue_glazed_terracotta
+I minecraft:blue_ice
+I minecraft:blue_orchid
+I minecraft:blue_shulker_box
+I minecraft:blue_stained_glass
+I minecraft:blue_stained_glass_pane
+I minecraft:blue_terracotta
+I minecraft:blue_wool
+I minecraft:bone
+I minecraft:bone_block
+I minecraft:bone_meal
+I minecraft:book
+I minecraft:bookshelf
+I minecraft:bow
+I minecraft:bowl
+I minecraft:brain_coral
+I minecraft:brain_coral_block
+I minecraft:brain_coral_fan
+I minecraft:bread
+I minecraft:brewing_stand
+I minecraft:brick
+I minecraft:brick_slab
+I minecraft:brick_stairs
+I minecraft:bricks
+I minecraft:brown_banner
+I minecraft:brown_bed
+I minecraft:brown_carpet
+I minecraft:brown_concrete
+I minecraft:brown_concrete_powder
+I minecraft:brown_glazed_terracotta
+I minecraft:brown_mushroom
+I minecraft:brown_mushroom_block
+I minecraft:brown_shulker_box
+I minecraft:brown_stained_glass
+I minecraft:brown_stained_glass_pane
+I minecraft:brown_terracotta
+I minecraft:brown_wool
+I minecraft:bubble_coral
+I minecraft:bubble_coral_block
+I minecraft:bubble_coral_fan
+I minecraft:bucket
+I minecraft:cactus
+I minecraft:cactus_green
+I minecraft:cake
+I minecraft:carrot
+I minecraft:carrot_on_a_stick
+I minecraft:carved_pumpkin
+I minecraft:cauldron
+I minecraft:cave_spider_spawn_egg
+I minecraft:chain_command_block
+I minecraft:chainmail_boots
+I minecraft:chainmail_chestplate
+I minecraft:chainmail_helmet
+I minecraft:chainmail_leggings
+I minecraft:charcoal
+I minecraft:chest
+I minecraft:chest_minecart
+I minecraft:chicken
+I minecraft:chicken_spawn_egg
+I minecraft:chipped_anvil
+I minecraft:chiseled_quartz_block
+I minecraft:chiseled_red_sandstone
+I minecraft:chiseled_sandstone
+I minecraft:chiseled_stone_bricks
+I minecraft:chorus_flower
+I minecraft:chorus_fruit
+I minecraft:chorus_plant
+I minecraft:clay
+I minecraft:clay_ball
+I minecraft:clock
+I minecraft:coal
+I minecraft:coal_block
+I minecraft:coal_ore
+I minecraft:coarse_dirt
+I minecraft:cobblestone
+I minecraft:cobblestone_slab
+I minecraft:cobblestone_stairs
+I minecraft:cobblestone_wall
+I minecraft:cobweb
+I minecraft:cocoa_beans
+I minecraft:cod
+I minecraft:cod_bucket
+I minecraft:cod_spawn_egg
+I minecraft:command_block
+I minecraft:command_block_minecart
+I minecraft:comparator
+I minecraft:compass
+I minecraft:conduit
+I minecraft:cooked_beef
+I minecraft:cooked_chicken
+I minecraft:cooked_cod
+I minecraft:cooked_mutton
+I minecraft:cooked_porkchop
+I minecraft:cooked_rabbit
+I minecraft:cooked_salmon
+I minecraft:cookie
+I minecraft:cow_spawn_egg
+I minecraft:cracked_stone_bricks
+I minecraft:crafting_table
+I minecraft:creeper_head
+I minecraft:creeper_spawn_egg
+I minecraft:cut_red_sandstone
+I minecraft:cut_sandstone
+I minecraft:cyan_banner
+I minecraft:cyan_bed
+I minecraft:cyan_carpet
+I minecraft:cyan_concrete
+I minecraft:cyan_concrete_powder
+I minecraft:cyan_dye
+I minecraft:cyan_glazed_terracotta
+I minecraft:cyan_shulker_box
+I minecraft:cyan_stained_glass
+I minecraft:cyan_stained_glass_pane
+I minecraft:cyan_terracotta
+I minecraft:cyan_wool
+I minecraft:damaged_anvil
+I minecraft:dandelion
+I minecraft:dandelion_yellow
+I minecraft:dark_oak_boat
+I minecraft:dark_oak_button
+I minecraft:dark_oak_door
+I minecraft:dark_oak_fence
+I minecraft:dark_oak_fence_gate
+I minecraft:dark_oak_leaves
+I minecraft:dark_oak_log
+I minecraft:dark_oak_planks
+I minecraft:dark_oak_pressure_plate
+I minecraft:dark_oak_sapling
+I minecraft:dark_oak_slab
+I minecraft:dark_oak_stairs
+I minecraft:dark_oak_trapdoor
+I minecraft:dark_oak_wood
+I minecraft:dark_prismarine
+I minecraft:dark_prismarine_slab
+I minecraft:dark_prismarine_stairs
+I minecraft:daylight_detector
+I minecraft:dead_brain_coral
+I minecraft:dead_brain_coral_block
+I minecraft:dead_brain_coral_fan
+I minecraft:dead_bubble_coral
+I minecraft:dead_bubble_coral_block
+I minecraft:dead_bubble_coral_fan
+I minecraft:dead_bush
+I minecraft:dead_fire_coral
+I minecraft:dead_fire_coral_block
+I minecraft:dead_fire_coral_fan
+I minecraft:dead_horn_coral
+I minecraft:dead_horn_coral_block
+I minecraft:dead_horn_coral_fan
+I minecraft:dead_tube_coral
+I minecraft:dead_tube_coral_block
+I minecraft:dead_tube_coral_fan
+I minecraft:debug_stick
+I minecraft:detector_rail
+I minecraft:diamond
+I minecraft:diamond_axe
+I minecraft:diamond_block
+I minecraft:diamond_boots
+I minecraft:diamond_chestplate
+I minecraft:diamond_helmet
+I minecraft:diamond_hoe
+I minecraft:diamond_horse_armor
+I minecraft:diamond_leggings
+I minecraft:diamond_ore
+I minecraft:diamond_pickaxe
+I minecraft:diamond_shovel
+I minecraft:diamond_sword
+I minecraft:diorite
+I minecraft:dirt
+I minecraft:dispenser
+I minecraft:dolphin_spawn_egg
+I minecraft:donkey_spawn_egg
+I minecraft:dragon_breath
+I minecraft:dragon_egg
+I minecraft:dragon_head
+I minecraft:dried_kelp
+I minecraft:dried_kelp_block
+I minecraft:dropper
+I minecraft:drowned_spawn_egg
+I minecraft:egg
+I minecraft:elder_guardian_spawn_egg
+I minecraft:elytra
+I minecraft:emerald
+I minecraft:emerald_block
+I minecraft:emerald_ore
+I minecraft:enchanted_book
+I minecraft:enchanted_golden_apple
+I minecraft:enchanting_table
+I minecraft:end_crystal
+I minecraft:end_portal_frame
+I minecraft:end_rod
+I minecraft:end_stone
+I minecraft:end_stone_bricks
+I minecraft:ender_chest
+I minecraft:ender_eye
+I minecraft:ender_pearl
+I minecraft:enderman_spawn_egg
+I minecraft:endermite_spawn_egg
+I minecraft:evoker_spawn_egg
+I minecraft:experience_bottle
+I minecraft:farmland
+I minecraft:feather
+I minecraft:fermented_spider_eye
+I minecraft:fern
+I minecraft:filled_map
+I minecraft:fire_charge
+I minecraft:fire_coral
+I minecraft:fire_coral_block
+I minecraft:fire_coral_fan
+I minecraft:firework_rocket
+I minecraft:firework_star
+I minecraft:fishing_rod
+I minecraft:flint
+I minecraft:flint_and_steel
+I minecraft:flower_pot
+I minecraft:furnace
+I minecraft:furnace_minecart
+I minecraft:ghast_spawn_egg
+I minecraft:ghast_tear
+I minecraft:glass
+I minecraft:glass_bottle
+I minecraft:glass_pane
+I minecraft:glistering_melon_slice
+I minecraft:glowstone
+I minecraft:glowstone_dust
+I minecraft:gold_block
+I minecraft:gold_ingot
+I minecraft:gold_nugget
+I minecraft:gold_ore
+I minecraft:golden_apple
+I minecraft:golden_axe
+I minecraft:golden_boots
+I minecraft:golden_carrot
+I minecraft:golden_chestplate
+I minecraft:golden_helmet
+I minecraft:golden_hoe
+I minecraft:golden_horse_armor
+I minecraft:golden_leggings
+I minecraft:golden_pickaxe
+I minecraft:golden_shovel
+I minecraft:golden_sword
+I minecraft:granite
+I minecraft:grass
+I minecraft:grass_block
+I minecraft:grass_path
+I minecraft:gravel
+I minecraft:gray_banner
+I minecraft:gray_bed
+I minecraft:gray_carpet
+I minecraft:gray_concrete
+I minecraft:gray_concrete_powder
+I minecraft:gray_dye
+I minecraft:gray_glazed_terracotta
+I minecraft:gray_shulker_box
+I minecraft:gray_stained_glass
+I minecraft:gray_stained_glass_pane
+I minecraft:gray_terracotta
+I minecraft:gray_wool
+I minecraft:green_banner
+I minecraft:green_bed
+I minecraft:green_carpet
+I minecraft:green_concrete
+I minecraft:green_concrete_powder
+I minecraft:green_glazed_terracotta
+I minecraft:green_shulker_box
+I minecraft:green_stained_glass
+I minecraft:green_stained_glass_pane
+I minecraft:green_terracotta
+I minecraft:green_wool
+I minecraft:guardian_spawn_egg
+I minecraft:gunpowder
+I minecraft:hay_block
+I minecraft:heart_of_the_sea
+I minecraft:heavy_weighted_pressure_plate
+I minecraft:hopper
+I minecraft:hopper_minecart
+I minecraft:horn_coral
+I minecraft:horn_coral_block
+I minecraft:horn_coral_fan
+I minecraft:horse_spawn_egg
+I minecraft:husk_spawn_egg
+I minecraft:ice
+I minecraft:infested_chiseled_stone_bricks
+I minecraft:infested_cobblestone
+I minecraft:infested_cracked_stone_bricks
+I minecraft:infested_mossy_stone_bricks
+I minecraft:infested_stone
+I minecraft:infested_stone_bricks
+I minecraft:ink_sac
+I minecraft:iron_axe
+I minecraft:iron_bars
+I minecraft:iron_block
+I minecraft:iron_boots
+I minecraft:iron_chestplate
+I minecraft:iron_door
+I minecraft:iron_helmet
+I minecraft:iron_hoe
+I minecraft:iron_horse_armor
+I minecraft:iron_ingot
+I minecraft:iron_leggings
+I minecraft:iron_nugget
+I minecraft:iron_ore
+I minecraft:iron_pickaxe
+I minecraft:iron_shovel
+I minecraft:iron_sword
+I minecraft:iron_trapdoor
+I minecraft:item_frame
+I minecraft:jack_o_lantern
+I minecraft:jukebox
+I minecraft:jungle_boat
+I minecraft:jungle_button
+I minecraft:jungle_door
+I minecraft:jungle_fence
+I minecraft:jungle_fence_gate
+I minecraft:jungle_leaves
+I minecraft:jungle_log
+I minecraft:jungle_planks
+I minecraft:jungle_pressure_plate
+I minecraft:jungle_sapling
+I minecraft:jungle_slab
+I minecraft:jungle_stairs
+I minecraft:jungle_trapdoor
+I minecraft:jungle_wood
+I minecraft:kelp
+I minecraft:knowledge_book
+I minecraft:ladder
+I minecraft:lapis_block
+I minecraft:lapis_lazuli
+I minecraft:lapis_ore
+I minecraft:large_fern
+I minecraft:lava_bucket
+I minecraft:lead
+I minecraft:leather
+I minecraft:leather_boots
+I minecraft:leather_chestplate
+I minecraft:leather_helmet
+I minecraft:leather_leggings
+I minecraft:lever
+I minecraft:light_blue_banner
+I minecraft:light_blue_bed
+I minecraft:light_blue_carpet
+I minecraft:light_blue_concrete
+I minecraft:light_blue_concrete_powder
+I minecraft:light_blue_dye
+I minecraft:light_blue_glazed_terracotta
+I minecraft:light_blue_shulker_box
+I minecraft:light_blue_stained_glass
+I minecraft:light_blue_stained_glass_pane
+I minecraft:light_blue_terracotta
+I minecraft:light_blue_wool
+I minecraft:light_gray_banner
+I minecraft:light_gray_bed
+I minecraft:light_gray_carpet
+I minecraft:light_gray_concrete
+I minecraft:light_gray_concrete_powder
+I minecraft:light_gray_dye
+I minecraft:light_gray_glazed_terracotta
+I minecraft:light_gray_shulker_box
+I minecraft:light_gray_stained_glass
+I minecraft:light_gray_stained_glass_pane
+I minecraft:light_gray_terracotta
+I minecraft:light_gray_wool
+I minecraft:light_weighted_pressure_plate
+I minecraft:lilac
+I minecraft:lily_pad
+I minecraft:lime_banner
+I minecraft:lime_bed
+I minecraft:lime_carpet
+I minecraft:lime_concrete
+I minecraft:lime_concrete_powder
+I minecraft:lime_dye
+I minecraft:lime_glazed_terracotta
+I minecraft:lime_shulker_box
+I minecraft:lime_stained_glass
+I minecraft:lime_stained_glass_pane
+I minecraft:lime_terracotta
+I minecraft:lime_wool
+I minecraft:lingering_potion
+I minecraft:llama_spawn_egg
+I minecraft:magenta_banner
+I minecraft:magenta_bed
+I minecraft:magenta_carpet
+I minecraft:magenta_concrete
+I minecraft:magenta_concrete_powder
+I minecraft:magenta_dye
+I minecraft:magenta_glazed_terracotta
+I minecraft:magenta_shulker_box
+I minecraft:magenta_stained_glass
+I minecraft:magenta_stained_glass_pane
+I minecraft:magenta_terracotta
+I minecraft:magenta_wool
+I minecraft:magma_block
+I minecraft:magma_cream
+I minecraft:magma_cube_spawn_egg
+I minecraft:map
+I minecraft:melon
+I minecraft:melon_seeds
+I minecraft:melon_slice
+I minecraft:milk_bucket
+I minecraft:minecart
+I minecraft:mooshroom_spawn_egg
+I minecraft:mossy_cobblestone
+I minecraft:mossy_cobblestone_wall
+I minecraft:mossy_stone_bricks
+I minecraft:mule_spawn_egg
+I minecraft:mushroom_stem
+I minecraft:mushroom_stew
+I minecraft:music_disc_11
+I minecraft:music_disc_13
+I minecraft:music_disc_blocks
+I minecraft:music_disc_cat
+I minecraft:music_disc_chirp
+I minecraft:music_disc_far
+I minecraft:music_disc_mall
+I minecraft:music_disc_mellohi
+I minecraft:music_disc_stal
+I minecraft:music_disc_strad
+I minecraft:music_disc_wait
+I minecraft:music_disc_ward
+I minecraft:mutton
+I minecraft:mycelium
+I minecraft:name_tag
+I minecraft:nautilus_shell
+I minecraft:nether_brick
+I minecraft:nether_brick_fence
+I minecraft:nether_brick_slab
+I minecraft:nether_brick_stairs
+I minecraft:nether_bricks
+I minecraft:nether_quartz_ore
+I minecraft:nether_star
+I minecraft:nether_wart
+I minecraft:nether_wart_block
+I minecraft:netherrack
+I minecraft:note_block
+I minecraft:oak_boat
+I minecraft:oak_button
+I minecraft:oak_door
+I minecraft:oak_fence
+I minecraft:oak_fence_gate
+I minecraft:oak_leaves
+I minecraft:oak_log
+I minecraft:oak_planks
+I minecraft:oak_pressure_plate
+I minecraft:oak_sapling
+I minecraft:oak_slab
+I minecraft:oak_stairs
+I minecraft:oak_trapdoor
+I minecraft:oak_wood
+I minecraft:observer
+I minecraft:obsidian
+I minecraft:ocelot_spawn_egg
+I minecraft:orange_banner
+I minecraft:orange_bed
+I minecraft:orange_carpet
+I minecraft:orange_concrete
+I minecraft:orange_concrete_powder
+I minecraft:orange_dye
+I minecraft:orange_glazed_terracotta
+I minecraft:orange_shulker_box
+I minecraft:orange_stained_glass
+I minecraft:orange_stained_glass_pane
+I minecraft:orange_terracotta
+I minecraft:orange_tulip
+I minecraft:orange_wool
+I minecraft:oxeye_daisy
+I minecraft:packed_ice
+I minecraft:painting
+I minecraft:paper
+I minecraft:parrot_spawn_egg
+I minecraft:peony
+I minecraft:petrified_oak_slab
+I minecraft:phantom_membrane
+I minecraft:phantom_spawn_egg
+I minecraft:pig_spawn_egg
+I minecraft:pink_banner
+I minecraft:pink_bed
+I minecraft:pink_carpet
+I minecraft:pink_concrete
+I minecraft:pink_concrete_powder
+I minecraft:pink_dye
+I minecraft:pink_glazed_terracotta
+I minecraft:pink_shulker_box
+I minecraft:pink_stained_glass
+I minecraft:pink_stained_glass_pane
+I minecraft:pink_terracotta
+I minecraft:pink_tulip
+I minecraft:pink_wool
+I minecraft:piston
+I minecraft:player_head
+I minecraft:podzol
+I minecraft:poisonous_potato
+I minecraft:polar_bear_spawn_egg
+I minecraft:polished_andesite
+I minecraft:polished_diorite
+I minecraft:polished_granite
+I minecraft:popped_chorus_fruit
+I minecraft:poppy
+I minecraft:porkchop
+I minecraft:potato
+I minecraft:potion
+I minecraft:powered_rail
+I minecraft:prismarine
+I minecraft:prismarine_brick_slab
+I minecraft:prismarine_brick_stairs
+I minecraft:prismarine_bricks
+I minecraft:prismarine_crystals
+I minecraft:prismarine_shard
+I minecraft:prismarine_slab
+I minecraft:prismarine_stairs
+I minecraft:pufferfish
+I minecraft:pufferfish_bucket
+I minecraft:pufferfish_spawn_egg
+I minecraft:pumpkin
+I minecraft:pumpkin_pie
+I minecraft:pumpkin_seeds
+I minecraft:purple_banner
+I minecraft:purple_bed
+I minecraft:purple_carpet
+I minecraft:purple_concrete
+I minecraft:purple_concrete_powder
+I minecraft:purple_dye
+I minecraft:purple_glazed_terracotta
+I minecraft:purple_shulker_box
+I minecraft:purple_stained_glass
+I minecraft:purple_stained_glass_pane
+I minecraft:purple_terracotta
+I minecraft:purple_wool
+I minecraft:purpur_block
+I minecraft:purpur_pillar
+I minecraft:purpur_slab
+I minecraft:purpur_stairs
+I minecraft:quartz
+I minecraft:quartz_block
+I minecraft:quartz_pillar
+I minecraft:quartz_slab
+I minecraft:quartz_stairs
+I minecraft:rabbit
+I minecraft:rabbit_foot
+I minecraft:rabbit_hide
+I minecraft:rabbit_spawn_egg
+I minecraft:rabbit_stew
+I minecraft:rail
+I minecraft:red_banner
+I minecraft:red_bed
+I minecraft:red_carpet
+I minecraft:red_concrete
+I minecraft:red_concrete_powder
+I minecraft:red_glazed_terracotta
+I minecraft:red_mushroom
+I minecraft:red_mushroom_block
+I minecraft:red_nether_bricks
+I minecraft:red_sand
+I minecraft:red_sandstone
+I minecraft:red_sandstone_slab
+I minecraft:red_sandstone_stairs
+I minecraft:red_shulker_box
+I minecraft:red_stained_glass
+I minecraft:red_stained_glass_pane
+I minecraft:red_terracotta
+I minecraft:red_tulip
+I minecraft:red_wool
+I minecraft:redstone
+I minecraft:redstone_block
+I minecraft:redstone_lamp
+I minecraft:redstone_ore
+I minecraft:redstone_torch
+I minecraft:repeater
+I minecraft:repeating_command_block
+I minecraft:rose_bush
+I minecraft:rose_red
+I minecraft:rotten_flesh
+I minecraft:saddle
+I minecraft:salmon
+I minecraft:salmon_bucket
+I minecraft:salmon_spawn_egg
+I minecraft:sand
+I minecraft:sandstone
+I minecraft:sandstone_slab
+I minecraft:sandstone_stairs
+I minecraft:scute
+I minecraft:sea_lantern
+I minecraft:sea_pickle
+I minecraft:seagrass
+I minecraft:shears
+I minecraft:sheep_spawn_egg
+I minecraft:shield
+I minecraft:shulker_box
+I minecraft:shulker_shell
+I minecraft:shulker_spawn_egg
+I minecraft:sign
+I minecraft:silverfish_spawn_egg
+I minecraft:skeleton_horse_spawn_egg
+I minecraft:skeleton_skull
+I minecraft:skeleton_spawn_egg
+I minecraft:slime_ball
+I minecraft:slime_block
+I minecraft:slime_spawn_egg
+I minecraft:smooth_quartz
+I minecraft:smooth_red_sandstone
+I minecraft:smooth_sandstone
+I minecraft:smooth_stone
+I minecraft:snow
+I minecraft:snow_block
+I minecraft:snowball
+I minecraft:soul_sand
+I minecraft:spawner
+I minecraft:spectral_arrow
+I minecraft:spider_eye
+I minecraft:spider_spawn_egg
+I minecraft:splash_potion
+I minecraft:sponge
+I minecraft:spruce_boat
+I minecraft:spruce_button
+I minecraft:spruce_door
+I minecraft:spruce_fence
+I minecraft:spruce_fence_gate
+I minecraft:spruce_leaves
+I minecraft:spruce_log
+I minecraft:spruce_planks
+I minecraft:spruce_pressure_plate
+I minecraft:spruce_sapling
+I minecraft:spruce_slab
+I minecraft:spruce_stairs
+I minecraft:spruce_trapdoor
+I minecraft:spruce_wood
+I minecraft:squid_spawn_egg
+I minecraft:stick
+I minecraft:sticky_piston
+I minecraft:stone
+I minecraft:stone_axe
+I minecraft:stone_brick_slab
+I minecraft:stone_brick_stairs
+I minecraft:stone_bricks
+I minecraft:stone_button
+I minecraft:stone_hoe
+I minecraft:stone_pickaxe
+I minecraft:stone_pressure_plate
+I minecraft:stone_shovel
+I minecraft:stone_slab
+I minecraft:stone_sword
+I minecraft:stray_spawn_egg
+I minecraft:string
+I minecraft:stripped_acacia_log
+I minecraft:stripped_acacia_wood
+I minecraft:stripped_birch_log
+I minecraft:stripped_birch_wood
+I minecraft:stripped_dark_oak_log
+I minecraft:stripped_dark_oak_wood
+I minecraft:stripped_jungle_log
+I minecraft:stripped_jungle_wood
+I minecraft:stripped_oak_log
+I minecraft:stripped_oak_wood
+I minecraft:stripped_spruce_log
+I minecraft:stripped_spruce_wood
+I minecraft:structure_block
+I minecraft:structure_void
+I minecraft:sugar
+I minecraft:sugar_cane
+I minecraft:sunflower
+I minecraft:tall_grass
+I minecraft:terracotta
+I minecraft:tipped_arrow
+I minecraft:tnt
+I minecraft:tnt_minecart
+I minecraft:torch
+I minecraft:totem_of_undying
+I minecraft:trapped_chest
+I minecraft:trident
+I minecraft:tripwire_hook
+I minecraft:tropical_fish
+I minecraft:tropical_fish_bucket
+I minecraft:tropical_fish_spawn_egg
+I minecraft:tube_coral
+I minecraft:tube_coral_block
+I minecraft:tube_coral_fan
+I minecraft:turtle_egg
+I minecraft:turtle_helmet
+I minecraft:turtle_spawn_egg
+I minecraft:vex_spawn_egg
+I minecraft:villager_spawn_egg
+I minecraft:vindicator_spawn_egg
+I minecraft:vine
+I minecraft:water_bucket
+I minecraft:wet_sponge
+I minecraft:wheat
+I minecraft:wheat_seeds
+I minecraft:white_banner
+I minecraft:white_bed
+I minecraft:white_carpet
+I minecraft:white_concrete
+I minecraft:white_concrete_powder
+I minecraft:white_glazed_terracotta
+I minecraft:white_shulker_box
+I minecraft:white_stained_glass
+I minecraft:white_stained_glass_pane
+I minecraft:white_terracotta
+I minecraft:white_tulip
+I minecraft:white_wool
+I minecraft:witch_spawn_egg
+I minecraft:wither_skeleton_skull
+I minecraft:wither_skeleton_spawn_egg
+I minecraft:wolf_spawn_egg
+I minecraft:wooden_axe
+I minecraft:wooden_hoe
+I minecraft:wooden_pickaxe
+I minecraft:wooden_shovel
+I minecraft:wooden_sword
+I minecraft:writable_book
+I minecraft:written_book
+I minecraft:yellow_banner
+I minecraft:yellow_bed
+I minecraft:yellow_carpet
+I minecraft:yellow_concrete
+I minecraft:yellow_concrete_powder
+I minecraft:yellow_glazed_terracotta
+I minecraft:yellow_shulker_box
+I minecraft:yellow_stained_glass
+I minecraft:yellow_stained_glass_pane
+I minecraft:yellow_terracotta
+I minecraft:yellow_wool
+I minecraft:zombie_head
+I minecraft:zombie_horse_spawn_egg
+I minecraft:zombie_pigman_spawn_egg
+I minecraft:zombie_spawn_egg
+I minecraft:zombie_villager_spawn_egg
+E minecraft:area_effect_cloud
+E minecraft:armor_stand
+E minecraft:arrow
+E minecraft:bat
+E minecraft:blaze
+E minecraft:boat
+E minecraft:cave_spider
+E minecraft:chest_minecart
+E minecraft:chicken
+E minecraft:cod
+E minecraft:command_block_minecart
+E minecraft:cow
+E minecraft:creeper
+E minecraft:dolphin
+E minecraft:donkey
+E minecraft:dragon_fireball
+E minecraft:drowned
+E minecraft:egg
+E minecraft:elder_guardian
+E minecraft:end_crystal
+E minecraft:ender_dragon
+E minecraft:ender_pearl
+E minecraft:enderman
+E minecraft:endermite
+E minecraft:evoker
+E minecraft:evoker_fangs
+E minecraft:experience_bottle
+E minecraft:experience_orb
+E minecraft:eye_of_ender
+E minecraft:falling_block
+E minecraft:fireball
+E minecraft:firework_rocket
+E minecraft:fishing_bobber
+E minecraft:furnace_minecart
+E minecraft:ghast
+E minecraft:giant
+E minecraft:guardian
+E minecraft:hopper_minecart
+E minecraft:horse
+E minecraft:husk
+E minecraft:illusioner
+E minecraft:iron_golem
+E minecraft:item
+E minecraft:item_frame
+E minecraft:leash_knot
+E minecraft:lightning_bolt
+E minecraft:llama
+E minecraft:llama_spit
+E minecraft:magma_cube
+E minecraft:minecart
+E minecraft:mooshroom
+E minecraft:mule
+E minecraft:ocelot
+E minecraft:painting
+E minecraft:parrot
+E minecraft:phantom
+E minecraft:pig
+E minecraft:player
+E minecraft:polar_bear
+E minecraft:potion
+E minecraft:pufferfish
+E minecraft:rabbit
+E minecraft:salmon
+E minecraft:sheep
+E minecraft:shulker
+E minecraft:shulker_bullet
+E minecraft:silverfish
+E minecraft:skeleton
+E minecraft:skeleton_horse
+E minecraft:slime
+E minecraft:small_fireball
+E minecraft:snow_golem
+E minecraft:snowball
+E minecraft:spawner_minecart
+E minecraft:spectral_arrow
+E minecraft:spider
+E minecraft:squid
+E minecraft:stray
+E minecraft:tnt
+E minecraft:tnt_minecart
+E minecraft:trident
+E minecraft:tropical_fish
+E minecraft:turtle
+E minecraft:vex
+E minecraft:villager
+E minecraft:vindicator
+E minecraft:witch
+E minecraft:wither
+E minecraft:wither_skeleton
+E minecraft:wither_skull
+E minecraft:wolf
+E minecraft:zombie
+E minecraft:zombie_horse
+E minecraft:zombie_pigman
+E minecraft:zombie_villager
+M minecraft:badlands
+M minecraft:badlands_plateau
+M minecraft:beach
+M minecraft:birch_forest
+M minecraft:birch_forest_hills
+M minecraft:cold_ocean
+M minecraft:dark_forest
+M minecraft:dark_forest_hills
+M minecraft:deep_cold_ocean
+M minecraft:deep_frozen_ocean
+M minecraft:deep_lukewarm_ocean
+M minecraft:deep_ocean
+M minecraft:deep_warm_ocean
+M minecraft:desert
+M minecraft:desert_hills
+M minecraft:desert_lakes
+M minecraft:end_barrens
+M minecraft:end_highlands
+M minecraft:end_midlands
+M minecraft:eroded_badlands
+M minecraft:flower_forest
+M minecraft:forest
+M minecraft:frozen_ocean
+M minecraft:frozen_river
+M minecraft:giant_spruce_taiga
+M minecraft:giant_spruce_taiga_hills
+M minecraft:giant_tree_taiga
+M minecraft:giant_tree_taiga_hills
+M minecraft:gravelly_mountains
+M minecraft:ice_spikes
+M minecraft:jungle
+M minecraft:jungle_edge
+M minecraft:jungle_hills
+M minecraft:lukewarm_ocean
+M minecraft:modified_badlands_plateau
+M minecraft:modified_gravelly_mountains
+M minecraft:modified_jungle
+M minecraft:modified_jungle_edge
+M minecraft:modified_wooded_badlands_plateau
+M minecraft:mountain_edge
+M minecraft:mountains
+M minecraft:mushroom_field_shore
+M minecraft:mushroom_fields
+M minecraft:nether
+M minecraft:ocean
+M minecraft:plains
+M minecraft:river
+M minecraft:savanna
+M minecraft:savanna_plateau
+M minecraft:shattered_savanna
+M minecraft:shattered_savanna_plateau
+M minecraft:small_end_islands
+M minecraft:snowy_beach
+M minecraft:snowy_mountains
+M minecraft:snowy_taiga
+M minecraft:snowy_taiga_hills
+M minecraft:snowy_taiga_mountains
+M minecraft:snowy_tundra
+M minecraft:stone_shore
+M minecraft:sunflower_plains
+M minecraft:swamp
+M minecraft:swamp_hills
+M minecraft:taiga
+M minecraft:taiga_hills
+M minecraft:taiga_mountains
+M minecraft:tall_birch_forest
+M minecraft:tall_birch_hills
+M minecraft:the_end
+M minecraft:the_void
+M minecraft:warm_ocean
+M minecraft:wooded_badlands_plateau
+M minecraft:wooded_hills
+M minecraft:wooded_mountains
+T minecraft:banner
+T minecraft:beacon
+T minecraft:bed
+T minecraft:brewing_stand
+T minecraft:chest
+T minecraft:command_block
+T minecraft:comparator
+T minecraft:conduit
+T minecraft:daylight_detector
+T minecraft:dispenser
+T minecraft:dropper
+T minecraft:enchanting_table
+T minecraft:end_gateway
+T minecraft:end_portal
+T minecraft:ender_chest
+T minecraft:furnace
+T minecraft:hopper
+T minecraft:jukebox
+T minecraft:mob_spawner
+T minecraft:piston
+T minecraft:shulker_box
+T minecraft:sign
+T minecraft:skull
+T minecraft:structure_block
+T minecraft:trapped_chest

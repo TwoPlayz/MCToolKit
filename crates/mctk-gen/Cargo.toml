@@ -1,0 +1,21 @@
+[package]
+name = "mctk-gen"
+description = "Builds MCToolKit's version tables by probing the games themselves"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "mctk-gen"
+path = "src/main.rs"
+
+[dependencies]
+mctk-bedrock.workspace = true
+mctk-nbt.workspace = true
+mctk-java.workspace = true
+mctk-registry.workspace = true
+# Only as a source of candidate string values to try; the game decides what is valid.
+mctk-mapping.workspace = true
+indexmap.workspace = true
+flate2.workspace = true

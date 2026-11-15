@@ -1,17 +1,12 @@
-﻿//! Block entity (tile entity) conversion between Java and Bedrock.
+//! Block entity (tile entity) conversion between Java and Bedrock.
 //!
-//! The conversion itself lives in `mctk-chunker` (a port of Chunker's block entity model
-//! and handlers); this module adapts it to the converters: it shifts positions by the chunk
-//! offset, supplies the block a chest sits in (double chests and trapped chests depend on
-//! it) and counts what could not be converted in the report.
-//!
-//! Converted both ways: containers with items and loot tables (chests, barrels, dispensers,
-//! droppers, hoppers, shulker boxes, ender chests, furnaces), signs, mob spawners,
-//! comparators, campfires and sculk sensors. Vaults, trial spawners, beehives and the like
-//! are written as bare entities. Other kinds are counted by type and left out.
+//! The conversion itself lives in `block_entities` and `block_entities_more`; this module
+//! adapts it to the converters: it shifts positions by the chunk offset, supplies the block an
+//! entity sits in (double chests, banner colours and skulls depend on it) and counts what could
+//! not be converted in the report. Kinds neither module knows are counted by type and left out.
 
-use mctk_chunker::blockentity::edits::{self, BlockEdit};
-use mctk_chunker::blockentity::{self, BlockEntity, Kind};
+use crate::block_entities::{self, BlockEdit};
+use crate::block_entities_more;
 use mctk_java::BlockState;
 use mctk_nbt::{Compound, Tag};
 
@@ -24,46 +19,47 @@ fn int(c: &Compound, key: &str) -> Option<i64> {
 
 /// Plain text of a text component: a string (plain or JSON) or a compound with `text`.
 pub(crate) fn plain_text(tag: &Tag) -> String {
-    mctk_chunker::text::to_plain(&mctk_chunker::text::from_nbt(tag))
+    crate::text_codec::to_plain(tag)
 }
 
 // ---------------------------------------------------------------------------- items
-
-/// Counts what the item codec could not carry over in the conversion report.
-pub(crate) fn report_notes(notes: mctk_chunker::Notes, what: &str, report: &mut EditionReport) {
-    for (missing, n) in notes.missing {
-        report.skip(&format!("{what}: {missing}"), n);
-    }
-}
 
 fn slot_of(item: &Compound) -> Option<u8> {
     item.get("Slot").and_then(Tag::as_i64).map(|v| v as u8)
 }
 
+/// Counts what the item codec could not carry over in the conversion report.
+pub(crate) fn report_item_notes(notes: crate::item_codec::Notes, report: &mut EditionReport) {
+    for (missing, n) in notes.missing {
+        report.skip(&format!("items: {missing}"), n);
+    }
+}
+
 /// Converts one Java item stack to a Bedrock one (`None` for empty slots and items with no
-/// equivalent). The work is done by the item codecs in `mctk-chunker`.
+/// equivalent).
 pub(crate) fn item_to_bedrock(item: &Compound, report: &mut EditionReport) -> Option<Compound> {
-    let mut notes = mctk_chunker::Notes::default();
-    let out = mctk_chunker::item::java::read(item, &mut notes)
-        .and_then(|s| mctk_chunker::item::bedrock::write(&s, slot_of(item), &mut notes));
-    report_notes(notes, "items", report);
+    let mut notes = crate::item_codec::Notes::default();
+    let out = crate::item_codec::java_to_bedrock(item, slot_of(item), &mut notes);
+    report_item_notes(notes, report);
     out
 }
 
 /// Converts one Bedrock item stack to a Java one (`None` for empty slots and unknown items).
 pub(crate) fn item_to_java(item: &Compound, report: &mut EditionReport) -> Option<Compound> {
-    let mut notes = mctk_chunker::Notes::default();
-    let out = mctk_chunker::item::bedrock::read(item, &mut notes)
-        .map(|s| mctk_chunker::item::java::write(&s, slot_of(item)));
-    report_notes(notes, "items", report);
+    let mut notes = crate::item_codec::Notes::default();
+    let out = crate::item_codec::bedrock_to_java(item, slot_of(item), &mut notes);
+    report_item_notes(notes, report);
     out
 }
-
 // ------------------------------------------------------------------- entry points
 
-fn shift(be: &mut BlockEntity, offset: (i32, i32)) {
-    be.x += offset.0 * 16;
-    be.z += offset.1 * 16;
+/// Moves a converted entity by a chunk offset.
+fn shift_compound(c: &mut Compound, offset: (i32, i32)) {
+    for (key, by) in [("x", offset.0), ("z", offset.1)] {
+        if let Some(v) = c.get(key).and_then(Tag::as_i64) {
+            c.insert(key.into(), Tag::Int(v as i32 + by * 16));
+        }
+    }
 }
 
 /// Converts a Java block entity to its Bedrock form. `offset` is the chunk offset applied
@@ -76,48 +72,37 @@ pub(crate) fn java_to_bedrock(
     report: &mut EditionReport,
 ) -> Option<Compound> {
     let id = be.get("id").and_then(Tag::as_str)?;
-    if id == "DUMMY" {
+    // Java's moving piston and the like have no Bedrock form and are dropped quietly.
+    if block_entities_more::is_java_only(id) {
         return None;
     }
-    let mut notes = mctk_chunker::Notes::default();
-    let Some(mut neutral) = blockentity::java::read(be, &mut notes) else {
+    let mut notes = crate::item_codec::Notes::default();
+    let Some(mut out) = block_entities::java_to_bedrock(be, block, &mut notes) else {
         report.skip(&format!("block entities: {id}"), 1);
         return None;
     };
-    // Java's moving piston and the like have no Bedrock form and are dropped quietly.
-    if neutral.kind == Kind::Discard {
-        return None;
-    }
-    shift(&mut neutral, offset);
-    if let Some(block) = block {
-        edits::prepare_for_bedrock(&mut neutral, block);
-    }
-    let out = blockentity::bedrock::write(&neutral, &mut notes);
-    report_notes(notes, "block entities", report);
-    *report
-        .converted_block_entities
-        .entry(id.to_string())
-        .or_insert(0) += 1;
+    report_item_notes(notes, report);
+    shift_compound(&mut out, offset);
+    *report.converted_block_entities.entry(id.to_string()).or_insert(0) += 1;
     Some(out)
 }
 
 /// Converts an entity made from a block (a bed's colour, a cauldron, a potted plant) to
 /// Bedrock. Its position is in source coordinates; `offset` is the chunk offset.
 pub(crate) fn generated_to_bedrock(
-    mut be: BlockEntity,
+    block: &BlockState,
+    at: (i32, i32, i32),
     offset: (i32, i32),
     report: &mut EditionReport,
-) -> Compound {
-    shift(&mut be, offset);
-    let mut notes = mctk_chunker::Notes::default();
-    let out = blockentity::bedrock::write(&be, &mut notes);
-    report_notes(notes, "block entities", report);
+) -> Option<Compound> {
+    let mut out = block_entities_more::from_block(block)?;
+    out.insert("x".into(), Tag::Int(at.0));
+    out.insert("y".into(), Tag::Int(at.1));
+    out.insert("z".into(), Tag::Int(at.2));
+    shift_compound(&mut out, offset);
     let name = out.get("id").and_then(Tag::as_str).unwrap_or("?").to_string();
-    *report
-        .converted_block_entities
-        .entry(format!("{name} (from block)"))
-        .or_insert(0) += 1;
-    out
+    *report.converted_block_entities.entry(format!("{name} (from block)")).or_insert(0) += 1;
+    Some(out)
 }
 
 /// What converting a Bedrock block entity gives: the Java entity and the changes to make to
@@ -137,29 +122,26 @@ pub(crate) fn bedrock_to_java(
     report: &mut EditionReport,
 ) -> Option<JavaBlockEntity> {
     let id = be.get("id").and_then(Tag::as_str)?;
-    let mut notes = mctk_chunker::Notes::default();
-    let Some(mut neutral) = blockentity::bedrock::read(be, &mut notes) else {
-        report.skip(&format!("block entities: {id}"), 1);
+    let mut notes = crate::item_codec::Notes::default();
+    let Some(mut j) = block_entities::bedrock_to_java(be, block, &mut notes) else {
+        // Bedrock-only entities (lodestone, moving block, ...) have no Java form.
+        if !block_entities_more::is_bedrock_only(id) {
+            report.skip(&format!("block entities: {id}"), 1);
+        }
         return None;
     };
-    // Bedrock-only entities (lodestone, moving block, ...) have no Java form.
-    if neutral.kind == Kind::Discard {
-        return None;
+    report_item_notes(notes, report);
+    if let Some(n) = j.nbt.as_mut() {
+        shift_compound(n, offset);
     }
-    let edit = block.map(|b| edits::resolve_for_java(&mut neutral, b)).unwrap_or_default();
-    shift(&mut neutral, offset);
-    let nbt = blockentity::java::write(&neutral, &mut notes);
-    report_notes(notes, "block entities", report);
-    let java_id = match (&neutral.kind, &nbt) {
-        (Kind::Container(c), _) => c.kind.java_id().to_string(),
-        (_, Some(n)) => n.get("id").and_then(Tag::as_str).unwrap_or(id).to_string(),
+    let java_id = match &j.nbt {
+        Some(n) => n.get("id").and_then(Tag::as_str).unwrap_or(id).to_string(),
         // Carried by the block: counted under the Bedrock name.
-        (_, None) => format!("{id} (applied to block)"),
+        None => format!("{id} (applied to block)"),
     };
     *report.converted_block_entities.entry(java_id).or_insert(0) += 1;
-    Some(JavaBlockEntity { nbt, edit })
+    Some(JavaBlockEntity { nbt: j.nbt, edit: j.edit })
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -12,6 +12,13 @@ pub enum Platform {
     Xbox360,
     /// `GAMEDATA` inside a PS3 save folder: the archive uncompressed.
     Ps3,
+    /// `saveData.ms` of the Windows 64 build: two zeroes-and-length words and a zlib stream of the
+    /// little-endian archive. It is not offered to users; the build shares its code with the
+    /// PS3, Xbox 360 and Wii U games, which makes it the way to make test worlds without a console.
+    Windows64,
+    /// `*.wii` of the Wii U game: two zeroes-and-length words (big-endian) and a zlib stream of
+    /// the big-endian archive.
+    WiiU,
 }
 
 impl Platform {
@@ -19,6 +26,7 @@ impl Platform {
         match self {
             Platform::Xbox360 => ChunkCodec::XMemLzx,
             Platform::Ps3 => ChunkCodec::Deflate,
+            Platform::Windows64 | Platform::WiiU => ChunkCodec::Zlib,
         }
     }
 }
@@ -44,7 +52,16 @@ impl ConsoleSave {
         let is_gamedata = file
             .file_name()
             .is_some_and(|n| n.eq_ignore_ascii_case("GAMEDATA"));
-        let (platform, archive) = if is_gamedata {
+        let is_win64 = file
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("ms"));
+        let is_wiiu = file.extension().is_some_and(|e| e.eq_ignore_ascii_case("wii") || e.eq_ignore_ascii_case("ext"))
+            || (!is_win64 && bytes.get(..4) == Some(&[0, 0, 0, 0]) && bytes.get(8) == Some(&0x78));
+        let (platform, archive) = if is_wiiu {
+            (Platform::WiiU, SaveArchive::parse(&decompress_wiiu(&bytes)?)?)
+        } else if is_win64 {
+            (Platform::Windows64, SaveArchive::parse(&decompress_windows64(&bytes)?)?)
+        } else if is_gamedata {
             (Platform::Ps3, SaveArchive::parse(&bytes)?)
         } else {
             (
@@ -65,8 +82,60 @@ impl ConsoleSave {
         Ok(match self.platform {
             Platform::Ps3 => archive,
             Platform::Xbox360 => compress_xbox360(&archive),
+            Platform::Windows64 => compress_windows64(&archive)?,
+            Platform::WiiU => compress_wiiu(&archive)?,
         })
     }
+}
+
+/// `saveData.ms` to the archive: `u32 0`, `u32` archive length (little-endian), zlib stream.
+pub fn decompress_windows64(bytes: &[u8]) -> Result<Vec<u8>, Error> {
+    use std::io::Read;
+    let len = bytes
+        .get(4..8)
+        .map(|b| u32::from_le_bytes(b.try_into().unwrap()) as usize)
+        .ok_or_else(|| bad("saveData.ms shorter than its header"))?;
+    let mut out = Vec::with_capacity(len);
+    flate2::read::ZlibDecoder::new(&bytes[8..]).read_to_end(&mut out)?;
+    if out.len() != len {
+        return Err(bad(format!("saveData.ms holds {} bytes, expected {len}", out.len())));
+    }
+    Ok(out)
+}
+
+pub fn compress_windows64(archive: &[u8]) -> Result<Vec<u8>, Error> {
+    use std::io::Write;
+    let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    e.write_all(archive)?;
+    let mut out = vec![0u8; 4];
+    out.extend_from_slice(&(archive.len() as u32).to_le_bytes());
+    out.extend_from_slice(&e.finish()?);
+    Ok(out)
+}
+
+/// A Wii U `.wii` save to the archive: `u32 0`, `u32` archive length (big-endian), zlib stream.
+pub fn decompress_wiiu(bytes: &[u8]) -> Result<Vec<u8>, Error> {
+    use std::io::Read;
+    let len = bytes
+        .get(4..8)
+        .map(|b| u32::from_be_bytes(b.try_into().unwrap()) as usize)
+        .ok_or_else(|| bad("Wii U save shorter than its header"))?;
+    let mut out = Vec::with_capacity(len);
+    flate2::read::ZlibDecoder::new(&bytes[8..]).read_to_end(&mut out)?;
+    if out.len() != len {
+        return Err(bad(format!("Wii U save holds {} bytes, expected {len}", out.len())));
+    }
+    Ok(out)
+}
+
+pub fn compress_wiiu(archive: &[u8]) -> Result<Vec<u8>, Error> {
+    use std::io::Write;
+    let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    e.write_all(archive)?;
+    let mut out = vec![0u8; 4];
+    out.extend_from_slice(&(archive.len() as u32).to_be_bytes());
+    out.extend_from_slice(&e.finish()?);
+    Ok(out)
 }
 
 pub fn decompress_xbox360(bytes: &[u8]) -> Result<Vec<u8>, Error> {

@@ -1,6 +1,5 @@
-//! Icons: UMT's original artwork where it is free to use (see `assets/icons/NOTICE.md`),
-//! and vector drawings of our own for everything else — the app logo and app icons, which
-//! stay MCToolKit's own, plus any icon without an image.
+//! Icons: Most are PNG images; the app logo, app icons and any icon
+//! without an image are vector drawings.
 
 use std::collections::HashMap;
 use std::f32::consts::{PI, TAU};
@@ -64,6 +63,7 @@ images![
     "PRUNER_TIME",
     "PRUNER_TIME_h",
     "REDO",
+    "REDO_h",
     "REFRESH",
     "REFRESH_h",
     "SAVE",
@@ -80,6 +80,7 @@ images![
     "TRASH",
     "TRASH_h",
     "UNDO",
+    "UNDO_h",
     "TAG_BYTE",
     "TAG_SHORT",
     "TAG_INT",
@@ -191,11 +192,53 @@ static FILES: OnceLock<Mutex<HashMap<PathBuf, Option<TextureHandle>>>> = OnceLoc
 /// Draws an image file fitted in `r` (loaded once, then cached); false if it can't be read.
 /// Small pixel-art images are drawn with nearest filtering, as UMT shows them.
 pub fn file_image(p: &Painter, r: Rect, path: &Path) -> bool {
+    file_image_tinted(p, r, path, Color32::WHITE)
+}
+
+/// Draws an image file in grey (its colours as light and dark only), first frame of an
+/// animated one.
+pub fn gray_image(p: &Painter, r: Rect, path: &Path) -> bool {
+    static GRAY: OnceLock<Mutex<HashMap<PathBuf, Option<TextureHandle>>>> = OnceLock::new();
+    let tex = GRAY
+        .get_or_init(Default::default)
+        .lock()
+        .expect("grey icons")
+        .entry(path.to_path_buf())
+        .or_insert_with(|| {
+            let img = image::open(path).ok()?.to_rgba8();
+            let side = img.width().min(img.height()).max(1);
+            let mut img = image::imageops::crop_imm(&img, 0, 0, side, side).to_image();
+            for px in img.pixels_mut() {
+                let l = (0.3 * f32::from(px[0]) + 0.59 * f32::from(px[1]) + 0.11 * f32::from(px[2])) as u8;
+                px[0] = l;
+                px[1] = l;
+                px[2] = l;
+            }
+            let color = egui::ColorImage::from_rgba_unmultiplied([side as usize, side as usize], img.as_raw());
+            Some(p.ctx().load_texture(format!("grey:{}", path.display()), color, egui::TextureOptions::NEAREST))
+        })
+        .clone();
+    let Some(tex) = tex else { return false };
+    let side = r.width().min(r.height());
+    p.image(
+        tex.id(),
+        Rect::from_center_size(r.center(), vec2(side, side)),
+        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+        Color32::WHITE,
+    );
+    true
+}
+
+/// Like [`file_image`], multiplied by `tint`.
+pub fn file_image_tinted(p: &Painter, r: Rect, path: &Path, tint: Color32) -> bool {
     let Some(tex) = file_texture(p.ctx(), path) else {
         return false;
     };
-    let [w, h] = tex.size();
-    if w > 32 {
+    let [w, full_h] = tex.size();
+    // An animated texture is a strip of frames: the first one is the picture.
+    let h = full_h.min(w);
+    let top = h as f32 / full_h as f32;
+    if w > 32 && full_h <= w {
         let key = path.display().to_string();
         let src = FILE_SOURCES
             .get_or_init(Default::default)
@@ -211,7 +254,7 @@ pub fn file_image(p: &Painter, r: Rect, path: &Path) -> bool {
             })
             .clone();
         if src.width() > 0 {
-            paint_sharp(p, r, &key, &src, &tex, Color32::WHITE);
+            paint_sharp(p, r, &key, &src, &tex, tint);
             return true;
         }
     }
@@ -220,8 +263,8 @@ pub fn file_image(p: &Painter, r: Rect, path: &Path) -> bool {
     p.image(
         tex.id(),
         fitted,
-        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-        Color32::WHITE,
+        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, top)),
+        tint,
     );
     true
 }
@@ -242,6 +285,97 @@ pub fn set_texture_pack(dir: Option<PathBuf>) {
 pub fn pack_texture(name: &str) -> Option<PathBuf> {
     let p = PACK.lock().expect("pack").as_ref()?.join(name);
     p.is_file().then_some(p)
+}
+
+/// The texture of an item or block by its id (`minecraft:diamond_sword` or `diamond_sword`):
+/// the pack's item picture, else its block picture. Looked up once per name.
+pub fn item_texture(id: &str) -> Option<PathBuf> {
+    static CACHE: Mutex<Option<(Option<PathBuf>, HashMap<String, Option<PathBuf>>)>> = Mutex::new(None);
+    let name = id.rsplit(':').next().unwrap_or(id).to_ascii_lowercase();
+    let pack = PACK.lock().expect("pack").clone();
+    let mut cache = CACHE.lock().expect("item textures");
+    // A different pack starts a fresh list.
+    if cache.as_ref().is_none_or(|(p, _)| *p != pack) {
+        *cache = Some((pack, HashMap::new()));
+    }
+    let (_, found) = cache.as_mut().expect("just set");
+    found
+        .entry(name.clone())
+        .or_insert_with(|| find_item_texture(&name))
+        .clone()
+}
+
+/// What a texture of the pack is called for items and blocks that have none of their own name:
+/// a stair or slab is drawn as the block it is made of, a block by one of its faces, a bed or
+/// banner by its colour of wool.
+fn find_item_texture(name: &str) -> Option<PathBuf> {
+    // Items that look like another one.
+    let alias = match name {
+        "petrified_oak_slab" => "oak_planks",
+        "smooth_quartz" | "smooth_quartz_slab" | "smooth_quartz_stairs" => "quartz_block_bottom",
+        "smooth_sandstone" | "smooth_sandstone_slab" | "smooth_sandstone_stairs" => "sandstone_top",
+        "smooth_red_sandstone" | "smooth_red_sandstone_slab" | "smooth_red_sandstone_stairs" => "red_sandstone_top",
+        "heavy_weighted_pressure_plate" => "iron_block",
+        "light_weighted_pressure_plate" => "gold_block",
+        "enchanted_golden_apple" => "golden_apple",
+        "debug_stick" => "stick",
+        "magma_block" => "magma",
+        "snow_block" => "snow",
+        "chipped_anvil" => "chipped_anvil_top",
+        "damaged_anvil" => "damaged_anvil_top",
+        "sticky_piston" => "piston_top_sticky",
+        "tipped_arrow" => "arrow",
+        n if n.ends_with("_spawn_egg") => "spawn_egg",
+        n if n.ends_with("_map") => "filled_map",
+        n => n,
+    };
+    let mut bases = vec![alias.to_string()];
+    let mut base = alias;
+    for prefix in ["waxed_", "infested_"] {
+        if let Some(rest) = base.strip_prefix(prefix) {
+            base = rest;
+            bases.push(base.to_string());
+        }
+    }
+    for suffix in [
+        "_stairs", "_slab", "_wall", "_fence_gate", "_fence", "_button", "_pressure_plate", "_shelf", "_pane",
+    ] {
+        if let Some(rest) = base.strip_suffix(suffix) {
+            // A stained glass pane is the glass; the rest are made of a block named by the rest.
+            bases.push(if suffix == "_pane" { rest.to_string() } else { rest.to_string() });
+            base = rest;
+            break;
+        }
+    }
+    if let Some(rest) = base.strip_suffix("_wood") {
+        bases.push(format!("{rest}_log"));
+    }
+    if let Some(rest) = base.strip_suffix("_hyphae") {
+        bases.push(format!("{rest}_stem"));
+    }
+    for suffix in ["_bed", "_banner", "_carpet", "_bundle", "_harness", "_cushion"] {
+        if let Some(color) = base.strip_suffix(suffix) {
+            bases.push(format!("{color}_wool"));
+        }
+    }
+    if let Some(rest) = base.strip_suffix("_block") {
+        bases.push(rest.to_string());
+    }
+    // The block under a name, with the faces and endings the pack uses.
+    const VARIANTS: [&str; 18] = [
+        "", "_planks", "s", "_block", "_side", "_front", "_top", "_block_side", "_00", "_standby", "_side1",
+        "_side0", "_south", "_front_off", "_side_inactive", "_bottom", "_still", "_0",
+    ];
+    for base in &bases {
+        for variant in VARIANTS {
+            for folder in ["item", "block"] {
+                if let Some(found) = pack_texture(&format!("{folder}/{base}{variant}.png")) {
+                    return Some(found);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// A file at the resource pack's root, such as `pack.png`.
@@ -403,7 +537,14 @@ fn image_name(icon: Icon) -> Option<&'static str> {
         | Icon::AppConverter
         | Icon::AppPruner
         | Icon::ChevronDown
-        | Icon::ChevronUp => return None,
+        | Icon::ChevronUp
+        | Icon::ArrowUp
+        | Icon::ArrowDown
+        | Icon::Copy
+        | Icon::Cut
+        | Icon::Paste
+        | Icon::Level
+        | Icon::Rename => return None,
     })
 }
 
@@ -445,6 +586,12 @@ pub enum Icon {
     ChevronRight,
     ChevronDown,
     ChevronUp,
+    ArrowUp,
+    ArrowDown,
+    Copy,
+    Cut,
+    Paste,
+    Rename,
     Save,
     Gear,
     Extensions,
@@ -463,6 +610,8 @@ pub enum Icon {
     Compound,
     List,
     File,
+    /// A cube with a small gear: the world's `level.dat`.
+    Level,
     Layers,
     Minimize,
     Maximize,
@@ -681,10 +830,55 @@ pub fn paint(p: &Painter, r: Rect, icon: Icon, c: Color32) {
         Icon::ChevronRight => pen.line(&[(0.38, 0.2), (0.66, 0.5), (0.38, 0.8)]),
         Icon::ChevronDown => pen.line(&[(0.22, 0.38), (0.5, 0.64), (0.78, 0.38)]),
         Icon::ChevronUp => pen.line(&[(0.22, 0.62), (0.5, 0.36), (0.78, 0.62)]),
+        Icon::ArrowUp => {
+            pen.line(&[(0.5, 0.84), (0.5, 0.18)]);
+            pen.line(&[(0.26, 0.42), (0.5, 0.18), (0.74, 0.42)]);
+        }
+        Icon::ArrowDown => {
+            pen.line(&[(0.5, 0.16), (0.5, 0.82)]);
+            pen.line(&[(0.26, 0.58), (0.5, 0.82), (0.74, 0.58)]);
+        }
+        Icon::Copy => {
+            // The sheet behind is open where the front sheet covers it.
+            pen.line(&[(0.34, 0.3), (0.34, 0.14), (0.84, 0.14), (0.84, 0.64), (0.7, 0.64)]);
+            pen.rect_stroke(0.16, 0.34, 0.66, 0.86, 2);
+        }
+        Icon::Cut => {
+            pen.circle(0.3, 0.74, 0.12);
+            pen.circle(0.7, 0.74, 0.12);
+            pen.line(&[(0.36, 0.64), (0.7, 0.14)]);
+            pen.line(&[(0.64, 0.64), (0.3, 0.14)]);
+        }
+        Icon::Paste => {
+            pen.rect_stroke(0.2, 0.22, 0.8, 0.88, 2);
+            pen.rect_fill(0.38, 0.12, 0.62, 0.3, 2, c);
+            pen.line(&[(0.34, 0.5), (0.66, 0.5)]);
+            pen.line(&[(0.34, 0.68), (0.66, 0.68)]);
+        }
+        Icon::Rename => {
+            pen.closed(&[(0.62, 0.2), (0.8, 0.38), (0.36, 0.82), (0.16, 0.84), (0.18, 0.64)]);
+            pen.line(&[(0.5, 0.32), (0.68, 0.5)]);
+        }
         Icon::Save => {
             pen.rect_stroke(0.16, 0.16, 0.84, 0.84, 2);
             pen.rect_fill(0.3, 0.16, 0.66, 0.38, 0, c);
             pen.rect_stroke(0.3, 0.56, 0.7, 0.84, 0);
+        }
+        Icon::Level => {
+            // The box mark's cube, as an outline, with the settings gear at its corner.
+            pen.closed(&[
+                (0.45, 0.06),
+                (0.78, 0.25),
+                (0.78, 0.63),
+                (0.45, 0.82),
+                (0.12, 0.63),
+                (0.12, 0.25),
+            ]);
+            pen.line(&[(0.12, 0.25), (0.45, 0.44), (0.78, 0.25)]);
+            pen.line(&[(0.45, 0.44), (0.45, 0.82)]);
+            let gear = pen.at(0.74, 0.74);
+            p.circle_filled(gear, r.width() * 0.24, bg);
+            paint(p, Rect::from_center_size(gear, r.size() * 0.52), Icon::Gear, Color32::WHITE);
         }
         Icon::Gear => {
             pen.circle(0.5, 0.5, 0.2);

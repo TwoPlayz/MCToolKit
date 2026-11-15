@@ -7,18 +7,11 @@ with the LGPL. The same information is shown in the app under **Settings → Abo
 
 | Work | Used for | Licence |
 |---|---|---|
-| [Chunker](https://github.com/HiveGamesOSS/Chunker) (© 2024 Hive Games) | Ported to Rust in `mctk-chunker`: block entities, items, entities, item frames, text. Its licence stays with that crate: [`LICENSE-CHUNKER`](crates/mctk-chunker/LICENSE-CHUNKER) | MIT |
-| [GeyserMC/mappings](https://github.com/GeyserMC/mappings) and [Geyser](https://github.com/GeyserMC/Geyser) (© GeyserMC) | Java ↔ Bedrock block, biome and item tables | MIT |
-| [PrismarineJS/minecraft-data](https://github.com/PrismarineJS/minecraft-data) | Numeric block and item ids from before Java 1.13 | MIT |
-| [pmmp/BedrockData](https://github.com/pmmp/BedrockData) | Bedrock 1.12 block conversion table | CC0 1.0 |
-| [misode/mcmeta](https://github.com/misode/mcmeta), [Mojang/bedrock-samples](https://github.com/Mojang/bedrock-samples) | Facts about the game (block properties, entity identifiers); no files copied | n/a |
 | [Lato](https://www.latofonts.com) (© Łukasz Dziedzic) | The app's typeface ([`OFL.txt`](crates/mctk-gui/assets/fonts/OFL.txt)) | SIL OFL 1.1 |
-| [Universal Minecraft Tool](https://universalminecrafttool.com) extensions | The six built-in NBT editor extensions, unchanged; each folder ships its own `LICENSE` | BSD 2-Clause |
-| [Font Awesome Free](https://fontawesome.com/license/free) | Many of the general icons | CC BY 4.0 |
+| [Universal Minecraft Tool](https://universalminecrafttool.com) extensions | The small pictures and DataVersion names in the NBT editor (`crates/mctk-gui/assets/info`, which has its own `LICENSE`) | BSD 2-Clause |
 
 Per-file provenance is in [`crates/mctk-mapping/data/NOTICE.md`](crates/mctk-mapping/data/NOTICE.md),
-[`crates/mctk-gui/assets/extensions/NOTICE.md`](crates/mctk-gui/assets/extensions/NOTICE.md) and
-[`crates/mctk-gui/assets/icons/NOTICE.md`](crates/mctk-gui/assets/icons/NOTICE.md).
+[`crates/mctk-gui/assets/info/README.md`](crates/mctk-gui/assets/info/README.md).
 
 Minecraft is a trademark of Mojang Synergies AB. MCToolKit is not affiliated with Mojang or
 Microsoft.
@@ -221,8 +214,6 @@ permissive option. Regenerate with `cargo metadata` when dependencies change.
 | [litrs](https://github.com/LukasKalbertodt/litrs) | 1.0.1 | MIT OR Apache-2.0 |
 | [lock_api](https://github.com/Amanieu/parking_lot) | 0.4.14 | MIT OR Apache-2.0 |
 | [log](https://github.com/rust-lang/log) | 0.4.34 | MIT OR Apache-2.0 |
-| [luajit-src](https://github.com/khvzak/luajit-src-rs) | 210.5.12+a4f56a4 | MIT |
-| [lua-src](https://github.com/khvzak/lua-src-rs) | 547.0.0 | MIT |
 | [lzxd](https://github.com/Lonami/lzxd) | 0.2.7 | MIT OR Apache-2.0 |
 | [malloc_buf](https://github.com/SSheldon/malloc_buf) | 0.0.6 | MIT |
 | [memchr](https://github.com/BurntSushi/memchr) | 2.8.3 | Unlicense OR MIT |
@@ -231,8 +222,6 @@ permissive option. Regenerate with `cargo metadata` when dependencies change.
 | [metal](https://github.com/gfx-rs/metal-rs) | 0.31.0 | MIT OR Apache-2.0 |
 | [miniz_oxide](https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide) | 0.8.9 | MIT OR Zlib OR Apache-2.0 |
 | [miniz_oxide](https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide) | 0.9.1 | MIT OR Zlib OR Apache-2.0 |
-| [mlua](https://github.com/mlua-rs/mlua) | 0.10.5 | MIT |
-| [mlua-sys](https://github.com/mlua-rs/mlua) | 0.6.8 | MIT |
 | [moxcms](https://github.com/awxkee/moxcms.git) | 0.8.1 | BSD-3-Clause OR Apache-2.0 |
 | [naga](https://github.com/gfx-rs/wgpu/tree/trunk/naga) | 24.0.0 | MIT OR Apache-2.0 |
 | [ndk](https://github.com/rust-mobile/ndk) | 0.9.0 | MIT OR Apache-2.0 |

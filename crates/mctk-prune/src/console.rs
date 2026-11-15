@@ -1,6 +1,7 @@
 //! Legacy Console: rebuilds the region files inside the save archive without the removed
 //! chunks. Kept chunk records are copied as stored, without recompression.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use mctk_anvil::ChunkPos;
@@ -18,22 +19,27 @@ fn inhabited_time(raw: &RawConsoleChunk) -> Result<Option<i64>, Error> {
         .and_then(Tag::as_i64))
 }
 
-/// Whether any chunk stores InhabitedTime; without it a Time layer would select nothing
-/// and inverted mode would delete every chunk.
-fn records_inhabited_time(save: &ConsoleSave) -> Result<bool, Error> {
-    for (.., e) in save.archive.regions() {
-        if e.data.is_empty() {
+/// Every chunk of a dimension (0, -1 or 1) of a console save, by chunk position, with its
+/// InhabitedTime when `read_times` asks for it and the chunk records one. To preview a prune.
+pub fn chunk_times_console(src: &Path, dimension: i32, read_times: bool) -> Result<HashMap<(i32, i32), Option<i64>>, Error> {
+    let save = ConsoleSave::open(src)?;
+    let mut chunks = HashMap::new();
+    for (dim, rx, rz, e) in save.archive.regions() {
+        if dim != dimension || e.data.is_empty() {
             continue;
         }
         let region = ConsoleRegion::parse(e.data.clone())?;
         for (lx, lz) in region.chunks().collect::<Vec<_>>() {
-            let raw = region.raw_chunk(lx, lz)?.expect("listed chunk");
-            if inhabited_time(&raw)?.is_some() {
-                return Ok(true);
-            }
+            let time = if read_times {
+                let raw = region.raw_chunk(lx, lz)?.expect("listed chunk");
+                inhabited_time(&raw)?
+            } else {
+                None
+            };
+            chunks.insert((rx * 32 + lx as i32, rz * 32 + lz as i32), time);
         }
     }
-    Ok(false)
+    Ok(chunks)
 }
 
 /// Prunes a loaded save in memory.
@@ -50,12 +56,6 @@ pub fn prune_console(
         .filter(|(dim, ..)| applies(dimension, Some(*dim)))
         .map(|(dim, x, z, e)| (dim, x, z, e.name.clone()))
         .collect();
-    if selection.uses_inhabited_time() && !records_inhabited_time(save)? {
-        return Err(Error::Invalid(
-            "this save does not record InhabitedTime (older title update); the Time layer cannot be used"
-                .into(),
-        ));
-    }
     let mut report = PruneReport::default();
     for (_, rx, rz, name) in regions {
         let entry = save

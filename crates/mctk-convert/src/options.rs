@@ -11,6 +11,16 @@ pub struct ConvertOptions {
     pub the_end: bool,
     /// Leave out chunks the game had not finished generating.
     pub skip_partial_chunks: bool,
+    /// Convert chests, signs and the other tile entities; off leaves them empty.
+    pub tile_entities: bool,
+    /// Convert mobs, items on the ground and the other entities; off leaves them out.
+    pub entities: bool,
+    /// Keep scheduled block and fluid ticks (Java to Java; other targets recompute them).
+    pub ticks: bool,
+    /// Convert chunks written by versions older than the world's own (stale chunks the game never reloaded).
+    pub older_chunks: bool,
+    /// What to do with the part of a deep overworld below y 0 when the target starts at y 0.
+    pub depth: crate::depth::DepthMode,
     /// Output game mode (0 survival, 1 creative, 2 adventure); `None` keeps the source's.
     pub game_mode: Option<i32>,
     /// Output difficulty (0 peaceful … 3 hard); `None` keeps the source's.
@@ -26,6 +36,11 @@ impl Default for ConvertOptions {
             nether: true,
             the_end: true,
             skip_partial_chunks: true,
+            tile_entities: true,
+            entities: true,
+            ticks: true,
+            older_chunks: true,
+            depth: crate::depth::DepthMode::default(),
             game_mode: None,
             difficulty: None,
             offset: (0, 0),
@@ -55,6 +70,8 @@ pub struct Progress {
     pub dimension: Mutex<String>,
     /// Output chunk positions in the order they were written (for a coverage preview).
     pub converted: Mutex<Vec<(i32, i32)>>,
+    /// Where in converted the dimension being converted starts, so a preview can show just it.
+    pub dimension_start: AtomicUsize,
     cancel: AtomicBool,
 }
 
@@ -68,6 +85,8 @@ impl Progress {
     }
 
     pub(crate) fn set_dimension(&self, name: &str) {
+        let start = self.converted.lock().expect("progress lock").len();
+        self.dimension_start.store(start, Ordering::Relaxed);
         *self.dimension.lock().expect("progress lock") = name.to_string();
     }
 

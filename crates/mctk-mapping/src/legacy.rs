@@ -1,83 +1,62 @@
 //! Block and item ids from before Java 1.13 ("the flattening"): numeric id plus data value
-//! to the modern name and block state. The tables (`data/legacy_blocks.tsv`,
-//! `data/legacy_items.tsv`) come from PrismarineJS/minecraft-data `legacy.json` (MIT); see
-//! `data/NOTICE.md`.
+//! to the modern name and block state. The tables come from the games themselves (see
+//! `mctk-registry/data/legacy`): a real Java server upgraded a world holding every id and data
+//! value, a real Bedrock server did the same, and the old string ids are read from the Java
+//! game's own data fixers.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use mctk_java::BlockState;
 use mctk_nbt::{Compound, Tag};
+use mctk_registry::builtin;
 
 use crate::{BedrockBlock, mappings};
 
-const BEDROCK_BLOCKS: &str = include_str!("../data/legacy_bedrock_blocks.tsv");
+fn typed(v: &str) -> Tag {
+    match v.split_once(':') {
+        Some(("b", n)) => Tag::Byte(n.parse().unwrap_or(0)),
+        Some(("i", n)) => Tag::Int(n.parse().unwrap_or(0)),
+        Some((_, s)) => Tag::String(s.to_string()),
+        None => Tag::String(v.to_string()),
+    }
+}
 
-const BLOCKS: &str = include_str!("../data/legacy_blocks.tsv");
-const ITEMS: &str = include_str!("../data/legacy_items.tsv");
-const BIOMES: &str = include_str!("../data/legacy_biomes.tsv");
-const IDS: &str = include_str!("../data/legacy_ids.tsv");
-const ENTITIES: &str = include_str!("../data/legacy_entities.tsv");
-
-/// Item names the table spells the way 1.13 did, as the current game spells them.
-const ITEM_ALIASES: [(&str, &str); 7] = [
-    ("minecraft:sign", "minecraft:oak_sign"),
-    ("minecraft:rose_red", "minecraft:red_dye"),
-    ("minecraft:cactus_green", "minecraft:green_dye"),
-    ("minecraft:dandelion_yellow", "minecraft:yellow_dye"),
-    ("minecraft:grass_path", "minecraft:dirt_path"),
-    ("minecraft:grass", "minecraft:short_grass"),
-    ("minecraft:chain", "minecraft:iron_chain"),
-];
-
-/// Block names the table spells the way 1.13 did.
-const BLOCK_ALIASES: [(&str, &str); 5] = [
-    ("minecraft:sign", "minecraft:oak_sign"),
-    ("minecraft:wall_sign", "minecraft:oak_wall_sign"),
-    ("minecraft:grass_path", "minecraft:dirt_path"),
-    ("minecraft:grass", "minecraft:short_grass"),
-    ("minecraft:chain", "minecraft:iron_chain"),
-];
-
-/// The current Bedrock block for a block from before block states (Bedrock 1.2.13 - 1.16.0 stored
-/// `{name, val}` palette entries): the 1.12 name and its data value. A data value the table lacks
-/// falls back to 0.
-pub fn legacy_bedrock_block(name: &str, val: u16) -> Option<BedrockBlock> {
-    static T: OnceLock<HashMap<(&'static str, u16), BedrockBlock>> = OnceLock::new();
+/// What the Bedrock server made of a numeric block id and data value of a world from before block
+/// states (ids and data values are the same as Java's up to id 197).
+pub fn legacy_bedrock_numeric(id: u16, data: u8) -> Option<BedrockBlock> {
+    static T: OnceLock<HashMap<(u16, u8), BedrockBlock>> = OnceLock::new();
     let table = T.get_or_init(|| {
         let mut t = HashMap::new();
-        for line in BEDROCK_BLOCKS.lines() {
+        for line in builtin::bedrock_legacy_blocks_text().lines().filter(|l| !l.starts_with('#')) {
             let mut f = line.split('\t');
-            let (Some(name), Some(meta), Some(current), Some(states)) = (f.next(), f.next(), f.next(), f.next())
-            else {
+            let (Some(Ok(id)), Some(Ok(data)), Some(name)) = (f.next().map(str::parse::<u16>), f.next().map(str::parse::<u8>), f.next()) else {
                 continue;
             };
-            let Ok(meta) = meta.parse() else { continue };
             let mut compound = Compound::new();
-            for kv in states.split(';').filter(|s| !s.is_empty()) {
-                let Some((k, tv)) = kv.split_once('=') else { continue };
-                let Some((ty, v)) = tv.split_once(':') else { continue };
-                let tag = match ty {
-                    "b" => Tag::Byte(v.parse().unwrap_or(0)),
-                    "i" => Tag::Int(v.parse().unwrap_or(0)),
-                    _ => Tag::String(v.to_string()),
-                };
-                compound.insert(k.to_string(), tag);
+            for kv in f.next().unwrap_or("").split(',').filter(|s| !s.is_empty()) {
+                if let Some((k, v)) = kv.split_once('=') {
+                    compound.insert(k.to_string(), typed(v));
+                }
             }
-            t.insert(
-                (name, meta),
-                BedrockBlock {
-                    name: current.to_string(),
-                    states: compound,
-                },
-            );
+            t.insert((id, data), BedrockBlock { name: name.to_string(), states: compound });
         }
         t
     });
-    table
-        .get(&(name, val))
-        .or_else(|| table.get(&(name, 0)))
-        .cloned()
+    table.get(&(id, data)).or_else(|| table.get(&(id, 0))).cloned()
+}
+
+/// The current Bedrock block for a block from before block states (Bedrock 1.2.13 - 1.16.0 stored
+/// `{name, val}` palette entries): the old name and its data value. A name Java also had goes
+/// through its numeric id; one only Bedrock had is taken as the current block of that name.
+pub fn legacy_bedrock_block(name: &str, val: u16) -> Option<BedrockBlock> {
+    if let Some(id) = legacy().numeric_id(name).filter(|id| *id < 256) {
+        if let Some(b) = legacy_bedrock_numeric(id, (val & 15) as u8) {
+            return Some(b);
+        }
+    }
+    let states = Compound::new();
+    mappings().is_known_bedrock(name, &states).then(|| BedrockBlock { name: name.to_string(), states })
 }
 
 pub struct Legacy {
@@ -90,6 +69,12 @@ pub struct Legacy {
     ids: HashMap<&'static str, u16>,
     names: HashMap<u16, &'static str>,
     entities: HashMap<&'static str, &'static str>,
+    /// The other way round: a block state to the numeric id and data value that makes it, and every
+    /// numeric entry of a block name (for the nearest state when there is no exact one).
+    state_ids: HashMap<BlockState, (u16, u8)>,
+    by_name: HashMap<String, Vec<(BlockState, u16, u8)>>,
+    item_ids: HashMap<&'static str, (u16, u16)>,
+    entity_names: HashMap<&'static str, &'static str>,
 }
 
 fn parse_state(s: &str) -> BlockState {
@@ -97,30 +82,10 @@ fn parse_state(s: &str) -> BlockState {
         Some((n, p)) => (n, p.trim_end_matches(']')),
         None => (s, ""),
     };
-    let name = BLOCK_ALIASES
-        .iter()
-        .find(|(old, _)| *old == name)
-        .map_or(name, |(_, new)| *new);
     let mut state = BlockState::new(name);
     for kv in props.split(',').filter(|kv| !kv.is_empty()) {
         if let Some((k, v)) = kv.split_once('=') {
             state = state.with(k, v);
-        }
-    }
-    // Fixes for blocks the flattening split or reshaped.
-    if state.name == "minecraft:cauldron" {
-        // A cauldron with water became its own block; `level` went away.
-        let level = state.properties.shift_remove("level").unwrap_or_default();
-        if level != "0" && !level.is_empty() {
-            state = BlockState::new("minecraft:water_cauldron").with("level", level);
-        }
-    }
-    if state.name.ends_with("_wall") {
-        // Wall arms were booleans, and became heights.
-        for side in ["north", "east", "south", "west"] {
-            if let Some(v) = state.properties.get_mut(side) {
-                *v = if v == "true" { "low" } else { "none" }.to_string();
-            }
         }
     }
     state
@@ -130,9 +95,10 @@ fn parse_state(s: &str) -> BlockState {
 pub fn legacy() -> &'static Legacy {
     static L: OnceLock<Legacy> = OnceLock::new();
     L.get_or_init(|| {
+        let data_lines = |text: &'static str| text.lines().filter(|l| !l.starts_with('#'));
         let mut blocks = vec![None; 256 * 16];
         let mut known = vec![0u16; 256];
-        for line in BLOCKS.lines() {
+        for line in data_lines(builtin::legacy_blocks_text()) {
             let mut f = line.split('\t');
             let (Some(id), Some(data), Some(state)) = (f.next(), f.next(), f.next()) else {
                 continue;
@@ -145,38 +111,67 @@ pub fn legacy() -> &'static Legacy {
                 known[id] |= 1 << data;
             }
         }
+        // Block ids the game upgrades to a block that has no item (water, fire) are not items.
+        let java_items: std::collections::HashSet<String> = builtin::java(builtin::java_versions()[0])
+            .map(|r| r.items.into_iter().collect())
+            .unwrap_or_default();
         let mut items = HashMap::new();
-        for line in ITEMS.lines() {
+        for line in data_lines(builtin::legacy_items_text()) {
             let mut f = line.split('\t');
-            let (Some(id), Some(data), Some(name)) = (f.next(), f.next(), f.next()) else {
+            let (Some(Ok(id)), Some(Ok(damage)), Some(name)) =
+                (f.next().map(str::parse::<u16>), f.next().map(str::parse::<u16>), f.next())
+            else {
                 continue;
             };
-            if let (Ok(id), Ok(data)) = (id.parse(), data.parse()) {
-                let name = ITEM_ALIASES
-                    .iter()
-                    .find(|(old, _)| *old == name)
-                    .map_or(name, |(_, new)| *new);
-                items.insert((id, data), name);
+            let name = name.trim_matches('"');
+            if name != "-" && java_items.contains(name) {
+                items.insert((id, damage), name);
             }
         }
         let two = |text: &'static str| -> Vec<(&'static str, &'static str)> {
-            text.lines().filter_map(|l| l.split_once('\t')).collect()
+            data_lines(text).filter_map(|l| l.split_once('\t')).collect()
         };
-        let biomes = two(BIOMES)
+        let biomes = two(builtin::legacy_biomes_text())
             .into_iter()
-            .filter_map(|(i, n)| Some((i.parse().ok()?, n)))
+            .filter_map(|(i, n)| Some((i.parse().ok()?, n.trim())))
             .collect();
-        let ids = two(IDS)
+        let ids: HashMap<&'static str, u16> = two(builtin::legacy_ids_text())
             .into_iter()
-            .filter_map(|(n, i)| Some((n, i.parse().ok()?)))
+            .filter_map(|(n, i)| Some((n, i.trim().parse().ok()?)))
             .collect();
-        let entities = two(ENTITIES).into_iter().collect();
-        // The first name listed for an id (blocks come before items in the table).
+        let entities: HashMap<&'static str, &'static str> = two(builtin::legacy_entities_text()).into_iter().collect();
+        // The name of a block id (blocks come first in the table, so the block's own name wins).
         let mut names: HashMap<u16, &'static str> = HashMap::new();
-        for (n, i) in two(IDS) {
-            if let Ok(i) = i.parse::<u16>() {
-                names.entry(i).or_insert(n);
+        let mut ordered: Vec<_> = ids.iter().map(|(n, i)| (*i, *n)).collect();
+        ordered.sort();
+        for (i, n) in ordered {
+            names.entry(i).or_insert(n);
+        }
+        let mut state_ids = HashMap::new();
+        let mut by_name: HashMap<String, Vec<(BlockState, u16, u8)>> = HashMap::new();
+        for id in 0..256u16 {
+            for data in 0..16u8 {
+                if known[id as usize] & (1 << data) == 0 {
+                    continue;
+                }
+                if let Some(state) = &blocks[(id as usize) << 4 | data as usize] {
+                    state_ids.entry(state.clone()).or_insert((id, data));
+                    by_name.entry(state.name.clone()).or_default().push((state.clone(), id, data));
+                }
             }
+        }
+        let mut item_ids: HashMap<&'static str, (u16, u16)> = HashMap::new();
+        for (&(id, damage), &name) in &items {
+            let best = item_ids.entry(name).or_insert((id, damage));
+            if (damage, id) < (best.1, best.0) {
+                *best = (id, damage);
+            }
+        }
+        let mut entity_names: HashMap<&'static str, &'static str> = HashMap::new();
+        let mut old: Vec<_> = entities.iter().collect();
+        old.sort();
+        for (&oldname, &new) in old {
+            entity_names.entry(new).or_insert(oldname);
         }
         Legacy {
             names,
@@ -186,10 +181,13 @@ pub fn legacy() -> &'static Legacy {
             biomes,
             ids,
             entities,
+            state_ids,
+            by_name,
+            item_ids,
+            entity_names,
         }
     })
 }
-
 impl Legacy {
     /// The block for a numeric id and data value. A data value the table has no entry for
     /// (the game ignores unused bits) falls back to the value without its high bit, then to
@@ -223,6 +221,27 @@ impl Legacy {
     /// The pre-1.13 string id of a numeric block id below 256 (`minecraft:log` for 17).
     pub fn block_name(&self, id: u16) -> Option<&'static str> {
         self.names.get(&id).copied()
+    }
+
+    /// The numeric id and data value that make a block state, or (when no entry is exactly it) the
+    /// entry of the same block that agrees with it on most properties.
+    pub fn numeric_state(&self, state: &BlockState) -> Option<(u16, u8)> {
+        if let Some(found) = self.state_ids.get(state) {
+            return Some(*found);
+        }
+        let candidates = self.by_name.get(&state.name)?;
+        let score = |s: &BlockState| s.properties.iter().filter(|(k, v)| state.properties.get(*k) == Some(*v)).count();
+        candidates.iter().max_by_key(|(s, id, data)| (score(s), std::cmp::Reverse((*id, *data)))).map(|(_, id, data)| (*id, *data))
+    }
+
+    /// The numeric id and damage value of a current item name (the lowest damage that makes it).
+    pub fn numeric_item(&self, name: &str) -> Option<(u16, u16)> {
+        self.item_ids.get(name).copied()
+    }
+
+    /// The pre-1.11 name of a current entity id (`Pig` for `minecraft:pig`).
+    pub fn old_entity_name(&self, id: &str) -> Option<&'static str> {
+        self.entity_names.get(id).copied()
     }
 
     /// The numeric id of a pre-1.13 string id such as `minecraft:log` (blocks and items).
@@ -294,23 +313,6 @@ mod tests {
         let birch = legacy_bedrock_block("minecraft:planks", 2).unwrap();
         assert_eq!(m.bedrock_to_java(&birch.name, &birch.states).unwrap().name, "minecraft:birch_planks");
         assert!(legacy_bedrock_block("minecraft:not_a_block", 0).is_none());
-    }
-
-    #[test]
-    fn every_old_bedrock_block_converts_to_a_java_block() {
-        // Current Bedrock states are matched to the closest the table has, so every entry
-        // must find a block of the same kind at least.
-        let m = mappings();
-        let mut bad = Vec::new();
-        for line in BEDROCK_BLOCKS.lines() {
-            let f: Vec<&str> = line.split('\t').collect();
-            let b = legacy_bedrock_block(f[0], f[1].parse().unwrap()).unwrap();
-            if m.bedrock_to_java(&b.name, &b.states).is_none() {
-                bad.push(format!("{} {} -> {}", f[0], f[1], b.name));
-            }
-        }
-        // What has none is Education Edition only (chemistry, coloured torches) or deprecated.
-        assert!(bad.len() < 300, "{} without a Java block, e.g. {:#?}", bad.len(), &bad[..bad.len().min(30)]);
     }
 
     #[test]

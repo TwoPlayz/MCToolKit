@@ -95,8 +95,8 @@ impl Layer {
         matches!(self, Layer::Time { .. })
     }
 
-    /// Whether the layer selects the chunk. `inhabited` is the chunk's InhabitedTime,
-    /// when known; the Time layer never selects a chunk without one.
+    /// Whether the layer selects the chunk. `inhabited` is the chunk's InhabitedTime, if it
+    /// records one (the Time layer takes a chunk without one to have 0).
     pub fn selects(&self, pos: ChunkPos, inhabited: Option<i64>) -> bool {
         let c = (pos.x as f64 * 16.0 + 8.0, pos.z as f64 * 16.0 + 8.0);
         match self {
@@ -119,9 +119,8 @@ impl Layer {
                 let snapped: Vec<_> = points.iter().map(|&(x, z)| (snap(x), snap(z))).collect();
                 in_polygon(c, &snapped)
             }
-            Layer::Time { comparison, ticks } => {
-                inhabited.is_some_and(|t| comparison.test(t, *ticks))
-            }
+            // A chunk that records no InhabitedTime has none: as the game reads it, 0.
+            Layer::Time { comparison, ticks } => comparison.test(inhabited.unwrap_or(0), *ticks),
         }
     }
 }

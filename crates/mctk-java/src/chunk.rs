@@ -68,6 +68,16 @@ impl Section {
     }
 }
 
+impl Section {
+    /// Removes entries (such as `SkyLight` and `BlockLight`) from the section's original NBT,
+    /// so they are not written back.
+    pub fn remove_keys(&mut self, keys: &[&str]) {
+        for k in keys {
+            self.original.shift_remove(*k);
+        }
+    }
+}
+
 /// Index of a block within a section: YZX order.
 pub fn block_index(x: usize, y: usize, z: usize) -> usize {
     (y * 16 + z) * 16 + x

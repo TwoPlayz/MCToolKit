@@ -18,9 +18,10 @@ mctk-console = { path = "crates/mctk-console" }
 mctk-convert = { path = "crates/mctk-convert" }
 mctk-prune = { path = "crates/mctk-prune" }
 mctk-mapping = { path = "crates/mctk-mapping" }
-mctk-lua = { path = "crates/mctk-lua" }
 mctk-world = { path = "crates/mctk-world" }
-mctk-chunker = { path = "crates/mctk-chunker" }
+mctk-registry = { path = "crates/mctk-registry" }
+mctk-replace = { path = "crates/mctk-replace" }
+mctk-gen = { path = "crates/mctk-gen" }
 zip = { version = "2.2.0", default-features = false, features = ["deflate"] }
 flate2 = "1.0.30"
 indexmap = "2.2.6"

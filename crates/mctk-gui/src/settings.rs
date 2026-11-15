@@ -26,14 +26,13 @@ pub struct Settings {
     pub ps3_worlds: String,
     pub working_dir: String,
     pub show_log: bool,
+    /// Show only the messages that report a problem (the red ones).
+    pub hide_messages: bool,
     pub log_right: bool,
-    pub editor_copy_bedrock: bool,
-    pub editor_copy_java: bool,
     pub full_precision: bool,
     pub remember_conversion_options: bool,
     /// Last conversion options: overworld, nether, end, skip partial, game mode, difficulty.
     pub conversion: [i64; 6],
-    pub disabled_extensions: Vec<String>,
     /// A Minecraft resource pack folder whose textures draw block and item icons.
     pub resource_pack: String,
     /// Look for a newer release on GitHub when the app starts.
@@ -103,13 +102,11 @@ impl Default for Settings {
             ps3_worlds: String::new(),
             working_dir: app_dir().display().to_string(),
             show_log: false,
+            hide_messages: false,
             log_right: false,
-            editor_copy_bedrock: true,
-            editor_copy_java: false,
             full_precision: false,
             remember_conversion_options: true,
             conversion: [1, 1, 1, 1, 0, 0],
-            disabled_extensions: Vec::new(),
             resource_pack: crate::resource_pack::default_dir(&app_dir())
                 .display()
                 .to_string(),
@@ -163,9 +160,8 @@ impl Settings {
         }
         s.check_updates = b("check_updates", s.check_updates);
         s.show_log = b("show_log", s.show_log);
+        s.hide_messages = b("hide_messages", s.hide_messages);
         s.log_right = b("log_right", s.log_right);
-        s.editor_copy_bedrock = b("editor_copy_bedrock", s.editor_copy_bedrock);
-        s.editor_copy_java = b("editor_copy_java", s.editor_copy_java);
         s.full_precision = b("full_precision", s.full_precision);
         s.remember_conversion_options =
             b("remember_conversion_options", s.remember_conversion_options);
@@ -174,15 +170,6 @@ impl Settings {
                 s.conversion[i] = x.as_i64().unwrap_or(s.conversion[i]);
             }
         }
-        s.disabled_extensions = v
-            .get("disabled_extensions")
-            .and_then(Value::as_array)
-            .map(|a| {
-                a.iter()
-                    .filter_map(|x| x.as_str().map(str::to_string))
-                    .collect()
-            })
-            .unwrap_or_default();
         s
     }
 
@@ -203,13 +190,11 @@ impl Settings {
             "resource_pack": self.resource_pack,
             "check_updates": self.check_updates,
             "show_log": self.show_log,
+            "hide_messages": self.hide_messages,
             "log_right": self.log_right,
-            "editor_copy_bedrock": self.editor_copy_bedrock,
-            "editor_copy_java": self.editor_copy_java,
             "full_precision": self.full_precision,
             "remember_conversion_options": self.remember_conversion_options,
             "conversion": self.conversion,
-            "disabled_extensions": self.disabled_extensions,
         });
         let path = Self::file();
         if let Some(dir) = path.parent() {
@@ -226,8 +211,11 @@ impl Settings {
         PathBuf::from(&self.working_dir)
     }
 
-    pub fn extensions_dir(&self) -> PathBuf {
-        self.working_dir().join("extensions")
+    /// Where the pictures beside some tags are kept (written out on first use).
+    pub fn info_dir(&self) -> PathBuf {
+        let dir = self.working_dir().join("info");
+        crate::info_assets::install(&dir);
+        dir
     }
 
     /// `<resource pack>/assets/minecraft/textures`, when the pack is set and present.
@@ -330,7 +318,6 @@ fn folder_row(ui: &mut Ui, settings: &mut Settings, which: usize, title: &str, t
 }
 
 const LGPL_TEXT: &str = include_str!("../../../LICENSE");
-const CHUNKER_LICENSE: &str = include_str!("../../mctk-chunker/LICENSE-CHUNKER");
 const LATO_LICENSE: &str = include_str!("../assets/fonts/OFL.txt");
 /// `name<TAB>version<TAB>license<TAB>repository`, one Rust dependency per line (generated
 /// from `cargo metadata`; see `THIRD_PARTY_LICENSES.md`).
@@ -338,35 +325,7 @@ const RUST_DEPENDENCIES: &str = include_str!("../assets/rust-dependencies.tsv");
 
 /// Non-Rust code, data and assets MCToolKit builds on: (name, what it is used for, licence,
 /// link, licence text when it ships with the app).
-const EXTERNAL: [(&str, &str, &str, &str, Option<&str>); 7] = [
-    (
-        "Chunker",
-        "Hive Games. Ported to Rust in mctk-chunker: block entities, items, entities, item frames and text conversion",
-        "MIT",
-        "https://github.com/HiveGamesOSS/Chunker",
-        Some(CHUNKER_LICENSE),
-    ),
-    (
-        "GeyserMC mappings and Geyser",
-        "Java \u{2194} Bedrock block, biome and item tables",
-        "MIT",
-        "https://github.com/GeyserMC/mappings",
-        None,
-    ),
-    (
-        "PrismarineJS minecraft-data",
-        "Block and item ids from before Java 1.13",
-        "MIT",
-        "https://github.com/PrismarineJS/minecraft-data",
-        None,
-    ),
-    (
-        "pmmp BedrockData",
-        "Bedrock 1.12 block conversion table",
-        "CC0 1.0",
-        "https://github.com/pmmp/BedrockData",
-        None,
-    ),
+const EXTERNAL: [(&str, &str, &str, &str, Option<&str>); 2] = [
     (
         "Lato font",
         "The app's typeface, by \u{141}ukasz Dziedzic",
@@ -375,17 +334,10 @@ const EXTERNAL: [(&str, &str, &str, &str, Option<&str>); 7] = [
         Some(LATO_LICENSE),
     ),
     (
-        "Universal Minecraft Tool extensions",
-        "The six built-in NBT editor extensions (Pryze Software LLC, OliverBroadbent); see Extensions \u{2192} More Info",
+        "Universal Minecraft Tool extensions (pictures and version names)",
+        "The small pictures and DataVersion names in the NBT editor (Pryze Software LLC, OliverBroadbent)",
         "BSD 2-Clause",
         "https://universalminecrafttool.com",
-        None,
-    ),
-    (
-        "Font Awesome Free icons",
-        "Many of the general icons",
-        "CC BY 4.0",
-        "https://fontawesome.com/license/free",
         None,
     ),
 ];
@@ -513,7 +465,7 @@ pub fn page(ui: &mut Ui, settings: &mut Settings) -> bool {
             ui.add_space(26.0);
             widgets::toggle_bold(ui, &mut settings.remember_position, "Remember Application Position");
             describe(ui, "Open the application at the same position that it was closed.");
-            titled(ui, "Scale Factor", "Make the application appear larger.");
+            titled(ui, "Scale Factor", "Make the application appear larger. The NBT tree is not affected: it has its own scale in the tag bar.");
             ui.add_space(-12.0);
             widgets::segmented(ui, &mut settings.scale, &["100% (Normal)", "125%", "150%", "175%", "200%"], 0.0, true);
             ui.add_space(26.0);
@@ -524,10 +476,12 @@ pub fn page(ui: &mut Ui, settings: &mut Settings) -> bool {
             folder_row(ui, settings, 5, "Xbox 360 Worlds Folder", "The directory (and its subfolders) the world selection dialog uses to search for Xbox 360 saves.");
             folder_row(ui, settings, 6, "PlayStation 3 Worlds Folder", "The directory (and its subfolders) the world selection dialog uses to search for PlayStation 3 saves.");
             folder_row(ui, settings, 2, "Wii U Worlds Folder", "The directory the world selection dialog uses to search for dumped Wii U worlds.");
-            folder_row(ui, settings, 3, "Working Directory", "The location where temporary files and extensions are stored while working within the application.");
-            folder_row(ui, settings, 4, "Resource Pack", "A Minecraft resource pack folder whose block and item textures are used for icons and map colors. Defaults to MCToolKit's own pack, filled on first run from Universal Minecraft Tool or Minecraft Java when either is installed.");
+            folder_row(ui, settings, 3, "Working Directory", "The location where temporary files are stored while working within the application.");
+            folder_row(ui, settings, 4, "Resource Pack", "A Minecraft resource pack folder whose block and item textures are used for icons and map colors. Defaults to MCToolKit's own pack, filled on first run from an installed Minecraft Java.");
             widgets::toggle_bold(ui, &mut settings.check_updates, "Check for Updates on Startup");
             describe(ui, "Ask GitHub for the newest MCToolKit release when the application starts and show a notice in the title bar when one is available. Nothing is downloaded automatically.");
+            widgets::toggle_bold(ui, &mut settings.hide_messages, "Hide Non-Warning Messages");
+            describe(ui, "Only show the messages in the corner that report a problem. Messages that just say what was done (saved, opened, undone...) are not shown.");
             widgets::toggle_bold(ui, &mut settings.show_log, "Show Debug Log");
             describe(ui, "Displays useful information for finding bugs or developing scripts.");
             titled(ui, "Debug Log Position", "Set where the debug log should be positioned.");
@@ -540,10 +494,7 @@ pub fn page(ui: &mut Ui, settings: &mut Settings) -> bool {
             ui.separator();
 
             heading(ui, "NBT Editor");
-            widgets::toggle_bold(ui, &mut settings.editor_copy_bedrock, "Copy Bedrock Worlds (Recommended)");
-            describe(ui, "Opened Bedrock worlds are copied before work begins, and saving writes the copy back (keeping a _MCTBackup.zip of the original). Disable only if the world you're working on is too large to be copied and you know what you're doing. (All Bedrock worlds in .mcworld format are copied regardless.)");
-            widgets::toggle_bold(ui, &mut settings.editor_copy_java, "Copy Java Worlds (Not Recommended)");
-            describe(ui, "Opened Java worlds are copied before work begins. Only use this for safety reasons, but is mostly unnecessary: without it, every file is backed up as <name>_MCTBackup before it is first overwritten.");
+            describe(ui, "Nothing is changed on disk until you save: edits are held in memory, so worlds are not copied when opened. When you save, every file is backed up as <name>_MCTBackup before it is first overwritten.");
             widgets::toggle_bold(ui, &mut settings.full_precision, "Full Floating Point Precision");
             describe(ui, "Display full floating-point precision for Float and Double NBT tags.");
             ui.separator();
@@ -554,7 +505,7 @@ pub fn page(ui: &mut Ui, settings: &mut Settings) -> bool {
             ui.separator();
 
             heading(ui, "Pruner");
-            describe(ui, "The pruner always works on a copy of the opened world: pruned chunks are removed from the copy, and Save writes the copy back over the original after keeping a _MCTBackup of it.");
+            describe(ui, "Nothing is changed on disk until you save: pruning is held in memory, and Save backs up the original as _MCTBackup before writing the pruned world.");
             ui.separator();
 
             heading(ui, "Community");

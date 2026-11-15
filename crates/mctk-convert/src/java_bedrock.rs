@@ -5,7 +5,7 @@
 //! block layer), biomes, height maps, `level.dat` and the common block entities (see
 //! `block_entity`). Entities (mobs, paintings, item frames) and the local player are converted
 //! both ways (see `entity`); item frames are blocks on Bedrock and entities on Java (see
-//! `mctk_chunker::frame`). The report counts what was left out.
+//! `frames`). The report counts what was left out.
 
 use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
@@ -24,10 +24,150 @@ use mctk_java::{
 };
 use mctk_mapping::{BedrockBlock, JAVA_DATA_VERSION, mappings};
 use mctk_nbt::{Compound, Flavor, List, NamedTag, Tag, TagType};
+use mctk_registry::{Registry, Renames};
+use mctk_replace::{Action, ReplacementMap};
 
 use crate::Error;
 use crate::options::{ConvertOptions, Progress, is_complete};
 use crate::pipeline::{ChunkStages, Flow, run_pipeline};
+
+/// The user's replacement choices for a Java to Bedrock conversion, with the Java-side view of
+/// what the target Bedrock version can hold (see [`crate::bedrock_view`]).
+#[derive(Debug, Clone)]
+pub struct BedrockReplacements {
+    pub map: ReplacementMap,
+    pub view: Registry,
+    pub renames: Renames,
+}
+
+impl BedrockReplacements {
+    /// Choices for converting to the Bedrock version of `bedrock`.
+    pub fn new(map: ReplacementMap, bedrock: &Registry) -> Self {
+        BedrockReplacements {
+            map,
+            view: crate::bedrock_view(bedrock),
+            renames: Renames::java_blocks(),
+        }
+    }
+
+    /// The state to write for `s`, and what it became when it was replaced.
+    fn apply(&self, s: &BlockState) -> (BlockState, Option<String>) {
+        match self.map.resolve(s, &self.view, &self.renames) {
+            Some((Action::Replace(r), _)) => {
+                let text = r.to_string();
+                (r, Some(text))
+            }
+            Some((Action::Air, _)) => (BlockState::air(), Some("air".into())),
+            // Already supported, kept on purpose, or (never from `resolve`) a bare block choice.
+            _ => (s.clone(), None),
+        }
+    }
+}
+
+/// The registry of the Java version Bedrock worlds are converted to.
+fn java_registry() -> Option<&'static Registry> {
+    static R: std::sync::OnceLock<Option<Registry>> = std::sync::OnceLock::new();
+    R.get_or_init(|| mctk_registry::builtin::java_versions().first().and_then(|v| mctk_registry::builtin::java(v)))
+        .as_ref()
+}
+
+/// The user's replacement choices for a Bedrock to Java conversion, with the Bedrock-side view of
+/// what the target Java version can hold (see [`crate::java_view`]).
+#[derive(Debug, Clone)]
+pub struct JavaReplacements {
+    pub map: ReplacementMap,
+    pub view: Registry,
+    pub renames: Renames,
+    /// The Bedrock registry, to complete a replacement block's states.
+    bedrock: Registry,
+}
+
+impl JavaReplacements {
+    /// Choices for converting to the Java version of `java`.
+    pub fn new(map: ReplacementMap, java: &Registry, bedrock: &Registry) -> Self {
+        JavaReplacements {
+            map,
+            view: crate::java_view(java, bedrock),
+            renames: Renames::default(),
+            bedrock: bedrock.clone(),
+        }
+    }
+
+    fn state_of(b: &BedrockBlock) -> BlockState {
+        let mut s = BlockState::new(b.name.clone());
+        for (k, v) in &b.states {
+            let text = match v {
+                Tag::Byte(n) => format!("b:{n}"),
+                Tag::Int(n) => format!("i:{n}"),
+                Tag::String(t) => format!("s:{t}"),
+                other => format!("?:{other}"),
+            };
+            s.properties.insert(k.clone(), text);
+        }
+        s
+    }
+
+    /// The Bedrock block for a replacement state, with every state spelled out.
+    fn block_from(&self, r: &BlockState) -> Option<BedrockBlock> {
+        let full = self.bedrock.complete_state(&r.name, r.properties.iter().map(|(k, v)| (k.as_str(), v.as_str())))?;
+        let states: Compound = full
+            .into_iter()
+            .filter_map(|(k, v)| {
+                let (kind, text) = v.split_once(':')?;
+                let tag = match kind {
+                    "b" => Tag::Byte(text.parse().ok()?),
+                    "i" => Tag::Int(text.parse().ok()?),
+                    _ => Tag::String(text.to_string()),
+                };
+                Some((k, tag))
+            })
+            .collect();
+        Some(BedrockBlock { name: r.name.clone(), states })
+    }
+
+    fn apply(&self, b: &BedrockBlock) -> (BedrockBlock, Option<String>) {
+        match self.map.resolve(&Self::state_of(b), &self.view, &self.renames) {
+            Some((Action::Replace(r), _)) => match self.block_from(&r) {
+                Some(nb) => (nb, Some(r.to_string())),
+                None => (b.clone(), None),
+            },
+            Some((Action::Air, _)) => (
+                BedrockBlock { name: "minecraft:air".into(), states: Compound::new() },
+                Some("air".into()),
+            ),
+            _ => (b.clone(), None),
+        }
+    }
+
+    /// The column with every block the target cannot hold replaced, counted in `report`.
+    fn column(&self, col: &Column, report: &mut EditionReport) -> Column {
+        let mut out = col.clone();
+        for bytes in out.subchunks.values_mut() {
+            let Ok(mut sub) = SubChunk::parse(bytes) else { continue };
+            let SubChunkBody::Palettized(storages) = &mut sub.body else { continue };
+            let Some(first) = storages.first_mut() else { continue };
+            let mut uses = vec![0usize; first.palette.len()];
+            for &i in &first.indices {
+                uses[i as usize] += 1;
+            }
+            let mut changed = false;
+            for (slot, entry) in first.palette.iter_mut().enumerate() {
+                let Some(b) = BedrockBlock::from_nbt(entry) else { continue };
+                if let (nb, Some(to)) = self.apply(&b) {
+                    *report.replaced.entry(format!("{} -> {to}", Self::state_of(&b))).or_insert(0) += uses[slot];
+                    *entry = nb.to_nbt();
+                    changed = true;
+                }
+            }
+            if changed {
+                if let Ok(enc) = sub.encode() {
+                    *bytes = enc;
+                }
+            }
+        }
+        out
+    }
+}
 
 /// What a Java ↔ Bedrock conversion did.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -45,6 +185,9 @@ pub struct EditionReport {
     pub converted_block_entities: BTreeMap<String, usize>,
     /// Entities converted (Bedrock → Java only), by Java id.
     pub converted_entities: BTreeMap<String, usize>,
+    /// Blocks swapped for another because the target cannot hold them (`from -> to`), with the
+    /// number of blocks. Only Java → Bedrock with replacement choices fills this.
+    pub replaced: BTreeMap<String, usize>,
     pub notes: Vec<String>,
 }
 
@@ -61,6 +204,7 @@ impl EditionReport {
                 other.converted_block_entities,
             ),
             (&mut self.converted_entities, other.converted_entities),
+            (&mut self.replaced, other.replaced),
         ] {
             for (k, v) in src {
                 *dst.entry(k).or_insert(0) += v;
@@ -192,7 +336,7 @@ fn section_to_bedrock(
                 .is_some_and(|v| v == "true")
                 || ALWAYS_IN_WATER.contains(&full.name.as_str());
             let b = match m.java_to_bedrock(&full) {
-                // A block caught mid-move has no entity to go with it; Chunker leaves it as air.
+                // A block caught mid-move has no entity to go with it, so it becomes air.
                 _ if full.name == "minecraft:moving_piston" => air(),
                 Some(b) => {
                     if !m.is_known_java(&full) {
@@ -292,8 +436,21 @@ fn chunk_to_bedrock(
     dim: &DimInfo,
     offset: (i32, i32),
     block_entities: &[Compound],
-    frames: &[mctk_chunker::frame::FrameEntity],
+    frames: &[crate::frames::Frame],
     report: &mut EditionReport,
+) -> Vec<(Vec<u8>, Vec<u8>)> {
+    chunk_to_bedrock_in(chunk, dim, offset, block_entities, frames, report, crate::bedrock_layout::get())
+}
+
+/// [`chunk_to_bedrock`] for a given version's chunk layout.
+fn chunk_to_bedrock_in(
+    chunk: &Chunk,
+    dim: &DimInfo,
+    offset: (i32, i32),
+    block_entities: &[Compound],
+    frames: &[crate::frames::Frame],
+    report: &mut EditionReport,
+    layout: crate::bedrock_layout::Layout,
 ) -> Vec<(Vec<u8>, Vec<u8>)> {
     let key = |tag: ChunkTag, subchunk: Option<i8>| {
         ChunkKey {
@@ -306,14 +463,16 @@ fn chunk_to_bedrock(
         .encode()
     };
     let m = mappings();
-    let min_y = dim.bedrock_sections.start as i32 * 16;
+    // Versions before 1.18 stop the overworld at y 0 and 255.
+    let sections = if layout.legacy_height && dim.number == 0 { 0..16 } else { dim.bedrock_sections.clone() };
+    let min_y = sections.start as i32 * 16;
     let mut records = Vec::new();
     let mut heightmap = vec![0i16; 256];
     let mut biomes = Vec::new();
     let mut dropped = 0;
     // Entities Bedrock needs for blocks that have none on Java (bed colour, cauldron,
     // flower pot), found by scanning the palettes.
-    let mut generated: Vec<mctk_chunker::blockentity::BlockEntity> = Vec::new();
+    let mut generated: Vec<Compound> = Vec::new();
     let existing: std::collections::HashSet<(i64, i64, i64)> = block_entities
         .iter()
         .filter_map(|be| {
@@ -321,7 +480,7 @@ fn chunk_to_bedrock(
             Some((at("x")?, at("y")?, at("z")?))
         })
         .collect();
-    for sy in dim.bedrock_sections.clone() {
+    for sy in sections.clone() {
         let section = chunk.section(sy);
         match section.and_then(|s| s.biomes.as_ref()) {
             Some(b) => biomes.push(biomes_to_bedrock(b, report)),
@@ -334,7 +493,13 @@ fn chunk_to_bedrock(
                     flag: true,
                 });
             }
-            None => biomes.push(BiomeStorage::CopyPrevious),
+            // A section without biomes repeats the one below. Written out in full: the Bedrock
+            // server crashes on a "same as previous" marker in the lowest storages (found by
+            // loading converted console worlds, which have no sections below y 0).
+            None => {
+                let last = biomes.last().cloned().unwrap_or(BiomeStorage::CopyPrevious);
+                biomes.push(last);
+            }
         }
         let in_section: Vec<((usize, usize, usize), BedrockBlock)> = frames
             .iter()
@@ -367,6 +532,13 @@ fn chunk_to_bedrock(
                 empty = PalettedContainer::filled(BlockState::air(), 4096);
                 &empty
             }
+            // Bedrock always writes the lowest eight subchunks, y -64 to 63, even when they are
+            // air; a chunk that lacks them (a world that began at y 0, such as a console world)
+            // is written with air there.
+            _ if sy < 4 && !layout.legacy_height => {
+                empty = PalettedContainer::filled(BlockState::air(), 4096);
+                &empty
+            }
             _ => continue,
         };
         let Some(storages) = section_to_bedrock(p, &in_section, report) else {
@@ -374,13 +546,13 @@ fn chunk_to_bedrock(
         };
         if p.palette
             .iter()
-            .any(|s| mctk_chunker::blockentity::edits::generates_entity(&s.name))
+            .any(|s| crate::block_entities_more::generates_entity(&s.name))
         {
             for y in 0..16 {
                 for z in 0..16 {
                     for x in 0..16 {
                         let state = p.get(mctk_java::block_index(x, y, z));
-                        if !mctk_chunker::blockentity::edits::generates_entity(&state.name) {
+                        if !crate::block_entities_more::generates_entity(&state.name) {
                             continue;
                         }
                         let (wx, wy, wz) = (
@@ -392,9 +564,7 @@ fn chunk_to_bedrock(
                         if existing.contains(&(wx as i64, wy as i64, wz as i64)) {
                             continue;
                         }
-                        if let Some(kind) = mctk_chunker::blockentity::edits::from_block(state) {
-                            generated.push(mctk_chunker::blockentity::BlockEntity::new(wx, wy, wz, kind));
-                        }
+                        generated.extend(crate::block_entity::generated_to_bedrock(state, (wx, wy, wz), offset, report));
                     }
                 }
             }
@@ -412,8 +582,8 @@ fn chunk_to_bedrock(
             }
         }
         let sub = SubChunk {
-            version: 9,
-            y: Some(sy),
+            version: if layout.legacy_height { 8 } else { 9 },
+            y: if layout.legacy_height { None } else { Some(sy) },
             body: SubChunkBody::Palettized(storages),
         };
         records.push((
@@ -425,22 +595,30 @@ fn chunk_to_bedrock(
         let section = f.tile.1.div_euclid(16);
         if f.tile.0.div_euclid(16) != chunk.x
             || f.tile.2.div_euclid(16) != chunk.z
-            || !dim.bedrock_sections.contains(&(section as i8))
+            || !sections.contains(&(section as i8))
         {
             report.skip("item frames outside their chunk or the Bedrock height range", 1);
             continue;
         }
-        generated.push(f.block_entity());
-        let id = if f.frame.glow {
-            mctk_chunker::frame::JAVA_GLOW_ID
+        let mut notes = crate::item_codec::Notes::default();
+        let mut be = f.block_entity(&mut notes);
+        for (key, by) in [("x", offset.0), ("z", offset.1)] {
+            if let Some(v) = be.get(key).and_then(Tag::as_i64) {
+                be.insert(key.into(), Tag::Int(v as i32 + by * 16));
+            }
+        }
+        generated.push(be);
+        crate::block_entity::report_item_notes(notes, report);
+        let id = if f.glow {
+            crate::frames::JAVA_GLOW_ID
         } else {
-            mctk_chunker::frame::JAVA_ID
+            crate::frames::JAVA_ID
         };
         *report.converted_entities.entry(id.to_string()).or_insert(0) += 1;
     }
     for s in &chunk.sections {
         let has_blocks = matches!(&s.blocks, Some(JavaStorage::Palette(p)) if !p.palette.iter().all(BlockState::is_air));
-        if !dim.bedrock_sections.contains(&s.y) && dim.java_sections.contains(&s.y) && has_blocks {
+        if !sections.contains(&s.y) && dim.java_sections.contains(&s.y) && has_blocks {
             dropped += 1;
         }
     }
@@ -461,9 +639,7 @@ fn chunk_to_bedrock(
             crate::block_entity::java_to_bedrock(be, offset, block.as_ref(), report)
         })
         .collect();
-    for g in generated {
-        converted.push(crate::block_entity::generated_to_bedrock(g, offset, report));
-    }
+    converted.extend(generated);
     for converted in converted {
         {
             let named = NamedTag {
@@ -478,16 +654,32 @@ fn chunk_to_bedrock(
     if !be_bytes.is_empty() {
         records.push((key(ChunkTag::BlockEntity, None), be_bytes));
     }
-    records.push((key(ChunkTag::Version, None), vec![42]));
-    records.push((
-        key(ChunkTag::Data3D, None),
-        Data3D { heightmap, biomes }.encode(),
-    ));
+    records.push((key(ChunkTag::Version, None), vec![layout.chunk_version]));
+    if layout.legacy_height {
+        // One biome per column, taken at sea level.
+        let at_sea = biomes.get(4).or(biomes.last());
+        let column_biomes: Vec<u8> = (0..256)
+            .map(|i| {
+                let (z, x) = (i / 16, i % 16);
+                match at_sea {
+                    Some(BiomeStorage::Palettized { palette, indices, .. }) => palette
+                        .get(indices[mctk_bedrock::block_index(x, 0, z)] as usize)
+                        .map_or(1, |&id| crate::bedrock_layout::legacy_biome(id)),
+                    _ => 1,
+                }
+            })
+            .collect();
+        records.push((key(ChunkTag::Data2D, None), crate::bedrock_layout::data2d(&heightmap, &column_biomes)));
+    } else {
+        records.push((key(ChunkTag::Data3D, None), Data3D { heightmap, biomes }.encode()));
+    }
     records.push((
         key(ChunkTag::FinalizedState, None),
         2i32.to_le_bytes().to_vec(),
     ));
-    records.push((key(ChunkTag::BlendingData, None), vec![0x00, 0x0b]));
+    if layout.blending {
+        records.push((key(ChunkTag::BlendingData, None), vec![0x00, 0x0b]));
+    }
     records
 }
 
@@ -528,6 +720,34 @@ fn int_list(values: &[i32]) -> Tag {
     )
 }
 
+/// The Bedrock version being written, when it is not the newest: the game version, network and
+/// storage versions of its `level.dat`. Set by [`set_bedrock_target`].
+static TARGET: std::sync::Mutex<Option<([i32; 5], i32, u32, String)>> = std::sync::Mutex::new(None);
+
+/// Chooses the Bedrock version the next conversion writes for, from the registry of that version
+/// (see `mctk-gen bedrock-finish` for the facts it carries). A registry without them (the newest
+/// version) leaves the defaults.
+pub fn set_bedrock_target(registry: &mctk_registry::Registry) {
+    let meta = &registry.meta;
+    mctk_mapping::set_downgrades(&registry.downgrades);
+    crate::bedrock_layout::set(crate::bedrock_layout::Layout::of(registry));
+    if let Some(v) = meta.get("block_version").and_then(|v| v.parse().ok()) {
+        mctk_mapping::set_block_version(v);
+    } else {
+        mctk_mapping::set_block_version(mctk_mapping::BEDROCK_BLOCK_VERSION);
+    }
+    let client: Option<Vec<i32>> = meta.get("client_version").map(|v| v.split(',').filter_map(|n| n.parse().ok()).collect());
+    *TARGET.lock().expect("target") = match (client, meta.get("network_version"), meta.get("storage_version")) {
+        (Some(c), Some(n), Some(s)) if c.len() == 5 => Some((
+            [c[0], c[1], c[2], c[3], c[4]],
+            n.parse().unwrap_or(2225),
+            s.parse().unwrap_or(10),
+            registry.version.clone(),
+        )),
+        _ => None,
+    };
+}
+
 fn bedrock_level_dat(world: &JavaWorld, options: &ConvertOptions) -> LevelDat {
     let data = world.level.root.tag.get("Data");
     let flag = |key: &str| {
@@ -540,17 +760,20 @@ fn bedrock_level_dat(world: &JavaWorld, options: &ConvertOptions) -> LevelDat {
         .game_mode
         .unwrap_or(world.level.game_type.unwrap_or(0));
     let (dx, dz) = (options.offset.0 * 16, options.offset.1 * 16);
-    let version = [1, 26, 60, 0, 0];
+    let target = TARGET.lock().expect("target").clone();
+    let version = target.as_ref().map_or([1, 26, 60, 0, 0], |t| t.0);
+    let (network, storage) = target.as_ref().map_or((2225, 10), |t| (t.1, t.2));
+    let inventory = target.as_ref().map_or("1.26.60".to_string(), |t| t.3.clone());
     let mut c = Compound::new();
     let mut put = |k: &str, v: Tag| {
         c.insert(k.to_string(), v);
     };
     put("LevelName", Tag::String(world.level.name.clone()));
-    put("StorageVersion", Tag::Int(10));
-    put("NetworkVersion", Tag::Int(2225));
+    put("StorageVersion", Tag::Int(storage as i32));
+    put("NetworkVersion", Tag::Int(network));
     put("Generator", Tag::Int(1));
     put("WorldVersion", Tag::Int(1));
-    put("InventoryVersion", Tag::String("1.26.60".into()));
+    put("InventoryVersion", Tag::String(inventory));
     put("lastOpenedWithVersion", int_list(&version));
     put("MinimumCompatibleClientVersion", int_list(&version));
     put("RandomSeed", Tag::Long(java_seed(world).unwrap_or(0)));
@@ -579,7 +802,7 @@ fn bedrock_level_dat(world: &JavaWorld, options: &ConvertOptions) -> LevelDat {
     put("spawnMobs", Tag::Byte(1));
     put("Platform", Tag::Int(2));
     LevelDat {
-        storage_version: 10,
+        storage_version: storage,
         root: NamedTag {
             name: String::new(),
             tag: Tag::Compound(c),
@@ -638,6 +861,8 @@ struct JavaToBedrockStages<'a> {
     jobs: &'a [(usize, usize, usize)],
     options: &'a ConvertOptions,
     progress: &'a Progress,
+    /// Blocks the target cannot hold are replaced as the user chose, before they are mapped.
+    replace: Option<&'a BedrockReplacements>,
 }
 
 impl ChunkStages for JavaToBedrockStages<'_> {
@@ -678,6 +903,9 @@ impl ChunkStages for JavaToBedrockStages<'_> {
             .flatten()
             .filter_map(|t| t.as_compound().cloned())
             .collect();
+        if !self.options.tile_entities {
+            slot.block_entities.clear();
+        }
         let biomes = crate::legacy::read_biomes(&root);
         // Older worlds keep entities inside the chunk.
         let inline = compounds(
@@ -710,25 +938,42 @@ impl ChunkStages for JavaToBedrockStages<'_> {
         if old {
             crate::legacy::colour_beds(&mut chunk, &slot.block_entities);
         }
+        if let Some(r) = self.replace {
+            for section in &mut chunk.sections {
+                if let Some(JavaStorage::Palette(c)) = &mut section.blocks {
+                    let mut replaced = indexmap::IndexMap::new();
+                    crate::java_java::remap_blocks(c, |s| r.apply(s), &mut replaced);
+                    for (from, rb) in replaced {
+                        *slot.out.report.replaced.entry(format!("{from} -> {}", rb.to)).or_insert(0) +=
+                            rb.blocks as usize;
+                    }
+                }
+            }
+        }
         slot.chunk = Some(chunk);
         Ok(Flow::Continue)
     }
 
     fn convert(&self, index: usize, slot: &mut JavaSlot) -> Result<Flow, Error> {
-        let chunk = slot.chunk.take().expect("parsed");
+        let mut chunk = slot.chunk.take().expect("parsed");
         let dim = self.work[self.jobs[index].0].1;
+        // A target whose overworld starts at y 0: deal with the part below it.
+        if crate::bedrock_layout::get().legacy_height && dim.number == 0 && crate::depth::applies(&chunk) {
+            let by = crate::depth::fix(&mut chunk, self.options.depth);
+            if by != 0 {
+                slot.block_entities.iter_mut().chain(slot.entities.iter_mut()).for_each(|c| crate::depth::raise(c, by));
+            }
+        }
         // Item frames become blocks, so they are converted with the chunk; the rest of the
         // entities are converted when the chunks are merged.
-        let mut notes = mctk_chunker::Notes::default();
         let mut frames = Vec::new();
         let mut rest = Vec::new();
         for e in std::mem::take(&mut slot.entities) {
-            match mctk_chunker::frame::from_java(&e, &mut notes) {
+            match crate::frames::Frame::from_java(&e) {
                 Some(f) => frames.push(f),
                 None => rest.push(e),
             }
         }
-        crate::block_entity::report_notes(notes, "items", &mut slot.out.report);
         slot.out.records = chunk_to_bedrock(
             &chunk,
             dim,
@@ -756,6 +1001,18 @@ pub fn java_to_bedrock_with(
     out: &Path,
     options: &ConvertOptions,
     progress: &Progress,
+) -> Result<EditionReport, Error> {
+    java_to_bedrock_replacing(src, out, options, progress, None)
+}
+
+/// [`java_to_bedrock_with`] that first replaces the blocks the target Bedrock version cannot
+/// hold, as `replacements` says (the smart default for any block it has no choice for).
+pub fn java_to_bedrock_replacing(
+    src: &Path,
+    out: &Path,
+    options: &ConvertOptions,
+    progress: &Progress,
+    replace: Option<&BedrockReplacements>,
 ) -> Result<EditionReport, Error> {
     let world = JavaWorld::open(src)?;
     fresh_dir(out)?;
@@ -797,12 +1054,14 @@ pub fn java_to_bedrock_with(
         jobs: &jobs,
         options,
         progress,
+        replace,
     };
     let finished = run_pipeline(&stages, jobs.len(), 0, progress)?;
     // Actors are stored apart from chunks: one record per actor plus, per chunk, the list
     // of the actors in it.
     let mut ids = crate::entity::ActorIds::default();
     let mut digests: BTreeMap<(i32, i32, i32), Vec<u8>> = BTreeMap::new();
+    let mut in_chunk: BTreeMap<(i32, i32, i32), Vec<u8>> = BTreeMap::new();
     for (&(r, _, _), done) in jobs.iter().zip(finished) {
         let Some(done) = done else { continue };
         report.merge(done.report);
@@ -814,7 +1073,7 @@ pub fn java_to_bedrock_with(
         }
         entries.extend(done.records);
         let dimension = work[r].1.bedrock;
-        for entity in &done.entities {
+        for entity in done.entities.iter().filter(|_| options.entities) {
             let Some(actor) =
                 crate::entity::entity_to_actor(entity, options.offset, &mut ids, &mut report)
             else {
@@ -824,10 +1083,13 @@ pub fn java_to_bedrock_with(
                 name: String::new(),
                 tag: Tag::Compound(actor.nbt),
             };
-            entries.insert(
-                Key::Actor(actor.key.to_vec()).encode(),
-                mctk_nbt::to_bytes(&named, Flavor::Bedrock)?,
-            );
+            let bytes = mctk_nbt::to_bytes(&named, Flavor::Bedrock)?;
+            // Before 1.18.30 a chunk holds its entities itself.
+            if crate::bedrock_layout::get().entities_in_chunk {
+                in_chunk.entry((dimension.id(), actor.chunk.0, actor.chunk.1)).or_default().extend(bytes);
+                continue;
+            }
+            entries.insert(Key::Actor(actor.key.to_vec()).encode(), bytes);
             digests
                 .entry((dimension.id(), actor.chunk.0, actor.chunk.1))
                 .or_default()
@@ -852,6 +1114,10 @@ pub fn java_to_bedrock_with(
             .encode(),
             vec![0],
         );
+    }
+    for ((dim, x, z), bytes) in in_chunk {
+        let dimension = DIMS.iter().map(|d| d.bedrock).find(|d| d.id() == dim).unwrap_or(BedrockDim::Overworld);
+        entries.insert(ChunkKey { x, z, dimension, tag: ChunkTag::Entity, subchunk: None }.encode(), bytes);
     }
     progress.regions_done.store(work.len(), Ordering::Relaxed);
     if let Some(player) = world
@@ -898,7 +1164,7 @@ pub fn java_to_bedrock_with(
 
 // ------------------------------------------------------------------ Bedrock → Java
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct Column {
     subchunks: BTreeMap<i8, Vec<u8>>,
     data3d: Option<Vec<u8>>,
@@ -948,8 +1214,8 @@ fn subchunk_to_java(
                 return BlockState::air();
             };
             // Item frames become entities (see `column_to_java`); a block caught mid-move has
-            // no entity to go with it and is left as air, as Chunker does.
-            if mctk_chunker::frame::is_frame_block(&b.name) || b.name == "minecraft:moving_block" {
+            // no entity to go with it and is left as air.
+            if crate::frames::is_frame_block(&b.name) || b.name == "minecraft:moving_block" {
                 return BlockState::air();
             }
             match m.bedrock_to_java(&b.name, &b.states) {
@@ -974,7 +1240,7 @@ fn subchunk_to_java(
         .iter()
         .map(|p| {
             BedrockBlock::from_nbt(p)
-                .filter(|b| mctk_chunker::frame::is_frame_block(&b.name))
+                .filter(|b| crate::frames::is_frame_block(&b.name))
                 .map(|b| (b.name, b.states))
         })
         .collect();
@@ -1201,7 +1467,7 @@ fn column_to_java(
     // Item frames: a frame block with, usually, a block entity holding the item.
     let mut frames = Vec::new();
     if !frame_blocks.is_empty() {
-        let mut notes = mctk_chunker::Notes::default();
+        let mut notes = crate::item_codec::Notes::default();
         let entities: HashMap<(i64, i64, i64), &Compound> = col
             .block_entities
             .iter()
@@ -1218,24 +1484,17 @@ fn column_to_java(
             .collect();
         for (lx, wy, lz, name, states) in &frame_blocks {
             let mut tile = ((x - offset.0) * 16 + lx, *wy, (z - offset.1) * 16 + lz);
-            let held = entities
-                .get(&(tile.0 as i64, tile.1 as i64, tile.2 as i64))
-                .and_then(|be| {
-                    match mctk_chunker::blockentity::bedrock::read(be, &mut notes)?.kind {
-                        mctk_chunker::blockentity::Kind::ItemFrame(f) => Some(f),
-                        _ => None,
-                    }
-                });
+            let held = entities.get(&(tile.0 as i64, tile.1 as i64, tile.2 as i64)).copied();
             tile.0 += offset.0 * 16;
             tile.2 += offset.1 * 16;
-            let frame = mctk_chunker::frame::FrameEntity::from_bedrock(name, states, tile, held);
+            let frame = crate::frames::Frame::from_bedrock(name, states, tile, held, &mut notes);
             let uuid = [0x4D43_544Bu32 as i32, tile.0, tile.1, tile.2];
             let java = frame.to_java(uuid);
             let id = java.get("id").and_then(Tag::as_str).unwrap_or_default().to_string();
             *report.converted_entities.entry(id).or_insert(0) += 1;
             frames.push(java);
         }
-        crate::block_entity::report_notes(notes, "items", report);
+        crate::block_entity::report_item_notes(notes, report);
     }
     Ok((
         Chunk::new_modern(
@@ -1470,6 +1729,8 @@ struct BedrockToJavaStages<'a> {
     progress: &'a Progress,
     timestamp: u32,
     spawn: (i32, i32),
+    /// Blocks the target cannot hold are replaced as the user chose, before they are mapped.
+    replace: Option<&'a JavaReplacements>,
 }
 
 #[derive(Default)]
@@ -1490,8 +1751,36 @@ impl ChunkStages for BedrockToJavaStages<'_> {
             job.z + self.options.offset.1,
         );
         let mut report = EditionReport::default();
-        let (chunk, frames) =
-            column_to_java(ox, oz, job.col, dim, self.options.offset, &mut report)?;
+        let replaced;
+        let col = match self.replace {
+            Some(r) => {
+                replaced = r.column(job.col, &mut report);
+                &replaced
+            }
+            None => job.col,
+        };
+        let bare;
+        let col = if self.options.tile_entities {
+            col
+        } else {
+            bare = Column { block_entities: Vec::new(), ..col.clone() };
+            &bare
+        };
+        let (mut chunk, frames) =
+            column_to_java(ox, oz, col, dim, self.options.offset, &mut report)?;
+        // Spell every block state the way 26.x does (full states; the default state as the bare
+        // id), whatever the mapping tables produced.
+        if let Some(reg) = java_registry() {
+            for section in &mut chunk.sections {
+                if let Some(JavaStorage::Palette(c)) = &mut section.blocks {
+                    crate::java_java::remap_blocks(
+                        c,
+                        |s| (crate::java_java::finalize_state(reg, PaletteStyle::IdString, s.clone()), None),
+                        &mut indexmap::IndexMap::new(),
+                    );
+                }
+            }
+        }
         let (spawn_x, spawn_z) = self.spawn;
         let spawn_y = (job.dim_id == 0
             && job.x == spawn_x.div_euclid(16)
@@ -1503,6 +1792,7 @@ impl ChunkStages for BedrockToJavaStages<'_> {
             .col
             .actors
             .iter()
+            .filter(|_| self.options.entities)
             .filter_map(|a| crate::entity::actor_to_java(a, self.options.offset, &mut report))
             .collect();
         entities.extend(frames);
@@ -1529,6 +1819,18 @@ pub fn bedrock_to_java_with(
     out: &Path,
     options: &ConvertOptions,
     progress: &Progress,
+) -> Result<EditionReport, Error> {
+    bedrock_to_java_replacing(src, out, options, progress, None)
+}
+
+/// [`bedrock_to_java_with`] that first replaces the blocks the target Java version cannot hold,
+/// as `replacements` says (the smart default for any block it has no choice for).
+pub fn bedrock_to_java_replacing(
+    src: &Path,
+    out: &Path,
+    options: &ConvertOptions,
+    progress: &Progress,
+    replace: Option<&JavaReplacements>,
 ) -> Result<EditionReport, Error> {
     let world = BedrockWorld::open(src)?;
     fresh_dir(out)?;
@@ -1584,6 +1886,18 @@ pub fn bedrock_to_java_with(
                             };
                             if let Tag::Compound(c) = root.tag {
                                 col.block_entities.push(c);
+                            }
+                        }
+                    }
+                    // Before 1.18.30 a chunk holds its entities itself.
+                    ChunkTag::Entity => {
+                        let mut s = v.as_slice();
+                        while !s.is_empty() {
+                            let Ok(root) = mctk_nbt::read_root(&mut s, Flavor::Bedrock) else {
+                                break;
+                            };
+                            if let Tag::Compound(c) = root.tag {
+                                col.actors.push(c);
                             }
                         }
                     }
@@ -1661,6 +1975,7 @@ pub fn bedrock_to_java_with(
         progress,
         timestamp,
         spawn: (spawn_x, spawn_z),
+        replace,
     };
     let finished = run_pipeline(&stages, jobs.len(), 0, progress)?;
     for done in finished.into_iter().flatten() {
@@ -1765,10 +2080,38 @@ mod tests {
     }
 
     #[test]
+    fn a_version_before_1_18_gets_data2d_and_an_old_chunk_version() {
+        use crate::bedrock_layout::Layout;
+        let layout = Layout { legacy_height: true, chunk_version: 25, entities_in_chunk: true, blending: false };
+        let mut report = EditionReport::default();
+        let records = chunk_to_bedrock_in(&stone_chunk(), &DIMS[0], (0, 0), &[], &[], &mut report, layout);
+        let mut col = Column::default();
+        let mut tags = Vec::new();
+        for (k, v) in &records {
+            let Key::Chunk(c) = Key::decode(k) else { continue };
+            tags.push(c.tag);
+            match c.tag {
+                ChunkTag::SubChunkPrefix => {
+                    assert_eq!(v[0], 8, "palettized, without a stored y");
+                    col.subchunks.insert(c.subchunk.unwrap(), v.clone());
+                }
+                ChunkTag::Data2D => col.data2d = Some(v.clone()),
+                ChunkTag::Version => assert_eq!(v, &vec![25]),
+                _ => {}
+            }
+        }
+        assert!(tags.contains(&ChunkTag::Data2D));
+        assert!(!tags.contains(&ChunkTag::Data3D) && !tags.contains(&ChunkTag::BlendingData));
+        assert_eq!(col.data2d.as_ref().map(Vec::len), Some(768));
+        let (chunk, _) = column_to_java(0, 0, &col, &DIMS[0], (0, 0), &mut report).unwrap();
+        assert_eq!(chunk.block(0, 64, 0).map(|b| b.name.as_str()), Some("minecraft:stone"));
+        assert!(chunk.block(3, 65, 4).unwrap().is_air());
+    }
+
+    #[test]
     fn item_frames_round_trip_between_entity_and_block() {
         let frames = vec![
-            mctk_chunker::frame::from_java(&java_frame(), &mut mctk_chunker::Notes::default())
-                .expect("a frame"),
+            crate::frames::Frame::from_java(&java_frame()).expect("a frame"),
         ];
         let mut report = EditionReport::default();
         let records = chunk_to_bedrock(&stone_chunk(), &DIMS[0], (0, 0), &[], &frames, &mut report);
@@ -1829,7 +2172,7 @@ mod tests {
     #[test]
     fn item_frames_follow_the_chunk_offset() {
         let frames = vec![
-            mctk_chunker::frame::from_java(&java_frame(), &mut mctk_chunker::Notes::default()).unwrap(),
+            crate::frames::Frame::from_java(&java_frame()).unwrap(),
         ];
         let mut report = EditionReport::default();
         let records = chunk_to_bedrock(&stone_chunk(), &DIMS[0], (1, 2), &[], &frames, &mut report);

@@ -9,6 +9,8 @@ use eframe::egui::{
 pub const BG: Color32 = Color32::from_rgb(0x1D, 0x21, 0x28);
 pub const CARD: Color32 = Color32::from_rgb(0x23, 0x28, 0x30);
 pub const BORDER: Color32 = Color32::from_rgb(0x2C, 0x32, 0x3A);
+/// The lines that divide the window into parts (under the title bar, beside the left panels).
+pub const SEPARATOR: Color32 = Color32::from_rgb(0x3A, 0x41, 0x4C);
 pub const DEEP: Color32 = Color32::from_rgb(0x16, 0x18, 0x1E);
 pub const FIELD: Color32 = Color32::from_rgb(0x18, 0x1C, 0x22);
 pub const BUTTON: Color32 = Color32::from_rgb(0x2D, 0x33, 0x3E);
@@ -21,7 +23,6 @@ pub const TEXT_DIM: Color32 = Color32::from_rgb(0x58, 0x60, 0x6B);
 pub const GREEN: Color32 = Color32::from_rgb(0x43, 0xA9, 0x75);
 pub const GREEN_HOVER: Color32 = Color32::from_rgb(0x52, 0xBF, 0x88);
 pub const BLUE: Color32 = Color32::from_rgb(0x3D, 0x7F, 0xE0);
-pub const TAB_BLUE: Color32 = Color32::from_rgb(0x1D, 0x75, 0xBE);
 pub const RED: Color32 = Color32::from_rgb(0xE0, 0x52, 0x52);
 pub const YELLOW: Color32 = Color32::from_rgb(0xD9, 0xB4, 0x3C);
 
@@ -36,6 +37,80 @@ pub const BADGE_LONG: Color32 = Color32::from_rgb(0x6B, 0x77, 0x86);
 pub const BADGE_FLOAT: Color32 = Color32::from_rgb(0x4F, 0xB0, 0x9E);
 pub const BADGE_DOUBLE: Color32 = Color32::from_rgb(0x9B, 0x6A, 0xD8);
 pub const FOLDER: Color32 = Color32::from_rgb(0xB2, 0x90, 0x5E);
+
+/// The colour a page uses for what is active or primary in it: green in the NBT editor, blue in
+/// the converter, red in the pruner and blue on the other pages.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Accent {
+    Green,
+    Blue,
+    Red,
+}
+
+static ACCENT: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(1);
+
+/// Sets the accent for everything drawn from now on (the app does this once per frame).
+pub fn set_accent(a: Accent) {
+    ACCENT.store(a as u8, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn current_accent() -> Accent {
+    match ACCENT.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => Accent::Green,
+        2 => Accent::Red,
+        _ => Accent::Blue,
+    }
+}
+
+pub fn accent() -> Color32 {
+    match current_accent() {
+        Accent::Green => GREEN,
+        Accent::Blue => BLUE,
+        Accent::Red => PRUNER_ACCENT,
+    }
+}
+
+pub fn accent_hover() -> Color32 {
+    match current_accent() {
+        Accent::Green => GREEN_HOVER,
+        Accent::Blue => Color32::from_rgb(0x55, 0x92, 0xEA),
+        Accent::Red => Color32::from_rgb(0xE2, 0x60, 0x60),
+    }
+}
+
+/// The accent at partial strength over the page background: a quiet selection fill.
+pub fn accent_wash(t: f32) -> Color32 {
+    let (a, b) = (accent(), BG);
+    let mix = |x: u8, y: u8| (y as f32 + (x as f32 - y as f32) * t) as u8;
+    Color32::from_rgb(mix(a.r(), b.r()), mix(a.g(), b.g()), mix(a.b(), b.b()))
+}
+
+/// The accent with the given opacity, for a translucent fill over something.
+pub fn accent_alpha(alpha: u8) -> Color32 {
+    let a = accent();
+    Color32::from_rgba_unmultiplied(a.r(), a.g(), a.b(), alpha)
+}
+
+/// A shade darker than [`accent`], for a part that sits against something of the accent colour.
+pub fn accent_dark() -> Color32 {
+    match current_accent() {
+        Accent::Green => Color32::from_rgb(0x3A, 0x97, 0x68),
+        Accent::Blue => Color32::from_rgb(0x33, 0x69, 0xBD),
+        Accent::Red => Color32::from_rgb(0xB9, 0x3E, 0x3E),
+    }
+}
+
+/// How much smaller a toolbar being squeezed into a narrow window is drawn (1 normally); the
+/// buttons and segmented choices in it read this.
+static UI_SCALE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x3f80_0000);
+
+pub fn ui_scale() -> f32 {
+    f32::from_bits(UI_SCALE.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+pub fn set_ui_scale(k: f32) {
+    UI_SCALE.store(k.to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
 
 pub fn regular(size: f32) -> FontId {
     FontId::new(size, FontFamily::Proportional)
@@ -106,6 +181,8 @@ pub fn install(ctx: &egui::Context) {
         v.selection.bg_fill = BLUE;
         v.selection.stroke = Stroke::new(1.0_f32, TEXT);
         v.hyperlink_color = BLUE;
+        // Anything that can be clicked shows the pointing hand, as in the original tool.
+        v.interact_cursor = Some(egui::CursorIcon::PointingHand);
         v.window_corner_radius = radius(6);
         v.menu_corner_radius = radius(4);
         for w in [

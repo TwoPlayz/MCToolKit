@@ -37,25 +37,52 @@ pub struct SaveArchive {
     pub original_version: u16,
     pub version: u16,
     pub entries: Vec<ArchiveEntry>,
+    /// Whether the archive is little-endian (Windows 64, PS4, Vita, Xbox One).
+    pub little: bool,
     /// The data area as read. Console saves can contain overlapping entries and gaps
     /// (the game reuses space and declares region sizes with slack), so an unmodified
     /// archive is written back from this verbatim.
     original_data: Option<Vec<u8>>,
 }
 
-fn be32(b: &[u8], o: usize) -> u32 {
-    u32::from_be_bytes(b[o..o + 4].try_into().unwrap())
+fn u32_at(b: &[u8], o: usize, little: bool) -> u32 {
+    let bytes = b[o..o + 4].try_into().unwrap();
+    if little { u32::from_le_bytes(bytes) } else { u32::from_be_bytes(bytes) }
+}
+
+fn u32_bytes(v: u32, little: bool) -> [u8; 4] {
+    if little { v.to_le_bytes() } else { v.to_be_bytes() }
+}
+
+fn u16_at(b: &[u8], o: usize, little: bool) -> u16 {
+    let bytes = [b[o], b[o + 1]];
+    if little { u16::from_le_bytes(bytes) } else { u16::from_be_bytes(bytes) }
 }
 
 impl SaveArchive {
+    /// A new archive of the given file entries, laid out back to back when encoded.
+    pub fn new(version: u16, entries: Vec<ArchiveEntry>, little: bool) -> Self {
+        SaveArchive { original_version: version, version, entries, little, original_data: None }
+    }
+
+    /// Parses an archive in either byte order: the one whose index fits the file is used.
     pub fn parse(bytes: &[u8]) -> Result<Self, Error> {
+        match Self::parse_with(bytes, false) {
+            Err(be) => Self::parse_with(bytes, true).map_err(|_| be),
+            ok => ok,
+        }
+    }
+
+    /// Parses an archive of the given byte order (little-endian on Windows 64, PS4, Vita and
+    /// Xbox One).
+    pub fn parse_with(bytes: &[u8], little: bool) -> Result<Self, Error> {
         if bytes.len() < HEADER {
             return Err(bad("save archive shorter than its header"));
         }
-        let index = be32(bytes, 0) as usize;
-        let count = be32(bytes, 4) as usize;
-        let original_version = u16::from_be_bytes([bytes[8], bytes[9]]);
-        let version = u16::from_be_bytes([bytes[10], bytes[11]]);
+        let index = u32_at(bytes, 0, little) as usize;
+        let count = u32_at(bytes, 4, little) as usize;
+        let original_version = u16_at(bytes, 8, little);
+        let version = u16_at(bytes, 10, little);
         let table = count
             .checked_mul(ENTRY)
             .and_then(|t| index.checked_add(t))
@@ -72,13 +99,14 @@ impl SaveArchive {
             let e = &bytes[index + i * ENTRY..index + (i + 1) * ENTRY];
             let units: Vec<u16> = e[..NAME_BYTES]
                 .chunks(2)
-                .map(|c| u16::from_be_bytes([c[0], c[1]]))
+                .map(|c| u16_at(c, 0, little))
                 .take_while(|&u| u != 0)
                 .collect();
             let name = String::from_utf16(&units).map_err(|_| bad("file name is not UTF-16"))?;
-            let size = be32(e, 128) as usize;
-            let offset = be32(e, 132);
-            let timestamp = u64::from_be_bytes(e[136..144].try_into().unwrap());
+            let size = u32_at(e, 128, little) as usize;
+            let offset = u32_at(e, 132, little);
+            let ts = e[136..144].try_into().unwrap();
+            let timestamp = if little { u64::from_le_bytes(ts) } else { u64::from_be_bytes(ts) };
             let start = offset as usize;
             let data = bytes
                 .get(start..start + size)
@@ -95,6 +123,7 @@ impl SaveArchive {
             original_version,
             version,
             entries,
+            little,
             original_data: Some(bytes[HEADER..index].to_vec()),
         })
     }
@@ -135,17 +164,18 @@ impl SaveArchive {
                 return Err(bad(format!("file name too long: {}", e.name)));
             }
             for (i, u) in units.iter().enumerate() {
-                name[i * 2..i * 2 + 2].copy_from_slice(&u.to_be_bytes());
+                name[i * 2..i * 2 + 2].copy_from_slice(&if self.little { u.to_le_bytes() } else { u.to_be_bytes() });
             }
             out.extend_from_slice(&name);
-            out.extend_from_slice(&(e.data.len() as u32).to_be_bytes());
-            out.extend_from_slice(&offset.to_be_bytes());
-            out.extend_from_slice(&e.timestamp.to_be_bytes());
+            out.extend_from_slice(&u32_bytes(e.data.len() as u32, self.little));
+            out.extend_from_slice(&u32_bytes(offset, self.little));
+            out.extend_from_slice(&if self.little { e.timestamp.to_le_bytes() } else { e.timestamp.to_be_bytes() });
         }
-        out[0..4].copy_from_slice(&index.to_be_bytes());
-        out[4..8].copy_from_slice(&(self.entries.len() as u32).to_be_bytes());
-        out[8..10].copy_from_slice(&self.original_version.to_be_bytes());
-        out[10..12].copy_from_slice(&self.version.to_be_bytes());
+        out[0..4].copy_from_slice(&u32_bytes(index, self.little));
+        out[4..8].copy_from_slice(&u32_bytes(self.entries.len() as u32, self.little));
+        for (range, v) in [(8..10, self.original_version), (10..12, self.version)] {
+            out[range].copy_from_slice(&if self.little { v.to_le_bytes() } else { v.to_be_bytes() });
+        }
         Ok(out)
     }
 
@@ -188,6 +218,7 @@ mod tests {
                 ArchiveEntry::new("DIM-1r.0.-1.mcr", vec![], 0),
                 ArchiveEntry::new("DIM1/r.-1.0.mcr", vec![9; 10], 7),
             ],
+            little: false,
             original_data: None,
         };
         let bytes = archive.encode().unwrap();

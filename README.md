@@ -8,7 +8,7 @@
 [![Join the Discord](https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?logo=discord&logoColor=white)](https://discord.gg/wC6zC93fTS)
 
 A Minecraft world toolkit written in Rust: convert worlds between Java, Bedrock and Legacy
-Console editions, prune chunks, edit NBT, browse a 2D map, and extend it with Lua scripts.
+Console editions, prune chunks, edit NBT, browse a 2D map.
 
 <p align="center">
   <a href="https://discord.gg/wC6zC93fTS"><img alt="Join the MCToolKit Discord" src="https://img.shields.io/badge/Join%20the%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white"></a>
@@ -31,10 +31,9 @@ Console editions, prune chunks, edit NBT, browse a 2D map, and extend it with Lu
 
 | Tool | What you can do |
 |---|---|
-| **Converter** | Java 1.13+ (best: 26.3) ↔ Bedrock 1.26.60, and Legacy Console (Xbox 360, PS3) → Java. Also reads older Java worlds (before 1.13, with numeric block ids) and older Bedrock worlds (from 1.2.13) when converting. |
+| **Converter** | Java 1.8 – 26.3 (every release, as source and target) ↔ Bedrock 1.26.60, and Legacy Console (Xbox 360, PS3) → Java. Also reads older Java worlds (before 1.13, with numeric block ids) and older Bedrock worlds (from 1.2.13) when converting. |
 | **Pruner** | Remove chunks (or keep only some) by Box, Circle, Split, Polygon or Time layers, working on a copy and writing back with a backup. |
 | **NBT Editor** | Open worlds, players, maps and single NBT files; typed tree with undo; chunk locator. |
-| **Extensions** | Lua 5.4 scripts that style the NBT editor or run as world tools. Import your own from a `.zip` or folder (see [`extensions/README.md`](extensions/README.md)). |
 
 ### What the converter carries over
 
@@ -68,7 +67,6 @@ saves are untested (no sample).
 
 - **Rust 1.85 or newer** (edition 2024), stable channel: install with
   [rustup](https://rustup.rs/), or run `rustup update` if you already have it.
-- **A C compiler.** The Lua engine for extensions is compiled from bundled source.
   - Windows: [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
     with the *Desktop development with C++* workload (this is also what rustup asks for).
   - Linux: `build-essential` (or your distribution's equivalent) plus the development packages for
@@ -98,7 +96,7 @@ cargo build --release -p mctk-cli   # the command-line tool
 
 The programs are written to `target/release/`: `MCToolKit.exe` (the app) and `mctoolkit.exe`
 (the command-line tool); on Linux and macOS there is no `.exe`. The app is a single file that
-carries its own fonts, icons and built-in extensions, so you can copy it anywhere.
+carries its own fonts and icons, so you can copy it anywhere.
 
 ### 3. Run
 
@@ -111,7 +109,7 @@ Use `--release`: world conversion and map rendering are many times slower in a d
 
 ## Command line
 
-The `mctoolkit` tool covers the same conversions, pruning, NBT and extension tasks without the window. Examples:
+The `mctoolkit` tool covers the same conversions, pruning and NBT tasks without the window. Examples:
 
 ```
 mctoolkit convert java-to-bedrock "New World" out-bedrock
@@ -120,11 +118,9 @@ mctoolkit convert console-to-java savegame.dat out-java
 mctoolkit prune java world pruned --circle 0,0,500 --time ">=1200"
 mctoolkit world info "path/to/world"
 mctoolkit nbt dump level.dat
-mctoolkit ext install my-extension.zip
-mctoolkit ext run my-extension --world "New World" --output out
 ```
 
-Settings and imported extensions are stored under `%APPDATA%\MCToolKit` (`~/.config/MCToolKit`
+Settings are stored under `%APPDATA%\MCToolKit` (`~/.config/MCToolKit`
 elsewhere).
 
 ## Crates
@@ -138,11 +134,9 @@ elsewhere).
 | `mctk-bedrock` | Bedrock worlds: folders and `.mcworld`, chunk keys, subchunks, biomes |
 | `mctk-console` | Legacy Console saves: Xbox 360 and PS3 archives, chunk formats |
 | `mctk-mapping` | Block, biome, item and entity tables, including the pre-1.13 id tables |
-| `mctk-chunker` | A Rust port of parts of Chunker (block entities, items, entities, item frames, text) |
 | `mctk-convert` | Edition conversion on a multi-threaded staged pipeline |
 | `mctk-prune` | The pruner |
 | `mctk-world` | Edition detection and chunk listing |
-| `mctk-lua` | Sandboxed Lua extension host |
 | `mctk-cli` | The `mctoolkit` command-line tool |
 | `mctk-gui` | The desktop app |
 
@@ -158,10 +152,7 @@ and Rust dependencies with their licences is in
 **Settings → About & Licenses**. Per-source details:
 
 - [`crates/mctk-mapping/data/NOTICE.md`](crates/mctk-mapping/data/NOTICE.md): block, item and
-  entity tables (GeyserMC, misode/mcmeta, Mojang bedrock-samples facts, PrismarineJS
-  minecraft-data, pmmp/BedrockData).
-- [`crates/mctk-chunker/LICENSE-CHUNKER`](crates/mctk-chunker/LICENSE-CHUNKER): Chunker by Hive
-  Games (MIT), ported to Rust in `mctk-chunker`.
+  tables generated from the games themselves (see the notice).
 
 Minecraft is a trademark of Mojang Synergies AB. MCToolKit is not affiliated with Mojang or
 Microsoft.
@@ -174,7 +165,6 @@ short: you can use, modify and share it; if you distribute a modified version of
 code, its source must be available under the same licence.
 
 Third-party code and data keep their own licences, all compatible with the LGPL, listed in
-[`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md). `mctk-chunker` stays under its MIT licence
-because it is a port of Chunker.
+[`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).
 
 Want to help? See [`CONTRIBUTING.md`](CONTRIBUTING.md).

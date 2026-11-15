@@ -1,4 +1,4 @@
-//! Legacy Console → Java Edition.
+﻿//! Legacy Console â†’ Java Edition.
 //!
 //! Console Edition descends from Java Edition 1.8 and stores chunks with Java's numeric
 //! block ids. The conversion therefore writes classic Anvil chunks in the pre-1.9 layout
@@ -182,6 +182,26 @@ fn write_gzip_nbt(path: &Path, tag: &NamedTag) -> Result<(), Error> {
     Ok(())
 }
 
+/// Milliseconds between the Windows epoch (1601) and the Unix epoch (1970).
+const WINDOWS_EPOCH_MS: i64 = 11_644_473_600_000;
+
+/// Console `Time` is both the world age and the time of day, and a fresh save can hold -1;
+/// Java keeps the time of day separately in `DayTime`. The Windows 64 game writes `LastPlayed`
+/// in milliseconds since 1601, where Java expects milliseconds since 1970.
+fn fix_times(data: &mut Compound) {
+    let time = data.get("Time").and_then(Tag::as_i64).unwrap_or(0).max(0);
+    data.insert("Time".into(), Tag::Long(time));
+    if !data.contains_key("DayTime") {
+        data.insert("DayTime".into(), Tag::Long(time));
+    }
+    if let Some(played) = data.get("LastPlayed").and_then(Tag::as_i64) {
+        // 4_000_000_000_000 ms after 1970 is the year 2096; no Unix timestamp is that large.
+        if played > 4_000_000_000_000 {
+            data.insert("LastPlayed".into(), Tag::Long(played - WINDOWS_EPOCH_MS));
+        }
+    }
+}
+
 /// Builds the Java `level.dat` from the console one. Console `level.dat` is Java-style
 /// NBT already; version markers are left as the console wrote them (pre-1.9) so the game
 /// upgrades the world, and the host player is attached when `Data.Player` is missing.
@@ -202,6 +222,7 @@ fn convert_level_dat(save: &ConsoleSave, report: &mut ConvertReport) -> Result<N
     data.shift_remove("Version");
     // Anvil storage version.
     data.insert("version".into(), Tag::Int(19133));
+    fix_times(data);
     if !data.contains_key("Player") {
         let player = save.archive.entries.iter().find(|e| {
             let name = e.name.rsplit('/').next().unwrap_or(&e.name);
@@ -222,7 +243,7 @@ fn convert_level_dat(save: &ConsoleSave, report: &mut ConvertReport) -> Result<N
     Ok(root)
 }
 
-/// Per-chunk work of the console → Java conversion, for [`run_pipeline`].
+/// Per-chunk work of the console â†’ Java conversion, for [`run_pipeline`].
 struct ConsoleStages<'a> {
     work: &'a [(i32, ConsoleRegion)],
     /// (index into `work`, local x, local z) of every chunk to convert.
@@ -278,6 +299,13 @@ impl ChunkStages for ConsoleStages<'_> {
         let offset = self.options.offset;
         let mut anvil = console_chunk_to_anvil(&chunk)?;
         let pos = ChunkPos::new(chunk.x + offset.0, chunk.z + offset.1);
+        if let Some(l) = anvil.tag.as_compound_mut().and_then(|c| c.get_mut("Level")).and_then(Tag::as_compound_mut) {
+            for (key, keep) in [("Entities", self.options.entities), ("TileEntities", self.options.tile_entities)] {
+                if !keep {
+                    l.shift_remove(key);
+                }
+            }
+        }
         if offset != (0, 0) {
             if let Some(l) = anvil
                 .tag
@@ -437,6 +465,24 @@ mod tests {
             tag: Tag::Compound(root),
         })
         .unwrap()
+    }
+
+    #[test]
+    fn level_times_become_java_times() {
+        let mut d = Compound::new();
+        d.insert("Time".into(), Tag::Long(-1));
+        d.insert("LastPlayed".into(), Tag::Long(13_437_903_342_696));
+        fix_times(&mut d);
+        assert_eq!(d.get("Time"), Some(&Tag::Long(0)));
+        assert_eq!(d.get("DayTime"), Some(&Tag::Long(0)));
+        assert_eq!(d.get("LastPlayed"), Some(&Tag::Long(1_793_429_742_696)));
+
+        let mut d = Compound::new();
+        d.insert("Time".into(), Tag::Long(7981));
+        d.insert("LastPlayed".into(), Tag::Long(1_700_000_000_000));
+        fix_times(&mut d);
+        assert_eq!(d.get("DayTime"), Some(&Tag::Long(7981)));
+        assert_eq!(d.get("LastPlayed"), Some(&Tag::Long(1_700_000_000_000)));
     }
 
     #[test]

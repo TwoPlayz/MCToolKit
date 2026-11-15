@@ -10,6 +10,7 @@ use crate::{Error, bad, rle_decode, rle_encode, xmem_decompress_all, xmem_store}
 
 const SECTOR: usize = 4096;
 const RLE_FLAG: u32 = 0x8000_0000;
+const WIIU_FLAG: u32 = 0x4000_0000;
 
 /// How a platform compresses chunk payloads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,6 +19,8 @@ pub enum ChunkCodec {
     Deflate,
     /// Xbox 360: XMem LZX frames.
     XMemLzx,
+    /// Windows 64: a zlib stream.
+    Zlib,
 }
 
 /// A chunk record as stored, still compressed.
@@ -28,17 +31,21 @@ pub struct RawConsoleChunk {
     pub decompressed_len: u32,
     pub payload: Vec<u8>,
     pub timestamp: u32,
+    /// The Wii U game's second record flag (bit 30), kept so a rewritten region keeps it.
+    pub wiiu_flag: bool,
 }
 
 impl RawConsoleChunk {
     /// Detects the platform codec from the payload: XMem streams begin with an `0xFF`
-    /// frame header (chunk data is shorter than a full 32 KiB frame), while deflate
-    /// payloads begin with a small big-endian length.
+    /// frame header (chunk data is shorter than a full 32 KiB frame), zlib streams with
+    /// `0x78`, while deflate payloads begin with a small big-endian length.
     pub fn codec(&self) -> ChunkCodec {
-        if self.payload.first() == Some(&0xff) {
-            ChunkCodec::XMemLzx
-        } else {
-            ChunkCodec::Deflate
+        match self.payload.first() {
+            Some(&0xff) => ChunkCodec::XMemLzx,
+            Some(&0x78) if self.payload.get(1).is_some_and(|b| (0x78 * 256 + *b as usize) % 31 == 0) => {
+                ChunkCodec::Zlib
+            }
+            _ => ChunkCodec::Deflate,
         }
     }
 
@@ -62,6 +69,11 @@ impl RawConsoleChunk {
                 out
             }
             ChunkCodec::XMemLzx => xmem_decompress_all(&self.payload, lzxd::WindowSize::KB128)?,
+            ChunkCodec::Zlib => {
+                let mut out = Vec::new();
+                flate2::read::ZlibDecoder::new(&self.payload[..]).read_to_end(&mut out)?;
+                out
+            }
         };
         if self.rle {
             rle_decode(&inner, Some(self.decompressed_len as usize))
@@ -76,8 +88,44 @@ impl RawConsoleChunk {
         }
     }
 
+    /// The chunk as a McRegion-style `Level` tree. Saves from version 8 on store chunks in the
+    /// game's compressed binary form instead of NBT; it is turned into the same tree.
+    /// A chunk in the compressed binary form of saves from version 8 on, built from a Level
+    /// tree and stored with codec.
+    pub fn encode_compressed(tag: &NamedTag, version: i16, codec: ChunkCodec, timestamp: u32) -> Result<Self, Error> {
+        let raw = crate::compressed::encode(tag, version)?;
+        Self::from_stream(&raw, codec, timestamp)
+    }
+
+    /// Compresses an uncompressed chunk stream the way `codec`'s platform stores it: run-length
+    /// encoding, then the codec.
+    fn from_stream(raw: &[u8], codec: ChunkCodec, timestamp: u32) -> Result<Self, Error> {
+        let rle = rle_encode(raw);
+        let payload = match codec {
+            ChunkCodec::Deflate => {
+                let mut e = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+                e.write_all(&rle)?;
+                let deflated = e.finish()?;
+                let mut p = (rle.len() as u32).to_be_bytes().to_vec();
+                p.extend_from_slice(&deflated);
+                p
+            }
+            ChunkCodec::XMemLzx => xmem_store(&rle),
+            ChunkCodec::Zlib => {
+                let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+                e.write_all(&rle)?;
+                e.finish()?
+            }
+        };
+        Ok(RawConsoleChunk { rle: true, decompressed_len: raw.len() as u32, payload, timestamp, wiiu_flag: false })
+    }
+
     pub fn nbt(&self) -> Result<NamedTag, Error> {
-        Ok(mctk_nbt::from_bytes(&self.decompress()?, Flavor::Java)?)
+        let bytes = self.decompress()?;
+        if crate::compressed::is_compressed(&bytes) {
+            return crate::compressed::decode(&bytes);
+        }
+        Ok(mctk_nbt::from_bytes(&bytes, Flavor::Java)?)
     }
 
     /// Compresses chunk NBT the way `codec`'s platform stores it (RLE, then the codec).
@@ -95,12 +143,18 @@ impl RawConsoleChunk {
                 p
             }
             ChunkCodec::XMemLzx => xmem_store(&rle),
+            ChunkCodec::Zlib => {
+                let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+                e.write_all(&rle)?;
+                e.finish()?
+            }
         };
         Ok(RawConsoleChunk {
             rle: true,
             decompressed_len: raw.len() as u32,
             payload,
             timestamp,
+            wiiu_flag: false,
         })
     }
 }
@@ -108,10 +162,22 @@ impl RawConsoleChunk {
 #[derive(Debug, Clone)]
 pub struct ConsoleRegion {
     data: Vec<u8>,
+    /// Windows 64, PS4, Vita and Xbox One regions are little-endian; PS3 and Xbox 360 big-endian.
+    little: bool,
 }
 
-fn be32(b: &[u8], o: usize) -> u32 {
-    u32::from_be_bytes(b[o..o + 4].try_into().unwrap())
+/// Whether every location in the table points past the headers and inside the file.
+fn locations_fit(data: &[u8], little: bool) -> bool {
+    (0..1024).all(|i| {
+        let w = word(data, 4 * i, little);
+        let offset = (w >> 8) as usize * SECTOR;
+        w == 0 || (offset >= 2 * SECTOR && offset < data.len())
+    })
+}
+
+fn word(b: &[u8], o: usize, little: bool) -> u32 {
+    let bytes = b[o..o + 4].try_into().unwrap();
+    if little { u32::from_le_bytes(bytes) } else { u32::from_be_bytes(bytes) }
 }
 
 impl ConsoleRegion {
@@ -119,12 +185,14 @@ impl ConsoleRegion {
         if !data.is_empty() && data.len() < 2 * SECTOR {
             return Err(bad("console region shorter than its header"));
         }
-        Ok(ConsoleRegion { data })
+        // The byte order is the one whose location table makes sense.
+        let little = !data.is_empty() && !locations_fit(&data, false) && locations_fit(&data, true);
+        Ok(ConsoleRegion { data, little })
     }
 
     pub fn chunks(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
         (0..1024)
-            .filter(|&i| !self.data.is_empty() && be32(&self.data, 4 * i) != 0)
+            .filter(|&i| !self.data.is_empty() && word(&self.data, 4 * i, self.little) != 0)
             .map(|i| (i % 32, i / 32))
     }
 
@@ -137,7 +205,7 @@ impl ConsoleRegion {
             return Ok(None);
         }
         let i = lx + lz * 32;
-        let loc = be32(&self.data, 4 * i);
+        let loc = word(&self.data, 4 * i, self.little);
         if loc == 0 {
             return Ok(None);
         }
@@ -145,31 +213,40 @@ impl ConsoleRegion {
         if offset < 2 * SECTOR || offset + 8 > self.data.len() {
             return Err(bad(format!("chunk ({lx}, {lz}) points outside the region")));
         }
-        let word = be32(&self.data, offset);
-        let len = (word & !RLE_FLAG) as usize;
+        let head = word(&self.data, offset, self.little);
+        // The Wii U game sets a second flag (bit 30) on some records; it is not part of the length.
+        let len = (head & !(RLE_FLAG | WIIU_FLAG)) as usize;
         let payload = self
             .data
             .get(offset + 8..offset + 8 + len)
             .ok_or_else(|| bad(format!("chunk ({lx}, {lz}) overruns the region")))?;
         Ok(Some(RawConsoleChunk {
-            rle: word & RLE_FLAG != 0,
-            decompressed_len: be32(&self.data, offset + 4),
+            rle: head & RLE_FLAG != 0,
+            decompressed_len: word(&self.data, offset + 4, self.little),
             payload: payload.to_vec(),
-            timestamp: be32(&self.data, SECTOR + 4 * i),
+            timestamp: word(&self.data, SECTOR + 4 * i, self.little),
+            wiiu_flag: head & WIIU_FLAG != 0,
         }))
     }
+}
+
+fn put(v: u32, little: bool) -> [u8; 4] {
+    if little { v.to_le_bytes() } else { v.to_be_bytes() }
 }
 
 /// Assembles a console region file from chunk records.
 #[derive(Debug, Clone)]
 pub struct ConsoleRegionBuilder {
     chunks: Vec<Option<RawConsoleChunk>>,
+    /// Write the tables and chunk headers little-endian (Windows 64, PS4, Vita, Xbox One).
+    pub little: bool,
 }
 
 impl Default for ConsoleRegionBuilder {
     fn default() -> Self {
         ConsoleRegionBuilder {
             chunks: vec![None; 1024],
+            little: false,
         }
     }
 }
@@ -192,8 +269,8 @@ impl ConsoleRegionBuilder {
                 .ok()
                 .filter(|&l| l & RLE_FLAG == 0)
                 .ok_or_else(|| bad("chunk payload too large"))?;
-            out.extend_from_slice(&(len | if c.rle { RLE_FLAG } else { 0 }).to_be_bytes());
-            out.extend_from_slice(&c.decompressed_len.to_be_bytes());
+            out.extend_from_slice(&put(len | if c.rle { RLE_FLAG } else { 0 } | if c.wiiu_flag { WIIU_FLAG } else { 0 }, self.little));
+            out.extend_from_slice(&put(c.decompressed_len, self.little));
             out.extend_from_slice(&c.payload);
             out.resize(out.len().div_ceil(SECTOR) * SECTOR, 0);
             let sectors = out.len() / SECTOR - start;
@@ -201,8 +278,8 @@ impl ConsoleRegionBuilder {
                 return Err(bad("chunk larger than 255 sectors"));
             }
             out[4 * i..4 * i + 4]
-                .copy_from_slice(&(((start as u32) << 8) | sectors as u32).to_be_bytes());
-            out[SECTOR + 4 * i..SECTOR + 4 * i + 4].copy_from_slice(&c.timestamp.to_be_bytes());
+                .copy_from_slice(&put(((start as u32) << 8) | sectors as u32, self.little));
+            out[SECTOR + 4 * i..SECTOR + 4 * i + 4].copy_from_slice(&put(c.timestamp, self.little));
         }
         Ok(out)
     }

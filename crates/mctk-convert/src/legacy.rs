@@ -1,5 +1,5 @@
-//! Java worlds from before Java 26.x: the pieces of Chunker's older-version handling that
-//! the converters need to read them.
+//! Java worlds from before Java 26.x: what the converters need to read
+//! them.
 //!
 //! * Before 1.13 blocks are numeric ids with a data value, biomes a column of ids, and block
 //!   entities, entities and items use short names (`Chest`, `Pig`) and `Damage` / `tag`.
@@ -249,7 +249,7 @@ pub(crate) fn colour_beds(chunk: &mut Chunk, block_entities: &[Compound]) {
         let (Some(x), Some(y), Some(z), Some(color)) = (at("x"), at("y"), at("z"), at("color")) else {
             continue;
         };
-        let Some(dye) = mctk_chunker::ids::DYES.get(color.clamp(0, 15) as usize).map(|d| d.0) else {
+        let Some(dye) = crate::block_entities_more::DYES.get(color.clamp(0, 15) as usize).copied() else {
             continue;
         };
         let Some(section) = chunk.sections.iter_mut().find(|s| s.y as i64 == y.div_euclid(16)) else {
@@ -706,7 +706,7 @@ pub(crate) fn upgrade_entity(e: &Compound, old: bool, report: &mut EditionReport
                 if let Some(m) = e
                     .get("Motive")
                     .and_then(Tag::as_str)
-                    .and_then(mctk_chunker::entity::motive_from_bedrock)
+                    .and_then(crate::paintings::motive_from_bedrock)
                 {
                     out.insert("variant".into(), Tag::String(m.0.into()));
                 }
@@ -754,9 +754,9 @@ mod tests {
         assert_eq!(c.get("minecraft:custom_name").and_then(Tag::as_str), Some("Slayer"));
         let e = c.get("minecraft:enchantments").and_then(Tag::as_compound).unwrap();
         assert_eq!(e.get("minecraft:sharpness"), Some(&Tag::Int(5)));
-        // The upgraded item reads with the current codec.
-        let read = mctk_chunker::item::java::read(&up, &mut mctk_chunker::Notes::default()).unwrap();
-        assert_eq!(read.props.damage, Some(12));
+        // The upgraded item converts with the current codec.
+        let bedrock = crate::item_codec::java_to_bedrock(&up, None, &mut crate::item_codec::Notes::default()).unwrap();
+        assert_eq!(bedrock.get("tag").and_then(|t| t.get("Damage")).and_then(Tag::as_i64), Some(12));
         assert!(report.skipped.is_empty());
     }
 
@@ -787,10 +787,15 @@ mod tests {
         shulker.insert("tag".into(), Tag::Compound(tag));
         let mut report = EditionReport::default();
         let up = upgrade_item(&shulker, false, &mut report).unwrap();
-        let read = mctk_chunker::item::java::read(&up, &mut mctk_chunker::Notes::default()).unwrap();
-        let held = read.props.container.as_ref().expect("contents");
-        let (slot, stack) = &held[0];
-        assert_eq!((*slot, stack.id.as_str(), stack.count), (2, "minecraft:diamond", 5));
+        let held = up
+            .get("components")
+            .and_then(|c| c.get("minecraft:container"))
+            .and_then(Tag::as_list)
+            .expect("contents");
+        let entry = held.get(0).unwrap();
+        let stack = entry.get("item").unwrap();
+        assert_eq!(entry.get("slot").and_then(Tag::as_i64), Some(2));
+        assert_eq!((stack.get("id"), stack.get("count")), (Some(&s("minecraft:diamond")), Some(&Tag::Int(5))));
 
         let mut entity = Compound::new();
         entity.insert("id".into(), s("minecraft:creeper"));
@@ -801,8 +806,8 @@ mod tests {
         egg.insert("Count".into(), Tag::Byte(1));
         egg.insert("tag".into(), Tag::Compound(tag));
         let up = upgrade_item(&egg, false, &mut report).unwrap();
-        let read = mctk_chunker::item::java::read(&up, &mut mctk_chunker::Notes::default()).unwrap();
-        assert_eq!(read.props.spawn_egg.as_deref(), Some("minecraft:creeper"));
+        let data = up.get("components").and_then(|c| c.get("minecraft:entity_data")).expect("entity data");
+        assert_eq!(data.get("id"), Some(&s("minecraft:creeper")));
         assert!(report.skipped.is_empty(), "{:?}", report.skipped);
     }
 

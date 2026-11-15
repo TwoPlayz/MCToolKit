@@ -1,0 +1,37 @@
+# Bedrock biome numeric ids read back from the real server's saved chunks (see crates/mctk-gen).
+# name<TAB>id. Only biomes the server located and saved are listed; the rest are unverified.
+minecraft:ocean	0
+minecraft:plains	1
+minecraft:desert	2
+minecraft:extreme_hills	3
+minecraft:swampland	6
+minecraft:river	7
+minecraft:frozen_river	11
+minecraft:ice_plains	12
+minecraft:jungle	21
+minecraft:jungle_edge	23
+minecraft:stone_beach	25
+minecraft:roofed_forest	29
+minecraft:cold_taiga	30
+minecraft:mega_taiga	32
+minecraft:savanna	35
+minecraft:lukewarm_ocean	42
+minecraft:frozen_ocean	46
+minecraft:deep_frozen_ocean	47
+minecraft:bamboo_jungle	48
+minecraft:redwood_taiga_mutated	160
+minecraft:crimson_forest	179
+minecraft:warped_forest	180
+minecraft:basalt_deltas	181
+minecraft:jagged_peaks	182
+minecraft:frozen_peaks	183
+minecraft:snowy_slopes	184
+minecraft:grove	185
+minecraft:dripstone_caves	188
+minecraft:stony_peaks	189
+minecraft:deep_dark	190
+minecraft:mangrove_swamp	191
+minecraft:cherry_grove	192
+minecraft:pale_garden	193
+minecraft:sulfur_caves	194
+minecraft:dappled_forest	195

@@ -1,0 +1,6 @@
+# Blocks whose id changed between Java versions: old id, new id.
+# Verified by diffing the generated registries (1.20.1 vs 26.3 vs 26.4-snapshot-6):
+# these are the only blocks of 1.20.1 that no longer exist in 26.3, and the new id has the
+# same properties. Add a row whenever a registry diff shows another rename.
+minecraft:grass	minecraft:short_grass
+minecraft:chain	minecraft:iron_chain

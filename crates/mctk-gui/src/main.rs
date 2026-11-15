@@ -1,13 +1,22 @@
 //! MCToolKit desktop app, laid out like Universal Minecraft Tool: a frameless dark window,
-//! an app picker, and a sidebar with the NBT Editor, Converter and Pruner plus Extensions
+//! an app picker, and a sidebar with the NBT Editor, Converter and Pruner plus Settings
 //! and Settings. Long tasks run on background threads.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod builtin;
+mod array_view;
+mod heads;
+mod hex_editor;
+mod info;
+mod info_assets;
+mod chunk_preview;
 mod converter;
+mod ctx_menu;
+mod enchant;
+mod naming;
+mod inventory;
+mod item_picker;
 mod editor;
-mod extensions;
 mod icons;
 mod jobs;
 mod map_view;
@@ -16,6 +25,7 @@ mod pruner;
 mod resource_pack;
 mod settings;
 mod theme;
+mod toasts;
 mod update;
 mod widgets;
 mod workspace;
@@ -35,14 +45,15 @@ const TITLE_BAR: f32 = 38.0;
 const SIDEBAR: f32 = 70.0;
 /// Sidebar, the editor/pruner left panel and a map wide enough for the Locate bar, the
 /// dimension buttons and Slicer on one row.
-const MIN_WIDTH: f32 = 1040.0;
+/// The smallest window (as UMT's).
+const MIN_WIDTH: f32 = 800.0;
+const MIN_HEIGHT: f32 = 490.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Page {
     Editor,
     Converter,
     Pruner,
-    Extensions,
     Settings,
 }
 
@@ -59,9 +70,10 @@ struct App {
     editor: editor::EditorPage,
     converter: converter::ConverterPage,
     pruner: pruner::PrunerPage,
-    extensions: extensions::ExtensionsPage,
     picker: Option<(WorldPicker, Purpose)>,
     log: Vec<String>,
+    /// The messages in the corner for the pages other than the NBT editor (which has its own).
+    toasts: toasts::Toasts,
     last_statuses: [String; 4],
     zoom: f32,
     update_check: Option<jobs::Job<Option<update::Update>>>,
@@ -95,12 +107,34 @@ impl App {
             settings,
             editor: Default::default(),
             pruner: Default::default(),
-            extensions: Default::default(),
             picker: None,
             log: vec![format!("MCToolKit {} started", env!("CARGO_PKG_VERSION"))],
             last_statuses: Default::default(),
+            toasts: Default::default(),
             zoom: 0.0,
         }
+    }
+
+    /// The name of `path` and the tool that has it open, when a tool other than `purpose`'s does.
+    fn open_elsewhere(&self, path: &std::path::Path, purpose: Purpose) -> Option<(String, &'static str)> {
+        let converter = self.converter.input.iter().map(|(p, edition)| {
+            let name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
+            (edition.subject(&name), p.clone())
+        });
+        let tools: [(Purpose, &'static str, Vec<(String, std::path::PathBuf)>); 3] = [
+            (Purpose::Editor, "NBT editor", self.editor.open_worlds()),
+            (Purpose::Converter, "converter", converter.collect()),
+            (Purpose::Pruner, "pruner", self.pruner.open_worlds()),
+        ];
+        tools
+            .into_iter()
+            .filter(|(p, _, _)| *p != purpose)
+            .find_map(|(_, tool, worlds)| {
+                worlds
+                    .into_iter()
+                    .find(|(_, open)| editor::same_path(open, path))
+                    .map(|(name, _)| (name, tool))
+            })
     }
 
     fn open_picker(&mut self, ctx: &egui::Context, edition: UiEdition, purpose: Purpose) {
@@ -114,9 +148,10 @@ impl App {
         let drag = ui.interact(rect, egui::Id::new("title-bar"), Sense::click_and_drag());
         let p = ui.painter();
         p.rect_filled(rect, 0.0, theme::BG);
+        // Inside the bar's last pixel row, so the page drawn after it does not cover half of it.
         p.line_segment(
-            [rect.left_bottom(), rect.right_bottom()],
-            Stroke::new(1.0_f32, theme::BORDER),
+            [rect.left_bottom() - vec2(0.0, 0.5), rect.right_bottom() - vec2(0.0, 0.5)],
+            Stroke::new(1.0_f32, theme::SEPARATOR),
         );
         icons::paint(
             p,
@@ -246,8 +281,8 @@ impl App {
         let rect = Rect::from_min_size(full.min, vec2(SIDEBAR, full.height()));
         ui.painter().rect_filled(rect, 0.0, theme::BG);
         ui.painter().line_segment(
-            [rect.right_top(), rect.right_bottom()],
-            Stroke::new(1.0_f32, theme::BORDER),
+            [rect.right_top() - vec2(0.5, 0.0), rect.right_bottom() - vec2(0.5, 0.0)],
+            Stroke::new(1.0_f32, theme::SEPARATOR),
         );
         let item = |ui: &mut egui::Ui,
                     top: f32,
@@ -338,17 +373,6 @@ impl App {
             }
         }
         let bottom = rect.bottom() - 30.0;
-        if item(
-            ui,
-            bottom - 128.0,
-            Icon::Extensions,
-            "Extensions",
-            Page::Extensions,
-            Color32::WHITE,
-            current,
-        ) {
-            self.page = Some(Page::Extensions);
-        }
         if item(
             ui,
             bottom - 64.0,
@@ -466,17 +490,21 @@ impl App {
     }
 
     /// Collects page status messages into the debug log.
-    fn collect_log(&mut self) {
-        let now = [
-            &self.editor.status,
-            &self.converter.status,
-            &self.pruner.status,
-            &self.extensions.status,
-        ];
-        for (i, s) in now.iter().enumerate() {
-            if !s.is_empty() && *s != &self.last_statuses[i] {
-                self.log.push((*s).clone());
-                self.last_statuses[i] = (*s).clone();
+    fn collect_log(&mut self, ctx: &egui::Context) {
+        // The editor shows and takes its own messages; the other pages' go to the corner here.
+        let s = &self.editor.status;
+        if !s.is_empty() && *s != self.last_statuses[0] {
+            self.log.push(s.clone());
+            self.last_statuses[0] = s.clone();
+        }
+        for status in [
+            &mut self.converter.status,
+            &mut self.pruner.status,
+        ] {
+            if !status.is_empty() {
+                let text = std::mem::take(status);
+                self.log.push(text.clone());
+                self.toasts.push(ctx, text);
             }
         }
         if self.log.len() > 500 {
@@ -490,7 +518,26 @@ impl eframe::App for App {
         if self.zoom == 0.0 {
             round_corners(frame);
         }
+        // Anything that is only clicked (buttons, close crosses, list rows, ...) shows the
+        // pointing hand. Widgets that want another cursor set theirs later and win.
+        let hovered: Vec<egui::Id> = ctx.interaction_snapshot(|s| s.hovered.iter().copied().collect());
+        let over_button = hovered.into_iter().any(|id| {
+            ctx.read_response(id)
+                .is_some_and(|r| r.enabled() && r.sense.senses_click() && !r.sense.senses_drag())
+        });
+        if over_button {
+            ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        // Each page has its own accent colour for highlights, buttons and switches.
+        let accent = match self.page {
+            Some(Page::Editor) => theme::Accent::Green,
+            Some(Page::Pruner) => theme::Accent::Red,
+            _ => theme::Accent::Blue,
+        };
+        theme::set_accent(accent);
+        ctx.style_mut(|s| s.visuals.selection.bg_fill = theme::accent());
         icons::set_texture_pack(self.settings.texture_pack());
+        toasts::set_only_warnings(self.settings.hide_messages);
         if self.zoom != self.settings.zoom() {
             self.zoom = self.settings.zoom();
             ctx.set_zoom_factor(self.zoom);
@@ -527,7 +574,8 @@ impl eframe::App for App {
             ));
         }
         Self::resize_edges(ctx);
-        self.collect_log();
+        self.collect_log(ctx);
+        self.toasts.show(ctx);
         egui::CentralPanel::default()
             // Windows draws the rounded outline (see `round_corners`).
             .frame(egui::Frame::new().fill(theme::BG))
@@ -560,7 +608,7 @@ impl eframe::App for App {
                     };
                     ui.painter().rect_filled(log_rect, 0.0, theme::DEEP);
                     let mut child =
-                        ui.new_child(egui::UiBuilder::new().max_rect(log_rect.shrink(6.0)));
+                        ui.new_child(egui::UiBuilder::new().id_salt("debug-log").max_rect(log_rect.shrink(6.0)));
                     egui::ScrollArea::vertical()
                         .stick_to_bottom(true)
                         .auto_shrink(false)
@@ -576,7 +624,8 @@ impl eframe::App for App {
                         });
                     body = rest;
                 }
-                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(body));
+                // (Each child needs its own id, or their scroll areas share one state.)
+                let mut child = ui.new_child(egui::UiBuilder::new().id_salt("page").max_rect(body));
                 child.set_clip_rect(body);
                 match page {
                     Page::Editor => {
@@ -600,7 +649,6 @@ impl eframe::App for App {
                             self.open_picker(ctx, e, Purpose::Pruner);
                         }
                     }
-                    Page::Extensions => self.extensions.ui(&mut child, &mut self.settings),
                     Page::Settings => {
                         settings::page(&mut child, &mut self.settings);
                     }
@@ -613,6 +661,24 @@ impl eframe::App for App {
                 Picked::Open(path) => {
                     let (edition, purpose) = (picker.edition, *purpose);
                     self.picker = None;
+                    // A world is open in one place at a time, or one tool would work on a file
+                    // the other has since changed.
+                    if let Some((name, tool)) = self.open_elsewhere(&path, purpose) {
+                        // The converter gives way: a conversion is a series of steps that can be
+                        // started again, and the NBT editor and the pruner are for working on a
+                        // world. (Not while it is being converted.)
+                        let converter_lets_go = tool == "converter" && purpose != Purpose::Converter && self.converter.reset();
+                        let text = if converter_lets_go {
+                            format!("{name} was closed in the converter.")
+                        } else {
+                            format!("{name} is already open in the {tool}, so it was not opened again.")
+                        };
+                        self.log.push(text.clone());
+                        self.toasts.push(ctx, text);
+                        if !converter_lets_go {
+                            return;
+                        }
+                    }
                     self.log.push(format!("Opening {}", path.display()));
                     match purpose {
                         Purpose::Editor => self.editor.open_world(&path, edition, &self.settings),
@@ -681,11 +747,11 @@ fn main() -> eframe::Result<()> {
         .with_icon(window_icon())
         .with_decorations(false)
         .with_inner_size([1250.0, 686.0])
-        .with_min_inner_size([MIN_WIDTH, 560.0]);
+        .with_min_inner_size([MIN_WIDTH, MIN_HEIGHT]);
     if let (true, Some([x, y, w, h])) = (settings.remember_position, settings.window) {
         viewport = viewport
             .with_position([x, y])
-            .with_inner_size([w.max(MIN_WIDTH), h.max(560.0)]);
+            .with_inner_size([w.max(MIN_WIDTH), h.max(MIN_HEIGHT)]);
     }
     let options = eframe::NativeOptions {
         viewport,

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use mctk_anvil::{ChunkPos, Region, RegionBuilder, RegionPos};
-use mctk_java::{Dimension, JavaWorld};
+use mctk_java::JavaWorld;
 use mctk_nbt::{NamedTag, Tag};
 
 use crate::{Error, PruneReport, Selection, applies, check_selection, prepare_output};
@@ -87,25 +87,27 @@ fn prune_folder(
     Ok((kept, removed))
 }
 
-/// Whether any terrain chunk stores InhabitedTime; without it a Time layer would select
-/// nothing and inverted mode would delete every chunk.
-fn records_inhabited_time(dims: &[&Dimension]) -> Result<bool, Error> {
-    for d in dims {
+/// Every chunk of a vanilla dimension (0, -1 or 1), by chunk position, with its InhabitedTime
+/// when `read_times` asks for it and the chunk records one. To preview a prune: only chunks that
+/// exist can be removed, and a Time layer selects by what the chunks record.
+pub fn chunk_times_java(src: &Path, dimension: i32, read_times: bool) -> Result<HashMap<(i32, i32), Option<i64>>, Error> {
+    let world = JavaWorld::open(src)?;
+    let mut chunks = HashMap::new();
+    for d in world.dimensions.iter().filter(|d| vanilla_dimension(&d.id) == Some(dimension)) {
         for pos in d.regions()? {
             let region = Region::open(d.region_dir().join(pos.file_name()))?;
             for (lx, lz) in region.chunks().collect::<Vec<_>>() {
-                if region
-                    .read_chunk(lx, lz)?
-                    .as_ref()
-                    .and_then(inhabited_time)
-                    .is_some()
-                {
-                    return Ok(true);
-                }
+                let time = if read_times {
+                    region.read_chunk(lx, lz)?.as_ref().and_then(inhabited_time)
+                } else {
+                    None
+                };
+                let at = pos.chunk(lx, lz);
+                chunks.insert((at.x, at.z), time);
             }
         }
     }
-    Ok(false)
+    Ok(chunks)
 }
 
 /// Writes a pruned copy of the Java world `src` to `out` (empty or missing).
@@ -123,12 +125,6 @@ pub fn prune_java(
         .iter()
         .filter(|d| applies(dimension, vanilla_dimension(&d.id)))
         .collect();
-    if selection.uses_inhabited_time() && !records_inhabited_time(&dims)? {
-        return Err(Error::Invalid(
-            "this world does not record InhabitedTime (saved before 1.6); the Time layer cannot be used"
-                .into(),
-        ));
-    }
     prepare_output(src, out)?;
     let rewritten: Vec<PathBuf> = dims
         .iter()

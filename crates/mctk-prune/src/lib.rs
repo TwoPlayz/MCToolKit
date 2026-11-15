@@ -12,9 +12,9 @@ mod selection;
 
 use std::path::Path;
 
-pub use bedrock::{prune_bedrock, prune_bedrock_world};
-pub use console::{prune_console, save_console_copy};
-pub use java::prune_java;
+pub use bedrock::{chunk_times_bedrock, optimize_bedrock_world, prune_bedrock, prune_bedrock_world};
+pub use console::{chunk_times_console, prune_console, save_console_copy};
+pub use java::{chunk_times_java, prune_java};
 pub use selection::{Comparison, Layer, Selection};
 
 #[derive(Debug, thiserror::Error)]
@@ -51,7 +51,8 @@ fn applies(filter: Option<i32>, dimension: Option<i32>) -> bool {
 }
 
 fn check_selection(selection: &Selection) -> Result<(), Error> {
-    if selection.layers.is_empty() {
+    // Inverted with nothing selected keeps nothing: as in UMT, it prunes the whole world.
+    if selection.layers.is_empty() && !selection.inverted {
         return Err(Error::Invalid(
             "the selection has no layers; add at least one".into(),
         ));

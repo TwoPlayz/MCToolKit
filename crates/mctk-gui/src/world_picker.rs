@@ -38,6 +38,16 @@ impl UiEdition {
         }
     }
 
+    /// What to call a world in a message: its name for Java and Bedrock, which have world
+    /// names, and "This <edition> world" for the consoles, whose saves are all called alike
+    /// (GAMEDATA, savegame.dat...).
+    pub fn subject(self, name: &str) -> String {
+        match self {
+            UiEdition::Java | UiEdition::Bedrock => name.to_string(),
+            other => format!("This {} world", other.label()),
+        }
+    }
+
     pub fn icon(self) -> Icon {
         match self {
             UiEdition::Java => Icon::Java,
@@ -62,6 +72,10 @@ struct Entry {
     path: PathBuf,
     last_played: i64,
     icon: Option<PathBuf>,
+    /// The folder a Java or Bedrock world is in, shown after its name when that differs.
+    folder: String,
+    /// Game mode and difficulty, as the game lists them ("Creative, Normal").
+    detail: String,
 }
 
 pub enum Picked {
@@ -87,6 +101,138 @@ fn mtime(path: &Path) -> i64 {
         .map_or(0, |d| d.as_secs() as i64)
 }
 
+/// "Creative, Normal": how the game lists a world's mode and difficulty.
+fn world_detail(mode: Option<i64>, difficulty: Option<i64>, hardcore: bool) -> String {
+    let mode = match mode {
+        Some(0) => Some("Survival"),
+        Some(1) => Some("Creative"),
+        Some(2) => Some("Adventure"),
+        Some(3) => Some("Spectator"),
+        _ => None,
+    };
+    let difficulty = match difficulty {
+        Some(0) => Some("Peaceful"),
+        Some(1) => Some("Easy"),
+        Some(2) => Some("Normal"),
+        Some(3) => Some("Hard"),
+        _ => None,
+    };
+    let mode = if hardcore { Some("Hardcore") } else { mode };
+    [mode, difficulty].into_iter().flatten().collect::<Vec<_>>().join(", ")
+}
+
+/// A world's picture, or Minecraft's pack.png when it has none (as UMT shows).
+fn draw_picture(p: &egui::Painter, rect: Rect, e: &Entry) {
+    if !e.icon.as_deref().is_some_and(|i| icons::file_image(p, rect, i))
+        && !icons::pack_file("pack.png").is_some_and(|i| icons::file_image(p, rect, &i))
+    {
+        p.rect_filled(rect, theme::radius(3), theme::CHIP);
+    }
+}
+
+/// A path with its middle left out when it is long.
+fn short_path(path: &Path) -> String {
+    let path = path.display().to_string().replace('\\', "/");
+    if path.chars().count() > 40 {
+        let tail: String = path.chars().rev().take(20).collect::<Vec<_>>().into_iter().rev().collect();
+        format!("{}...{}", path.chars().take(17).collect::<String>(), tail)
+    } else {
+        path
+    }
+}
+
+/// Opens the file explorer on the world: its folder, or the folder holding its file.
+fn show_in_explorer(path: &Path) {
+    let mut command = std::process::Command::new("explorer");
+    if path.is_file() {
+        command.arg(format!("/select,{}", path.display()));
+    } else {
+        command.arg(path);
+    }
+    let _ = command.spawn();
+}
+
+/// The days since 1970-01-01 as (year, month, day).
+fn civil_date(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (yoe + era * 400 + i64::from(month <= 2), month, day)
+}
+
+/// `utc` seconds since 1970 as seconds in the user's time zone (as it was on that date).
+#[cfg(windows)]
+fn to_local(utc: i64) -> i64 {
+    #[repr(C)]
+    #[derive(Default, Clone, Copy)]
+    struct SystemTime {
+        year: u16,
+        month: u16,
+        weekday: u16,
+        day: u16,
+        hour: u16,
+        minute: u16,
+        second: u16,
+        millis: u16,
+    }
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn SystemTimeToTzSpecificLocalTime(zone: *const u8, utc: *const SystemTime, local: *mut SystemTime) -> i32;
+    }
+    let (year, month, day) = civil_date(utc.div_euclid(86_400));
+    let rest = utc.rem_euclid(86_400);
+    let from = SystemTime {
+        year: year as u16,
+        month: month as u16,
+        day: day as u16,
+        hour: (rest / 3600) as u16,
+        minute: (rest % 3600 / 60) as u16,
+        second: (rest % 60) as u16,
+        ..Default::default()
+    };
+    let mut to = SystemTime::default();
+    // SAFETY: both pointers are to live structs of the layout Windows documents; a null zone
+    // means the current one.
+    if unsafe { SystemTimeToTzSpecificLocalTime(std::ptr::null(), &from, &mut to) } == 0 {
+        return utc;
+    }
+    // Back to seconds since 1970 (the same days arithmetic, the other way).
+    let (y, m) = (i64::from(to.year) - i64::from(to.month <= 2), i64::from(to.month));
+    let era = y.div_euclid(400);
+    let yoe = y.rem_euclid(400);
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + i64::from(to.day) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    days * 86_400 + i64::from(to.hour) * 3600 + i64::from(to.minute) * 60 + i64::from(to.second)
+}
+
+#[cfg(not(windows))]
+fn to_local(utc: i64) -> i64 {
+    utc
+}
+
+/// "11:33pm, Oct 28, 2026": when a world was last played, in the user's time zone.
+fn last_played_text(utc: i64) -> String {
+    if utc <= 0 {
+        return String::new();
+    }
+    let local = to_local(utc);
+    let (year, month, day) = civil_date(local.div_euclid(86_400));
+    let rest = local.rem_euclid(86_400);
+    let (hour, minute) = (rest / 3600, rest % 3600 / 60);
+    let months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    format!(
+        "{}:{minute:02}{}, {} {day}, {year}",
+        if hour % 12 == 0 { 12 } else { hour % 12 },
+        if hour < 12 { "am" } else { "pm" },
+        months[month as usize - 1]
+    )
+}
 /// Name, last-played time and icon of a world folder, if it is one.
 fn describe(path: &Path, edition: UiEdition) -> Option<Entry> {
     match edition {
@@ -107,7 +253,21 @@ fn describe(path: &Path, edition: UiEdition) -> Option<Entry> {
                 .and_then(|d| d.get("LastPlayed"))
                 .and_then(mctk_nbt::Tag::as_i64)
                 .map(|ms| ms / 1000);
+            let mode = data.and_then(|d| d.get("GameType")).and_then(mctk_nbt::Tag::as_i64);
+            // 26.x keeps the difficulty in difficulty_settings as a word; before it was a byte.
+            let difficulty = data
+                .and_then(|d| d.get("Difficulty").and_then(mctk_nbt::Tag::as_i64))
+                .or_else(|| {
+                    let word = data?.get("difficulty_settings")?.get("difficulty")?.as_str()?;
+                    ["peaceful", "easy", "normal", "hard"].iter().position(|d| *d == word).map(|i| i as i64)
+                });
+            let hardcore = data
+                .and_then(|d| d.get("hardcore").or_else(|| d.get("difficulty_settings")?.get("hardcore")))
+                .and_then(mctk_nbt::Tag::as_i64)
+                == Some(1);
             Some(Entry {
+                folder: path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
+                detail: world_detail(mode, difficulty, hardcore),
                 name: name.unwrap_or_else(|| {
                     path.file_name()
                         .map(|n| n.to_string_lossy().to_string())
@@ -129,7 +289,11 @@ fn describe(path: &Path, edition: UiEdition) -> Option<Entry> {
                 .ok()
                 .and_then(|b| mctk_bedrock::LevelDat::parse(&b).ok())
                 .and_then(|l| l.root.tag.get("LastPlayed").and_then(mctk_nbt::Tag::as_i64));
+            let level = std::fs::read(path.join("level.dat")).ok().and_then(|b| mctk_bedrock::LevelDat::parse(&b).ok());
+            let number = |key: &str| level.as_ref().and_then(|l| l.root.tag.get(key)).and_then(mctk_nbt::Tag::as_i64);
             Some(Entry {
+                folder: path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
+                detail: world_detail(number("GameType"), number("Difficulty"), false),
                 name: name.unwrap_or_else(|| {
                     path.file_name()
                         .map(|n| n.to_string_lossy().to_string())
@@ -153,14 +317,26 @@ fn describe(path: &Path, edition: UiEdition) -> Option<Entry> {
             let shown = folder
                 .or_else(|| path.parent().filter(|_| generic))
                 .unwrap_or(path);
+            // The save keeps its own level.dat: the game mode and difficulty are in it.
+            let data = mctk_console::ConsoleSave::open(path).ok().and_then(|save| {
+                let entry = save.archive.get("level.dat")?;
+                let (_, raw) = mctk_nbt::decompress(&entry.data).ok()?;
+                let root = mctk_nbt::from_bytes(&raw, mctk_nbt::Flavor::Java).ok()?;
+                root.tag.get("Data").cloned()
+            });
+            let number = |key: &str| data.as_ref().and_then(|d| d.get(key)).and_then(mctk_nbt::Tag::as_i64);
+            let detail = world_detail(number("GameType"), number("Difficulty"), number("hardcore") == Some(1));
+            let played = number("LastPlayed").filter(|ms| *ms > 0).map(|ms| ms / 1000);
             Some(Entry {
                 name: shown
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default(),
                 path: path.to_path_buf(),
-                last_played: mtime(path),
+                last_played: played.unwrap_or_else(|| mtime(path)),
                 icon: folder.map(|f| f.join("ICON0.PNG")),
+                folder: String::new(),
+                detail,
             })
         }
     }
@@ -300,13 +476,41 @@ impl WorldPicker {
             p.rect_filled(icon, theme::radius(3), theme::CHIP);
         }
         let x = icon.right() + 14.0;
-        p.text(
-            pos2(x, rect.center().y - 9.0),
-            Align2::LEFT_CENTER,
-            &e.name,
-            theme::bold(15.0),
-            theme::TEXT,
-        );
+        let name = p.layout_no_wrap(e.name.clone(), theme::bold(15.0), theme::TEXT);
+        let name_width = name.size().x;
+        p.galley(pos2(x, rect.center().y - 9.0 - name.size().y / 2.0), name, theme::TEXT);
+        // The folder, after the name, when it is not the name itself (Bedrock folders never are).
+        if !e.folder.is_empty() && e.folder != e.name {
+            p.text(
+                pos2(x + name_width + 6.0, rect.center().y - 9.0),
+                Align2::LEFT_CENTER,
+                format!("- {}", e.folder),
+                theme::regular(14.0),
+                theme::TEXT_DIM,
+            );
+        }
+        let when = last_played_text(e.last_played);
+        if !when.is_empty() {
+            p.text(
+                pos2(rect.right() - 12.0, rect.center().y + 11.0),
+                Align2::RIGHT_CENTER,
+                when,
+                theme::regular(12.5),
+                theme::TEXT_MUTED,
+            );
+        }
+        // Java and Bedrock worlds show their game mode and difficulty; a console save has only a
+        // path to show.
+        if !e.detail.is_empty() {
+            p.text(
+                pos2(x, rect.center().y + 11.0),
+                Align2::LEFT_CENTER,
+                &e.detail,
+                theme::regular(14.0),
+                theme::TEXT_MUTED,
+            );
+            return resp;
+        }
         let path = e.path.display().to_string().replace('\\', "/");
         let short = if path.chars().count() > 40 {
             let tail: String = path
@@ -331,6 +535,38 @@ impl WorldPicker {
         resp
     }
 
+    /// The chosen world under the list: its picture, name and path, as one card that lights up
+    /// under the pointer. Clicking it shows the world in the file explorer.
+    fn footer(ui: &mut egui::Ui, e: &Entry, height: f32) {
+        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click());
+        let resp = resp
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text("Show in the file explorer");
+        let p = ui.painter();
+        if resp.hovered() {
+            p.rect_filled(rect, 0.0, theme::BUTTON);
+        }
+        let icon = Rect::from_min_size(rect.min + vec2(8.0, 6.0), Vec2::splat(height - 12.0));
+        draw_picture(p, icon, e);
+        let x = icon.right() + 14.0;
+        p.text(
+            pos2(x, rect.center().y - 9.0),
+            Align2::LEFT_CENTER,
+            &e.name,
+            theme::bold(15.0),
+            theme::TEXT,
+        );
+        p.text(
+            pos2(x, rect.center().y + 11.0),
+            Align2::LEFT_CENTER,
+            short_path(&e.path),
+            theme::regular(12.5),
+            theme::TEXT_MUTED,
+        );
+        if resp.clicked() {
+            show_in_explorer(&e.path);
+        }
+    }
     /// Draws the dialog; returns what the user did this frame.
     pub fn show(&mut self, ctx: &egui::Context, settings: &mut Settings) -> Picked {
         let mut result = Picked::Nothing;
@@ -354,19 +590,9 @@ impl WorldPicker {
                 theme::regular(16.0),
                 theme::TEXT,
             );
-            let close =
-                Rect::from_center_size(bar.right_center() - vec2(20.0, 0.0), Vec2::splat(26.0));
-            let cr = ui.interact(close, egui::Id::new("picker-close"), Sense::click());
-            icons::paint(
-                ui.painter(),
-                close.shrink(7.0),
-                Icon::Close,
-                if cr.hovered() {
-                    Color32::WHITE
-                } else {
-                    theme::TEXT
-                },
-            );
+            // The small X of the tabs and the messages: it lights up under the pointer.
+            let close = Rect::from_center_size(bar.right_center() - vec2(22.0, 0.0), Vec2::splat(28.0));
+            let cr = crate::editor::close_button(ui, close, egui::Id::new("picker-close"));
             if cr.clicked() {
                 result = Picked::Cancelled;
             }
@@ -584,7 +810,7 @@ impl WorldPicker {
                     footer.min + vec2(0.0, 6.0),
                     vec2(footer.width() - 180.0, 72.0),
                 )));
-                Self::row(&mut child, e, false, 72.0);
+                Self::footer(&mut child, e, 72.0);
             }
             let br = Rect::from_min_size(
                 pos2(footer.right() - 160.0, footer.top() + 16.0),

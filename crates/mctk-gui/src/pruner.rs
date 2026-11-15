@@ -21,10 +21,149 @@ use crate::world_picker::UiEdition;
 #[derive(Debug, Clone, PartialEq)]
 enum PLayer {
     Box { x: f64, z: f64, w: f64, h: f64 },
-    Circle { x: f64, z: f64, r: f64 },
-    Split { x: f64, z: f64, angle: f64 },
+    /// `a` is the angle (radians) of the radius handle, so it can be turned around the circle.
+    Circle { x: f64, z: f64, r: f64, a: f64 },
+    /// `angle` is the direction of the dividing line (as in the pruner crate); the arrow from the
+    /// start points to the side that is selected, a quarter turn on. `len` is how far (in chunks)
+    /// the arrow's tip is, so it can be any length and its tip sits on the middle of a chunk.
+    Split { x: f64, z: f64, angle: f64, len: f64 },
     Polygon { points: Vec<(f64, f64)> },
     Time { cmp: usize, ticks: f64 },
+}
+
+/// Diagonal hatch lines over just the part of `r` where `inside` holds.
+fn hatch_where(p: &egui::Painter, r: Rect, s: f32, stroke: Stroke, inside: &dyn Fn(Pos2) -> bool) {
+    let c0 = ((r.left() - r.bottom()) / s).floor() as i32;
+    let c1 = ((r.right() - r.top()) / s).ceil() as i32;
+    for k in c0..=c1 {
+        let c = k as f32 * s;
+        let (xa, xb) = (r.left().max(r.top() + c), r.right().min(r.bottom() + c));
+        if xa >= xb {
+            continue;
+        }
+        let mut start: Option<Pos2> = None;
+        let mut last = pos2(xa, xa - c);
+        let mut x = xa;
+        while x <= xb {
+            let q = pos2(x, x - c);
+            match (inside(q), start) {
+                (true, None) => start = Some(q),
+                (false, Some(a)) => {
+                    p.line_segment([a, last], stroke);
+                    start = None;
+                }
+                _ => {}
+            }
+            last = q;
+            x += 1.0;
+        }
+        if let Some(a) = start {
+            p.line_segment([a, last], stroke);
+        }
+    }
+}
+
+/// A card's picture of its layer as it really is: the box with its own proportions, the polygon
+/// outline, the split's line with its arrow, with the part that gets removed shaded and hatched
+/// as on the map. Inverted removes everything around the shape instead.
+fn draw_thumb(p: &egui::Painter, rect: Rect, layer: &PLayer, inverted: bool) {
+    p.rect_filled(rect, theme::radius(3), theme::DEEP);
+    if let PLayer::Time { .. } = layer {
+        if !icons::image(p, rect, "THUMB_TIME", Color32::WHITE) {
+            icons::paint(p, rect.shrink(9.0), layer.icon(), theme::RED);
+        }
+        return;
+    }
+    let p = p.with_clip_rect(rect);
+    let tint = Color32::from_rgba_unmultiplied(170, 40, 40, 80);
+    let hatch_line = Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(235, 60, 60, 190));
+    let edge = Stroke::new(1.5_f32, theme::RED);
+    let inner = rect.shrink(6.0);
+    let c = inner.center();
+    // Where the shape is, in the picture.
+    let inside: Box<dyn Fn(Pos2) -> bool>;
+    let mut outline: Vec<Pos2> = Vec::new();
+    match layer {
+        PLayer::Box { w, h, .. } => {
+            let s = (inner.width() / (*w as f32).max(0.01)).min(inner.height() / (*h as f32).max(0.01));
+            let size = vec2(*w as f32 * s, *h as f32 * s).max(vec2(3.0, 3.0));
+            let r = Rect::from_center_size(c, size);
+            outline = vec![r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()];
+            inside = Box::new(move |q| r.contains(q));
+        }
+        PLayer::Circle { .. } => {
+            let rad = inner.width() / 2.0;
+            outline = (0..=48)
+                .map(|k| {
+                    let a = k as f32 / 48.0 * std::f32::consts::TAU;
+                    c + vec2(a.cos(), a.sin()) * rad
+                })
+                .collect();
+            inside = Box::new(move |q| (q - c).length() <= rad);
+        }
+        PLayer::Split { angle, .. } => {
+            let a = angle.to_radians();
+            let dir = vec2(a.cos() as f32, a.sin() as f32);
+            let n = vec2(-dir.y, dir.x);
+            outline = vec![c - dir * 80.0, c + dir * 80.0];
+            inside = Box::new(move |q| (q - c).dot(n) > 0.0);
+        }
+        PLayer::Polygon { points } if points.len() >= 3 => {
+            let (mut lo, mut hi) = (points[0], points[0]);
+            for q in points {
+                lo = (lo.0.min(q.0), lo.1.min(q.1));
+                hi = (hi.0.max(q.0), hi.1.max(q.1));
+            }
+            let s = (inner.width() / ((hi.0 - lo.0) as f32).max(0.01))
+                .min(inner.height() / ((hi.1 - lo.1) as f32).max(0.01));
+            let mid = ((lo.0 + hi.0) / 2.0, (lo.1 + hi.1) / 2.0);
+            let pts: Vec<Pos2> = points
+                .iter()
+                .map(|q| c + vec2((q.0 - mid.0) as f32 * s, (q.1 - mid.1) as f32 * s))
+                .collect();
+            outline = pts.clone();
+            outline.push(pts[0]);
+            inside = Box::new(move |q| {
+                let mut hit = false;
+                for k in 0..pts.len() {
+                    let (a, b) = (pts[k], pts[(k + 1) % pts.len()]);
+                    if (a.y > q.y) != (b.y > q.y) && q.x < (b.x - a.x) * (q.y - a.y) / (b.y - a.y) + a.x {
+                        hit = !hit;
+                    }
+                }
+                hit
+            });
+        }
+        PLayer::Polygon { .. } | PLayer::Time { .. } => {
+            icons::paint(&p, rect.shrink(9.0), layer.icon(), theme::RED);
+            return;
+        }
+    }
+    // Shade and hatch what is removed, a bit of the way as the map does.
+    let removed = move |q: Pos2| inside(q) != inverted;
+    let mut y = rect.top();
+    while y < rect.bottom() {
+        let mut x = rect.left();
+        while x < rect.right() {
+            if removed(pos2(x + 1.0, y + 1.0)) {
+                p.rect_filled(Rect::from_min_size(pos2(x, y), vec2(2.0, 2.0)), 0.0, tint);
+            }
+            x += 2.0;
+        }
+        y += 2.0;
+    }
+    hatch_where(&p, rect, 5.0, hatch_line, &removed);
+    if outline.len() > 1 {
+        p.add(Shape::line(outline, edge));
+    }
+}
+/// Radius (screen pixels) of the area that grabs a whole shape to move it.
+const MOVE_AREA: f32 = 14.0;
+
+/// How big the grab area of a shape that is `extent` pixels across is: smaller for a shape
+/// seen from far away, so it does not swallow it.
+fn move_area(extent: f32) -> f32 {
+    (extent * 0.25).clamp(8.0, MOVE_AREA)
 }
 
 const COMPARISONS: [(&str, Comparison); 5] = [
@@ -63,12 +202,12 @@ impl PLayer {
                 width: b(*w),
                 height: b(*h),
             },
-            PLayer::Circle { x, z, r } => Layer::Circle {
+            PLayer::Circle { x, z, r, .. } => Layer::Circle {
                 x: b(*x),
                 z: b(*z),
                 radius: b(*r),
             },
-            PLayer::Split { x, z, angle } => Layer::Split {
+            PLayer::Split { x, z, angle, .. } => Layer::Split {
                 x: b(*x),
                 z: b(*z),
                 angle: *angle,
@@ -86,56 +225,229 @@ impl PLayer {
     /// Handle positions (chunk units) for dragging.
     fn handles(&self) -> Vec<(f64, f64)> {
         match self {
-            PLayer::Box { x, z, w, h } => vec![(*x, *z), (x + w, *z), (x + w, z + h), (*x, z + h)],
-            PLayer::Circle { x, z, r } => vec![
-                (*x, *z),
-                (
-                    x + r * std::f64::consts::FRAC_1_SQRT_2,
-                    z + r * std::f64::consts::FRAC_1_SQRT_2,
-                ),
+            PLayer::Box { x, z, w, h } => vec![
+                // The corner dots sit in the middle of the corner chunks.
+                (x + 0.5, z + 0.5),
+                (x + w - 0.5, z + 0.5),
+                (x + w - 0.5, z + h - 0.5),
+                (x + 0.5, z + h - 0.5),
+                (x + w / 2.0, z + h / 2.0),
             ],
-            PLayer::Split { x, z, angle } => {
-                let a = angle.to_radians();
-                vec![(*x, *z), (x + 6.0 * a.cos(), z + 6.0 * a.sin())]
+            PLayer::Circle { x, z, r, a } => vec![(*x, *z), (x + r * a.cos(), z + r * a.sin())],
+            PLayer::Split { x, z, angle, len } => {
+                let a = (angle + 90.0).to_radians();
+                vec![(*x, *z), (x + len * a.cos(), z + len * a.sin())]
             }
-            PLayer::Polygon { points } => points.clone(),
+            PLayer::Polygon { points } => {
+                let mut v = points.clone();
+                v.extend(self.bounds_centre());
+                v
+            }
             PLayer::Time { .. } => Vec::new(),
+        }
+    }
+    /// For a box, the middles of the chunks around its centre: one chunk, two or four, depending
+    /// on whether the centre is on a chunk edge or corner. The move dot stretches over them.
+    fn move_span(&self) -> Option<((f64, f64), (f64, f64))> {
+        let PLayer::Box { x, z, w, h } = self else { return None };
+        let span = |lo: f64, size: f64| {
+            let c = lo + size / 2.0;
+            if (c - c.floor() - 0.5).abs() < 1e-6 { (c, c) } else { (c.round() - 0.5, c.round() + 0.5) }
+        };
+        let (x0, x1) = span(*x, *w);
+        let (z0, z1) = span(*z, *h);
+        Some(((x0, z0), (x1, z1)))
+    }
+    /// The point the shape's resize dots are seen from: its middle.
+    fn anchor(&self) -> (f64, f64) {
+        match self {
+            PLayer::Box { x, z, w, h } => (x + w / 2.0, z + h / 2.0),
+            PLayer::Circle { x, z, .. } | PLayer::Split { x, z, .. } => (*x, *z),
+            PLayer::Polygon { .. } => self.bounds_centre().unwrap_or((0.0, 0.0)),
+            PLayer::Time { .. } => (0.0, 0.0),
+        }
+    }
+    /// The handle under a screen point: a reshaping dot first, else the grab area that moves it.
+    fn pick_handle(&self, q: Pos2, to_screen: &dyn Fn((f64, f64)) -> Pos2) -> Option<usize> {
+        let hs = self.handles();
+        // The grab area is bigger than the 10 px dot.
+        let near = |hi: usize, r: f32| to_screen(hs[hi]).distance(q) < r;
+        let near_move = |hi: usize| match self.move_span() {
+            Some((lo, hi_)) => {
+                let r = Rect::from_two_pos(to_screen(lo), to_screen(hi_)).expand(5.0);
+                let (dx, dy) = ((r.left() - q.x).max(q.x - r.right()).max(0.0), (r.top() - q.y).max(q.y - r.bottom()).max(0.0));
+                dx.hypot(dy) < 8.0
+            }
+            None => near(hi, self.move_radius(to_screen)),
+        };
+        (0..hs.len())
+            .find(|hi| !self.is_move_handle(*hi) && near(*hi, 13.0))
+            .or_else(|| (0..hs.len()).find(|hi| self.is_move_handle(*hi) && near_move(*hi)))
+    }
+    /// The radius of the area that moves the shape, on screen.
+    fn move_radius(&self, to_screen: &dyn Fn((f64, f64)) -> Pos2) -> f32 {
+        let per_chunk = to_screen((1.0, 0.0)).x - to_screen((0.0, 0.0)).x;
+        let chunks = match self {
+            PLayer::Box { w, h, .. } => w.min(*h),
+            PLayer::Circle { r, .. } => r * 2.0,
+            PLayer::Split { len, .. } => *len,
+            PLayer::Polygon { .. } => {
+                let b = self.handles();
+                let xs = b.iter().map(|p| p.0);
+                let zs = b.iter().map(|p| p.1);
+                let span = |v: &mut dyn Iterator<Item = f64>| {
+                    let (lo, hi) = v.fold((f64::MAX, f64::MIN), |(l, h), x| (l.min(x), h.max(x)));
+                    hi - lo
+                };
+                span(&mut xs.clone()).min(span(&mut zs.clone()))
+            }
+            PLayer::Time { .. } => 0.0,
+        };
+        move_area(chunks as f32 * per_chunk.abs())
+    }
+    /// Whether handle `i` moves the whole shape (a round dot) rather than reshaping it.
+    fn is_move_handle(&self, i: usize) -> bool {
+        match self {
+            PLayer::Box { .. } => i == 4,
+            PLayer::Circle { .. } | PLayer::Split { .. } => i == 0,
+            PLayer::Polygon { points } => i == points.len(),
+            PLayer::Time { .. } => false,
+        }
+    }
+    /// The middle of a polygon's bounding box.
+    fn bounds_centre(&self) -> Option<(f64, f64)> {
+        let PLayer::Polygon { points } = self else { return None };
+        let first = points.first()?;
+        let (mut lo, mut hi) = (*first, *first);
+        for p in points {
+            lo = (lo.0.min(p.0), lo.1.min(p.1));
+            hi = (hi.0.max(p.0), hi.1.max(p.1));
+        }
+        Some(((lo.0 + hi.0) / 2.0, (lo.1 + hi.1) / 2.0))
+    }
+    /// The outline in chunk units: closed shapes end where they began; a split is a long line.
+    fn outline(&self) -> Vec<(f64, f64)> {
+        match self {
+            PLayer::Box { x, z, w, h } => {
+                // Through the corner dots (the middles of the corner chunks).
+                let (x0, z0, x1, z1) = (x + 0.5, z + 0.5, x + w - 0.5, z + h - 0.5);
+                vec![(x0, z0), (x1, z0), (x1, z1), (x0, z1), (x0, z0)]
+            }
+            PLayer::Circle { x, z, r, .. } => (0..=96)
+                .map(|k| {
+                    let a = k as f64 / 96.0 * std::f64::consts::TAU;
+                    (x + r * a.cos(), z + r * a.sin())
+                })
+                .collect(),
+            PLayer::Split { x, z, angle, .. } => {
+                // The dividing line, long enough to leave the view; see `arrow` for the other part.
+                let a = angle.to_radians();
+                vec![
+                    (x - 4000.0 * a.cos(), z - 4000.0 * a.sin()),
+                    (x + 4000.0 * a.cos(), z + 4000.0 * a.sin()),
+                ]
+            }
+            PLayer::Polygon { points } => {
+                let mut v = points.clone();
+                if let Some(f) = v.first().copied() {
+                    v.push(f);
+                }
+                v
+            }
+            PLayer::Time { .. } => Vec::new(),
+        }
+    }
+    /// A split's arrow, from its start to its tip.
+    fn arrow(&self) -> Option<((f64, f64), (f64, f64))> {
+        matches!(self, PLayer::Split { .. }).then(|| {
+            let h = self.handles();
+            (h[0], h[1])
+        })
+    }
+    /// Whether a point (chunk units) is inside the area this layer selects.
+    fn contains(&self, (px, pz): (f64, f64)) -> bool {
+        match self {
+            PLayer::Box { x, z, w, h } => px > *x && px < x + w && pz > *z && pz < z + h,
+            PLayer::Circle { x, z, r, .. } => (px - x).hypot(pz - z) < *r,
+            PLayer::Split { x, z, angle, .. } => {
+                let a = angle.to_radians();
+                a.cos() * (pz - z) - a.sin() * (px - x) > 0.0
+            }
+            PLayer::Polygon { points } => {
+                let mut inside = false;
+                let mut j = points.len().wrapping_sub(1);
+                for (k, a) in points.iter().enumerate() {
+                    let b = points[j];
+                    if (a.1 > pz) != (b.1 > pz) && px < (b.0 - a.0) * (pz - a.1) / (b.1 - a.1) + a.0 {
+                        inside = !inside;
+                    }
+                    j = k;
+                }
+                inside
+            }
+            PLayer::Time { .. } => false,
+        }
+    }
+    /// Whether a point is inside the shape as its outline is drawn. A box's outline runs through
+    /// the middles of its corner chunks, so that is where other shapes' outlines meet it: they are
+    /// hidden inside that line, not inside the chunks' outer edge.
+    fn outline_contains(&self, (px, pz): (f64, f64)) -> bool {
+        match self {
+            PLayer::Box { x, z, w, h } => px > x + 0.5 && px < x + w - 0.5 && pz > z + 0.5 && pz < z + h - 0.5,
+            other => other.contains((px, pz)),
         }
     }
     fn drag_handle(&mut self, i: usize, to: (f64, f64)) {
         match self {
             PLayer::Box { x, z, w, h } => {
+                if i == 4 {
+                    // The middle area moves the box a whole number of chunks.
+                    *x += (to.0 - (*x + *w / 2.0)).round();
+                    *z += (to.1 - (*z + *h / 2.0)).round();
+                    return;
+                }
+                // The opposite corner chunk stays; the box covers it and the chunk under the dot.
                 let (ax, az) = match i {
-                    0 => (*x + *w, *z + *h),
-                    1 => (*x, *z + *h),
-                    2 => (*x, *z),
-                    _ => (*x + *w, *z),
+                    0 => (*x + *w - 0.5, *z + *h - 0.5),
+                    1 => (*x + 0.5, *z + *h - 0.5),
+                    2 => (*x + 0.5, *z + 0.5),
+                    _ => (*x + *w - 0.5, *z + 0.5),
                 };
-                let (tx, tz) = (to.0.round(), to.1.round());
-                *x = ax.min(tx);
-                *z = az.min(tz);
-                *w = (ax - tx).abs();
-                *h = (az - tz).abs();
+                let (tx, tz) = centre(to);
+                *x = ax.min(tx) - 0.5;
+                *z = az.min(tz) - 0.5;
+                *w = (ax - tx).abs() + 1.0;
+                *h = (az - tz).abs() + 1.0;
             }
-            PLayer::Circle { x, z, r } => {
+            PLayer::Circle { x, z, r, a } => {
                 if i == 0 {
-                    *x = to.0;
-                    *z = to.1;
+                    (*x, *z) = centre(to);
                 } else {
-                    *r = ((to.0 - *x).powi(2) + (to.1 - *z).powi(2)).sqrt();
+                    // The handle sits on the middle of a chunk and can go all the way round.
+                    let at = centre(to);
+                    *r = circle_radius((*x, *z), at);
+                    *a = (at.1 - *z).atan2(at.0 - *x);
                 }
             }
-            PLayer::Split { x, z, angle } => {
+            PLayer::Split { x, z, angle, len } => {
                 if i == 0 {
-                    *x = to.0;
-                    *z = to.1;
+                    (*x, *z) = centre(to);
                 } else {
-                    *angle = (to.1 - *z).atan2(to.0 - *x).to_degrees().rem_euclid(360.0);
+                    let at = centre(to);
+                    *len = circle_radius((*x, *z), at);
+                    *angle = ((at.1 - *z).atan2(at.0 - *x).to_degrees() - 90.0).rem_euclid(360.0);
                 }
             }
             PLayer::Polygon { points } => {
-                if let Some(p) = points.get_mut(i) {
-                    *p = to;
+                if i == points.len() {
+                    if let Some((cx, cz)) = self_bounds(points) {
+                        let (dx, dz) = ((to.0 - cx).round(), (to.1 - cz).round());
+                        for p in points.iter_mut() {
+                            *p = (p.0 + dx, p.1 + dz);
+                        }
+                    }
+                } else if let Some(p) = points.get_mut(i) {
+                    *p = centre(to);
                 }
             }
             PLayer::Time { .. } => {}
@@ -143,6 +455,96 @@ impl PLayer {
     }
 }
 
+/// The middle of the bounding box of some points.
+fn self_bounds(points: &[(f64, f64)]) -> Option<(f64, f64)> {
+    PLayer::Polygon { points: points.to_vec() }.bounds_centre()
+}
+
+/// The middle of the chunk a point (chunk units) is in: where shapes snap to.
+fn centre(c: (f64, f64)) -> (f64, f64) {
+    (c.0.floor() + 0.5, c.1.floor() + 0.5)
+}
+
+/// A circle's radius from its centre to a point (the middle of a chunk), at least one chunk.
+fn circle_radius(from: (f64, f64), to: (f64, f64)) -> f64 {
+    (to.0 - from.0).hypot(to.1 - from.1).max(1.0)
+}
+
+/// The part of the segment `a`-`b` inside `rect`, if any.
+fn clip_segment(a: Pos2, b: Pos2, rect: Rect) -> Option<(Pos2, Pos2)> {
+    let (mut t0, mut t1) = (0.0_f32, 1.0_f32);
+    let d = b - a;
+    for (p, q) in [
+        (-d.x, a.x - rect.left()),
+        (d.x, rect.right() - a.x),
+        (-d.y, a.y - rect.top()),
+        (d.y, rect.bottom() - a.y),
+    ] {
+        if p == 0.0 {
+            if q < 0.0 {
+                return None;
+            }
+        } else {
+            let t = q / p;
+            if p < 0.0 {
+                t0 = t0.max(t);
+            } else {
+                t1 = t1.min(t);
+            }
+        }
+    }
+    (t0 < t1).then(|| (a + d * t0, a + d * t1))
+}
+
+/// The parts of a layer's outline (screen points) that are in view and not inside any of
+/// `others`, so overlapping shapes show as one joined outline. The flag is true when the whole
+/// outline came through untouched.
+fn visible_runs(
+    pts: &[Pos2],
+    others: &[&PLayer],
+    to_chunk: &dyn Fn(Pos2) -> (f64, f64),
+    view: Rect,
+) -> (Vec<Vec<Pos2>>, bool) {
+    let mut runs: Vec<Vec<Pos2>> = Vec::new();
+    let mut run: Vec<Pos2> = Vec::new();
+    let mut whole = true;
+    let flush = |run: &mut Vec<Pos2>, runs: &mut Vec<Vec<Pos2>>| {
+        if run.len() > 1 {
+            runs.push(std::mem::take(run));
+        }
+        run.clear();
+    };
+    for w in pts.windows(2) {
+        let Some((a, b)) = clip_segment(w[0], w[1], view) else {
+            whole = false;
+            flush(&mut run, &mut runs);
+            continue;
+        };
+        if a.distance(w[0]) > 0.5 || b.distance(w[1]) > 0.5 {
+            whole = false;
+        }
+        if run.last().is_some_and(|l| l.distance(a) > 0.5) {
+            flush(&mut run, &mut runs);
+        }
+        let n = ((a.distance(b) / 3.0).ceil() as usize).clamp(1, 4000);
+        for k in 0..n {
+            let s0 = a.lerp(b, k as f32 / n as f32);
+            let s1 = a.lerp(b, (k + 1) as f32 / n as f32);
+            let mid = to_chunk(s0.lerp(s1, 0.5));
+            if others.iter().any(|o| o.outline_contains(mid)) {
+                whole = false;
+                flush(&mut run, &mut runs);
+            } else {
+                if run.is_empty() {
+                    run.push(s0);
+                }
+                run.push(s1);
+            }
+        }
+    }
+    flush(&mut run, &mut runs);
+    (runs, whole)
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tool {
     Box,
@@ -161,9 +563,114 @@ pub struct PrunerPage {
     drawing: Option<((f64, f64), (f64, f64))>,
     polygon: Vec<(f64, f64)>,
     dragging: Option<(usize, usize)>,
+    /// The chunks last shaded as removed, with what they were worked out for, so a still
+    /// picture is not recomputed every frame.
+    shade: Option<(ShadeKey, std::rc::Rc<Vec<(i32, i32)>>)>,
+    /// Earlier states, newest last, for Undo; and the ones undone, for Redo.
+    undo: Vec<(Snap, String)>,
+    redo: Vec<(Snap, String)>,
+    /// The state at the last point it was settled; changes since are one step.
+    base: Option<Snap>,
     job: Option<Job<std::path::PathBuf>>,
     confirm_close: bool,
+    /// The chunks of the dimension shown, by position, with their InhabitedTime once a Time
+    /// layer needs it: what the list was read for (world, dimension, with times), the reading
+    /// in progress, and the result. Only chunks that exist can be removed.
+    chunks_for: Option<(std::path::PathBuf, String, bool)>,
+    chunks_job: Option<Job<std::collections::HashMap<(i32, i32), Option<i64>>>>,
+    chunks: std::rc::Rc<std::collections::HashMap<(i32, i32), Option<i64>>>,
+    chunks_loaded: bool,
+    /// The running job is an Optimize, not a prune.
+    optimizing: bool,
+    /// Asking whether to optimize the world.
+    confirm_optimize: bool,
+    /// The picture of where the shapes are (see `map`), with what it was drawn for.
+    mask: Option<(MaskKey, egui::TextureHandle)>,
+    /// The other open worlds, each with its own layers and history.
+    parked: Vec<Parked>,
+    /// Showing the "Select a World to Prune" chooser while a world is open.
+    choosing: bool,
     pub status: String,
+}
+
+/// A world that is open but not the one shown, with what was drawn on it.
+struct Parked {
+    ws: Workspace,
+    layers: Vec<PLayer>,
+    selected: Option<usize>,
+    inverted: bool,
+    undo: Vec<(Snap, String)>,
+    redo: Vec<(Snap, String)>,
+    base: Option<Snap>,
+}
+
+/// Everything Undo and Redo bring back: the layers and mode, and which world folder is open
+/// (a prune swaps in a pruned copy, which Undo swaps back).
+#[derive(Clone)]
+struct Snap {
+    layers: Vec<PLayer>,
+    inverted: bool,
+    selected: Option<usize>,
+    world: Option<(std::path::PathBuf, bool, bool)>,
+}
+
+impl Snap {
+    fn same(&self, other: &Snap) -> bool {
+        // Which world is open counts; saving it (which only changes its flags) does not.
+        self.layers == other.layers
+            && self.inverted == other.inverted
+            && self.world.as_ref().map(|w| &w.0) == other.world.as_ref().map(|w| &w.0)
+    }
+}
+
+/// What a change between two states was, in a few words, for the Undo and Redo messages.
+fn describe_change(before: &Snap, after: &Snap) -> String {
+    let title = |l: &PLayer| l.title().to_lowercase();
+    if before.world.as_ref().map(|w| &w.0) != after.world.as_ref().map(|w| &w.0) {
+        return "Pruned the world".into();
+    }
+    if after.layers.len() > before.layers.len() {
+        let added = after.layers.iter().find(|l| !before.layers.contains(l)).or(after.layers.last());
+        return format!("Added a {} layer", added.map_or(String::new(), title));
+    }
+    if after.layers.len() < before.layers.len() {
+        let gone = before.layers.iter().find(|l| !after.layers.contains(l)).or(before.layers.last());
+        return format!("Removed a {} layer", gone.map_or(String::new(), title));
+    }
+    if before.inverted != after.inverted {
+        return if after.inverted {
+            "Switched to Inverted (everything but the shapes is removed)".into()
+        } else {
+            "Switched to Normal (the shapes are removed)".into()
+        };
+    }
+    "Edited a layer".into()
+}
+
+type ShadeKey = (Vec<PLayer>, bool, (i32, i32, i32, i32));
+/// What the shape mask was drawn for: the shapes and the view (as bits).
+type MaskKey = (Vec<PLayer>, [u32; 8]);
+
+/// The size of a file, or of everything in a folder.
+fn size_of(path: &Path) -> u64 {
+    match std::fs::metadata(path) {
+        Ok(m) if m.is_file() => m.len(),
+        Ok(_) => std::fs::read_dir(path)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| size_of(&e.path()))
+            .sum(),
+        Err(_) => 0,
+    }
+}
+
+fn human_size(bytes: u64) -> String {
+    if bytes >= 1 << 20 {
+        format!("{:.1} MB", bytes as f64 / (1 << 20) as f64)
+    } else {
+        format!("{} KB", bytes.div_ceil(1024))
+    }
 }
 
 pub enum PrunerRequest {
@@ -194,15 +701,190 @@ fn hatch(p: &egui::Painter, r: Rect, s: f32, stroke: Stroke) {
 }
 
 impl PrunerPage {
+    /// The worlds open in this page, the one shown first.
+    pub fn open_worlds(&self) -> Vec<(String, std::path::PathBuf)> {
+        self.ws
+            .iter()
+            .chain(self.parked.iter().map(|p| &p.ws))
+            .map(|w| (w.edition.subject(&w.name), w.original.clone()))
+            .collect()
+    }
+
+    /// Forgets what was drawn: the layers, their history and anything half drawn.
+    fn clear_drawing(&mut self) {
+        self.layers.clear();
+        self.selected = None;
+        self.undo.clear();
+        self.redo.clear();
+        self.base = None;
+        self.drawing = None;
+        self.polygon.clear();
+        self.dragging = None;
+        self.shade = None;
+    }
+
+    /// Puts the world shown aside, with its layers, and leaves the page empty.
+    fn park(&mut self) -> Option<Parked> {
+        let ws = self.ws.take()?;
+        let parked = Parked {
+            ws,
+            layers: std::mem::take(&mut self.layers),
+            selected: self.selected,
+            inverted: self.inverted,
+            undo: std::mem::take(&mut self.undo),
+            redo: std::mem::take(&mut self.redo),
+            base: self.base.take(),
+        };
+        self.clear_drawing();
+        Some(parked)
+    }
+
+    /// Shows a world that was put aside.
+    fn unpark(&mut self, p: Parked) {
+        self.clear_drawing();
+        self.ws = Some(p.ws);
+        self.layers = p.layers;
+        self.selected = p.selected;
+        self.inverted = p.inverted;
+        self.undo = p.undo;
+        self.redo = p.redo;
+        self.base = p.base;
+    }
+
+    /// Shows the `i`th of the other worlds and puts the shown one in its place.
+    fn switch_to(&mut self, i: usize) {
+        if self.job.is_some() || i >= self.parked.len() {
+            return;
+        }
+        let next = self.parked.remove(i);
+        if let Some(current) = self.park() {
+            self.parked.insert(i, current);
+        }
+        self.unpark(next);
+        self.choosing = false;
+    }
+
+    /// Closes the world shown; another open one takes its place.
+    fn close_current(&mut self) {
+        self.ws = None;
+        self.clear_drawing();
+        self.choosing = false;
+        if let Some(p) = self.parked.pop() {
+            self.unpark(p);
+        }
+    }
+
     pub fn open_world(&mut self, path: &Path, edition: UiEdition, settings: &Settings) {
+        // Already open here: show that one instead of reading the world a second time.
+        if let Some(i) = self
+            .open_worlds()
+            .iter()
+            .position(|(_, original)| crate::editor::same_path(original, path))
+        {
+            let name = self.open_worlds()[i].0.clone();
+            if i > 0 {
+                self.switch_to(i - 1);
+            }
+            self.choosing = false;
+            self.status = format!("{name} is already open in the Pruner, so it was not opened again.");
+            return;
+        }
         match Workspace::open(path, edition, settings, false, false) {
             Ok(ws) => {
-                self.status.clear();
+                if let Some(current) = self.park() {
+                    self.parked.push(current);
+                }
+                self.clear_drawing();
+                self.status = format!("Opened {}", ws.name);
                 self.ws = Some(ws);
-                self.layers.clear();
-                self.selected = None;
+                self.choosing = false;
             }
             Err(e) => self.status = format!("Could not open the world: {e}"),
+        }
+    }
+
+    fn snapshot(&self) -> Snap {
+        Snap {
+            layers: self.layers.clone(),
+            inverted: self.inverted,
+            selected: self.selected,
+            world: self.ws.as_ref().map(|w| (w.path.clone(), w.copied, w.world_changed)),
+        }
+    }
+
+    /// Makes a change a step of its own once it is settled (not while a shape or number is
+    /// still being dragged), so one drag is one Undo.
+    fn track_history(&mut self, ui: &Ui) {
+        let now = self.snapshot();
+        let Some(base) = &self.base else {
+            self.base = Some(now);
+            return;
+        };
+        if base.same(&now) {
+            return;
+        }
+        if self.dragging.is_some() || ui.input(|i| i.pointer.any_down()) {
+            return;
+        }
+        if let Some(old) = self.base.replace(now) {
+            let what = describe_change(&old, self.base.as_ref().expect("just set"));
+            // Adding or removing a layer and switching the mode are worth a message.
+            if !what.is_empty() && !what.starts_with("Edited") && !what.starts_with("Pruned") {
+                self.status = what.clone();
+            }
+            self.undo.push((old, what));
+            if self.undo.len() > 200 {
+                self.undo.remove(0);
+            }
+            self.redo.clear();
+        }
+    }
+
+    fn restore(&mut self, s: Snap) {
+        self.layers = s.layers.clone();
+        self.inverted = s.inverted;
+        self.selected = s.selected.filter(|i| *i < self.layers.len());
+        self.polygon.clear();
+        self.drawing = None;
+        self.dragging = None;
+        if let (Some(ws), Some((path, copied, changed))) = (self.ws.as_mut(), &s.world) {
+            if ws.path != *path {
+                ws.path = path.clone();
+                ws.map.reload(path.clone());
+            }
+            ws.copied = *copied;
+            ws.world_changed = *changed;
+        }
+        self.base = Some(s);
+    }
+
+    fn can_undo(&self) -> bool {
+        self.job.is_none() && !self.undo.is_empty()
+    }
+
+    fn can_redo(&self) -> bool {
+        self.job.is_none() && !self.redo.is_empty()
+    }
+
+    fn undo(&mut self) {
+        if !self.can_undo() {
+            return;
+        }
+        if let Some((prev, what)) = self.undo.pop() {
+            self.redo.push((self.snapshot(), what.clone()));
+            self.restore(prev);
+            self.status = format!("Undid: {}", what.to_lowercase());
+        }
+    }
+
+    fn redo(&mut self) {
+        if !self.can_redo() {
+            return;
+        }
+        if let Some((next, what)) = self.redo.pop() {
+            self.undo.push((self.snapshot(), what.clone()));
+            self.restore(next);
+            self.status = format!("Redid: {}", what.to_lowercase());
         }
     }
 
@@ -219,6 +901,7 @@ impl PrunerPage {
                 return;
             }
         };
+        self.status = "Pruning the world…".into();
         self.job = Some(Job::spawn_notifying("Pruning", ctx, move || {
             let java_dim = match dim.as_str() {
                 "minecraft:the_nether" => -1,
@@ -255,41 +938,67 @@ impl PrunerPage {
         let mut request = PrunerRequest::None;
         if let Some(r) = self.job.as_ref().and_then(Job::take) {
             self.job = None;
+            let optimizing = std::mem::take(&mut self.optimizing);
             match r {
                 Ok(new_path) => {
+                    let before = self.ws.as_ref().map_or(0, |w| size_of(&w.path));
                     if let Some(ws) = &mut self.ws {
                         ws.path = new_path.clone();
                         ws.copied = true;
                         ws.world_changed = true;
-                        ws.map.reload(new_path);
+                        ws.map.reload(new_path.clone());
                     }
-                    self.layers.clear();
-                    self.selected = None;
-                    self.status = "Pruned. Save to write the result back to the world.".into();
+                    if optimizing {
+                        // What was drawn stays: nothing was removed.
+                        self.status = format!(
+                            "Optimized: {} down to {}. Save to write the result back to the world.",
+                            human_size(before),
+                            human_size(size_of(&new_path))
+                        );
+                    } else {
+                        self.layers.clear();
+                        self.selected = None;
+                        self.status = "Pruned. Save to write the result back to the world.".into();
+                    }
                 }
-                Err(e) => self.status = format!("Prune failed: {e}"),
+                Err(e) => {
+                    self.status = format!("{} failed: {e}", if optimizing { "Optimize" } else { "Prune" });
+                }
             }
         }
-        if self.ws.is_none() {
+        if self.ws.is_none() || self.choosing {
             if let Some(e) = edition_chooser(ui, "Select a World to Prune", None) {
                 request = PrunerRequest::PickWorld(e);
             }
+            if self.ws.is_some() {
+                // Changed their mind: back to the world that was open.
+                let r = Rect::from_min_size(ui.max_rect().left_top() + vec2(16.0, 16.0), vec2(110.0, 32.0));
+                let mut back = ui.new_child(egui::UiBuilder::new().max_rect(r));
+                if widgets::button(&mut back, Some(Icon::Close), "Cancel", 110.0, true).clicked() {
+                    self.choosing = false;
+                }
+            }
             return request;
+        }
+        // Ctrl+Z undoes, Ctrl+Y or Ctrl+Shift+Z redoes (unless a text field is being typed in).
+        if !ui.ctx().wants_keyboard_input() {
+            let (redo, undo) = ui.input_mut(|i| {
+                let redo = i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::Z)
+                    || i.consume_key(egui::Modifiers::COMMAND, egui::Key::Y);
+                (redo, !redo && i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z))
+            });
+            if redo {
+                self.redo();
+            } else if undo {
+                self.undo();
+            }
         }
         let full = ui.max_rect();
         self.left_panel(ui, settings);
         let area = Rect::from_min_max(pos2(full.left() + LEFT_PANEL, full.top()), full.max);
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(area));
         self.map(&mut child);
-        if !self.status.is_empty() {
-            ui.painter().text(
-                area.left_bottom() + vec2(30.0, -12.0),
-                Align2::LEFT_BOTTOM,
-                &self.status,
-                theme::regular(13.0),
-                Color32::WHITE,
-            );
-        }
+        self.track_history(ui);
         request
     }
 
@@ -297,9 +1006,10 @@ impl PrunerPage {
         let full = ui.max_rect();
         let panel = Rect::from_min_size(full.min, vec2(LEFT_PANEL, full.height()));
         ui.painter().rect_filled(panel, 0.0, theme::BG);
+        // Inside the panel's last pixel column, so the page beside it does not cover half of it.
         ui.painter().line_segment(
-            [panel.right_top(), panel.right_bottom()],
-            Stroke::new(1.0_f32, theme::BORDER),
+            [panel.right_top() - vec2(0.5, 0.0), panel.right_bottom() - vec2(0.5, 0.0)],
+            Stroke::new(1.0_f32, theme::SEPARATOR),
         );
         let mut child =
             ui.new_child(egui::UiBuilder::new().max_rect(panel.shrink2(vec2(6.0, 6.0))));
@@ -311,42 +1021,141 @@ impl PrunerPage {
             ws.dirty(),
             ws.edition == UiEdition::Bedrock,
         );
+        // The world selector is a drop-down as in the NBT editor, with "Open another world".
+        let others: Vec<(String, Icon)> =
+            self.parked.iter().map(|p| (p.ws.name.clone(), p.ws.edition.icon())).collect();
+        let switching = self.job.is_none();
+        let mut switch_to = None;
+        let mut open_another = false;
         ui.horizontal(|ui| {
-            let (rect, _) = ui.allocate_exact_size(vec2(LEFT_PANEL - 50.0, 30.0), Sense::hover());
-            ui.painter()
-                .rect_filled(rect, theme::radius(4), theme::BUTTON);
+            let (rect, resp) =
+                ui.allocate_exact_size(vec2(LEFT_PANEL - 12.0, 30.0), Sense::click());
+            let popup = ui.make_persistent_id("pruner-world-switch");
+            let open = widgets::dropdown_open(ui, popup);
+            ui.painter().rect_filled(
+                rect,
+                widgets::dropdown_corners(open),
+                if resp.hovered() { theme::BUTTON_HOVER } else { theme::BUTTON },
+            );
             icons::paint(
                 ui.painter(),
                 Rect::from_center_size(rect.left_center() + vec2(14.0, 0.0), Vec2::splat(16.0)),
                 icon,
                 theme::TEXT_MUTED,
             );
+            let font = theme::regular(14.0);
+            let shown = widgets::elide(ui, &name, &font, rect.width() - 52.0);
             ui.painter().text(
                 rect.left_center() + vec2(28.0, 0.0),
                 Align2::LEFT_CENTER,
-                &name,
-                theme::regular(14.0),
+                shown,
+                font,
                 theme::TEXT,
             );
-            if widgets::button(ui, Some(Icon::Plus), "", 32.0, true)
-                .on_hover_text("Open another world")
-                .clicked()
-            {
-                if dirty {
-                    self.confirm_close = true;
-                } else {
-                    self.ws = None;
-                }
+            icons::paint(
+                ui.painter(),
+                Rect::from_center_size(rect.right_center() - vec2(12.0, 0.0), Vec2::splat(10.0)),
+                if open { Icon::ChevronUp } else { Icon::ChevronDown },
+                theme::TEXT_MUTED,
+            );
+            if resp.clicked() {
+                ui.memory_mut(|m| m.toggle_popup(popup));
             }
+            widgets::dropdown_pinned(
+                ui,
+                popup,
+                &resp,
+                theme::BUTTON,
+                None,
+                |ui, inner| {
+                    let (row, _) = ui.allocate_exact_size(vec2(inner, 28.0), Sense::hover());
+                    ui.painter().rect_filled(row, 0.0, Color32::from_white_alpha(14));
+                    icons::paint(
+                        ui.painter(),
+                        Rect::from_center_size(row.left_center() + vec2(14.0, 0.0), Vec2::splat(16.0)),
+                        icon,
+                        theme::TEXT_MUTED,
+                    );
+                    let font = theme::regular(14.0);
+                    let shown = widgets::elide(ui, &name, &font, row.width() - 40.0);
+                    ui.painter().text(
+                        row.left_center() + vec2(28.0, 0.0),
+                        Align2::LEFT_CENTER,
+                        shown,
+                        font,
+                        theme::TEXT,
+                    );
+                    for (i, (other, other_icon)) in others.iter().enumerate() {
+                        let (row, r) = ui.allocate_exact_size(
+                            vec2(inner, 28.0),
+                            if switching { Sense::click() } else { Sense::hover() },
+                        );
+                        if r.hovered() && switching {
+                            ui.painter().rect_filled(row, 0.0, theme::BUTTON_HOVER);
+                        }
+                        icons::paint(
+                            ui.painter(),
+                            Rect::from_center_size(row.left_center() + vec2(14.0, 0.0), Vec2::splat(16.0)),
+                            *other_icon,
+                            theme::TEXT_MUTED,
+                        );
+                        let font = theme::regular(14.0);
+                        let shown = widgets::elide(ui, other, &font, row.width() - 40.0);
+                        ui.painter().text(
+                            row.left_center() + vec2(28.0, 0.0),
+                            Align2::LEFT_CENTER,
+                            shown,
+                            font,
+                            if switching { theme::TEXT } else { theme::TEXT_DIM },
+                        );
+                        if r.clicked() {
+                            switch_to = Some(i);
+                        }
+                    }
+                },
+                28.0,
+                |ui, inner| {
+                    let (row, r) = ui.allocate_exact_size(vec2(inner, 28.0), Sense::click());
+                    if r.hovered() {
+                        // The last row follows the list's rounded bottom corners.
+                        let corners = egui::CornerRadius { nw: 0, ne: 0, sw: 4, se: 4 };
+                        ui.painter().rect_filled(row, corners, theme::BUTTON_HOVER);
+                    }
+                    icons::paint(
+                        ui.painter(),
+                        Rect::from_center_size(row.left_center() + vec2(14.0, 0.0), Vec2::splat(14.0)),
+                        Icon::Plus,
+                        theme::TEXT_MUTED,
+                    );
+                    ui.painter().text(
+                        row.left_center() + vec2(28.0, 0.0),
+                        Align2::LEFT_CENTER,
+                        "Open another world",
+                        theme::regular(14.0),
+                        theme::TEXT,
+                    );
+                    if r.clicked() {
+                        open_another = true;
+                    }
+                },
+            );
         });
+        if let Some(i) = switch_to {
+            self.switch_to(i);
+            return;
+        }
+        if open_another {
+            self.choosing = true;
+            return;
+        }
         ui.add_space(4.0);
         let half = (LEFT_PANEL - 20.0) / 2.0;
         ui.horizontal(|ui| {
-            if widgets::button(ui, Some(Icon::Close), "Close", half, true).clicked() {
+            if widgets::button(ui, Some(Icon::Close), "Close", half, self.job.is_none()).clicked() {
                 if dirty {
                     self.confirm_close = true;
                 } else {
-                    self.ws = None;
+                    self.close_current();
                 }
             }
             if widgets::button(
@@ -373,6 +1182,27 @@ impl PrunerPage {
                 }
             }
         });
+        // Undo and Redo, in case something was pruned by accident.
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            let undo = widgets::button(ui, Some(Icon::Undo), "Undo", half, self.can_undo())
+                .on_hover_text("Undo (Ctrl+Z)");
+            let redo = widgets::button(ui, Some(Icon::Redo), "Redo", half, self.can_redo())
+                .on_hover_text("Redo (Ctrl+Y)");
+            if undo.clicked() {
+                self.undo();
+            }
+            if redo.clicked() {
+                self.redo();
+            }
+        });
+        // A line under them, as in the NBT editor.
+        ui.add_space(4.0);
+        ui.painter().line_segment(
+            [pos2(panel.left(), ui.cursor().top()), pos2(panel.right(), ui.cursor().top())],
+            Stroke::new(1.0_f32, theme::BORDER),
+        );
+        ui.add_space(6.0);
         if self.confirm_close {
             let mut answer = None;
             egui::Modal::new(egui::Id::new("prune-confirm-close")).show(ui.ctx(), |ui| {
@@ -389,8 +1219,29 @@ impl PrunerPage {
             if let Some(a) = answer {
                 self.confirm_close = false;
                 if a {
-                    self.ws = None;
+                    self.close_current();
                     return;
+                }
+            }
+        }
+        if self.confirm_optimize {
+            let mut answer = None;
+            egui::Modal::new(egui::Id::new("prune-confirm-optimize")).show(ui.ctx(), |ui| {
+                ui.label("Do you want to optimize the world? (This may take several minutes)");
+                ui.horizontal(|ui| {
+                    if ui.button("Yes").clicked() {
+                        answer = Some(true);
+                    }
+                    if ui.button("No").clicked() {
+                        answer = Some(false);
+                    }
+                });
+            });
+            if let Some(yes) = answer {
+                self.confirm_optimize = false;
+                if yes {
+                    let ctx = ui.ctx().clone();
+                    self.optimize(&ctx, settings);
                 }
             }
         }
@@ -410,7 +1261,9 @@ impl PrunerPage {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 for (tool, icon, label) in row {
                     let optimize = *label == "Optimize";
-                    let enabled = !optimize || bedrock;
+                    let time = *label == "Time";
+                    // Only Java and the consoles record InhabitedTime; Bedrock has none to go by.
+                    let enabled = if optimize { bedrock } else if time { !bedrock } else { true };
                     let active = tool.is_some() && self.tool == *tool;
                     let (r, resp) = ui.allocate_exact_size(
                         vec2(w, 64.0),
@@ -433,7 +1286,7 @@ impl PrunerPage {
                         ui.painter().rect_stroke(
                             r,
                             theme::radius(4),
-                            Stroke::new(1.2_f32, theme::BLUE),
+                            Stroke::new(1.2_f32, theme::accent()),
                             egui::StrokeKind::Inside,
                         );
                     }
@@ -457,14 +1310,20 @@ impl PrunerPage {
                     );
                     let resp = if optimize {
                         resp.on_hover_text(if bedrock {
-                            "Bedrock worlds are always written with a freshly compacted database"
+                            "Write the world again with a compacted database, giving back the space the game leaves behind"
                         } else {
                             "Bedrock worlds only"
+                        })
+                    } else if time {
+                        resp.on_hover_text(if bedrock {
+                            "Bedrock worlds record no InhabitedTime, so there is nothing to prune by time"
+                        } else {
+                            "Prune the chunks by the time players spent near them (InhabitedTime)"
                         })
                     } else {
                         resp
                     };
-                    if resp.clicked() {
+                    if resp.clicked() && enabled {
                         match tool {
                             Some(t) => {
                                 self.tool = if self.tool == Some(*t) {
@@ -475,12 +1334,15 @@ impl PrunerPage {
                                 self.polygon.clear();
                             }
                             None if *label == "Time" => {
+                                // As in UMT: equal to 0 ticks, which picks the chunks nobody
+                                // has spent time near.
                                 self.layers.push(PLayer::Time {
-                                    cmp: 0,
-                                    ticks: 1200.0,
+                                    cmp: 2,
+                                    ticks: 0.0,
                                 });
                                 self.selected = Some(self.layers.len() - 1);
                             }
+                            None if optimize && self.job.is_none() => self.confirm_optimize = true,
                             None => {}
                         }
                     }
@@ -499,7 +1361,7 @@ impl PrunerPage {
             self.inverted = mode == 1;
         }
         ui.add_space(8.0);
-        let list_h = ui.available_height() - 84.0;
+        let list_h = ui.available_height() - 70.0;
         egui::ScrollArea::vertical()
             .max_height(list_h)
             .auto_shrink(false)
@@ -507,28 +1369,39 @@ impl PrunerPage {
                 let mut remove = None;
                 for (i, l) in self.layers.iter_mut().enumerate() {
                     let sel = self.selected == Some(i);
+                    // The card is a click target for selecting it. It is made first (from where the
+                    // card was last frame) so the buttons inside, made later, win the clicks.
+                    let rect_key = ui.id().with(("layer-rect", i));
+                    let last_rect: Option<Rect> = ui.data(|d| d.get_temp(rect_key));
+                    let picked = last_rect
+                        .map(|r| ui.interact(r, ui.id().with(("layer", i)), Sense::click()))
+                        .is_some_and(|r| r.clicked());
+                    let card_w = ui.available_width() - 16.0;
                     let frame = egui::Frame::new()
                         .fill(Color32::from_rgb(0x1A, 0x1E, 0x24))
                         .inner_margin(egui::Margin::same(8));
                     let resp = frame.show(ui, |ui| {
-                        ui.set_width(LEFT_PANEL - 28.0);
+                        ui.set_width(card_w);
                         let top = ui.max_rect().left_top() - vec2(8.0, 8.0);
                         if sel {
                             ui.painter().line_segment(
-                                [top, top + vec2(LEFT_PANEL - 12.0, 0.0)],
-                                Stroke::new(1.5_f32, theme::BLUE),
+                                [top, top + vec2(card_w + 16.0, 0.0)],
+                                Stroke::new(1.5_f32, theme::accent()),
                             );
                         }
+                        // Thumbnail, name and the remove button on one line.
                         ui.horizontal(|ui| {
+                            let (pv, _) = ui.allocate_exact_size(Vec2::splat(40.0), Sense::hover());
+                            draw_thumb(ui.painter(), pv, &*l, self.inverted);
                             ui.label(egui::RichText::new(l.title()).size(12.5).color(if sel {
-                                theme::BLUE
+                                theme::accent()
                             } else {
                                 theme::TEXT_MUTED
                             }));
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
-                                    if widgets::icon_button(ui, Icon::Trash, 20.0, "Remove layer")
+                                    if widgets::square_icon_button(ui, Icon::Trash, "Remove layer")
                                         .clicked()
                                     {
                                         remove = Some(i);
@@ -536,250 +1409,410 @@ impl PrunerPage {
                                 },
                             );
                         });
-                        ui.horizontal(|ui| {
-                            let (pv, _) = ui.allocate_exact_size(Vec2::splat(64.0), Sense::hover());
-                            ui.painter().rect_filled(pv, theme::radius(3), theme::DEEP);
-                            // UMT's layer thumbnails; polygons have none, so draw one.
-                            let thumb = match (&*l, self.inverted) {
-                                (PLayer::Box { .. }, false) => Some("THUMB_BOX_DELETE"),
-                                (PLayer::Box { .. }, true) => Some("THUMB_BOX_DELETE_INVERSE"),
-                                (PLayer::Circle { .. }, false) => Some("THUMB_CIRCLE_DELETE"),
-                                (PLayer::Circle { .. }, true) => {
-                                    Some("THUMB_CIRCLE_DELETE_INVERSE")
-                                }
-                                (PLayer::Split { .. }, _) => Some("THUMB_SPLIT_DELETE"),
-                                (PLayer::Time { .. }, _) => Some("THUMB_TIME"),
-                                (PLayer::Polygon { .. }, _) => None,
-                            };
-                            let shown = thumb
-                                .is_some_and(|t| icons::image(ui.painter(), pv, t, Color32::WHITE));
-                            if !shown {
-                                let color = if self.inverted {
-                                    Color32::BLACK
-                                } else {
-                                    theme::RED
-                                };
-                                icons::paint(ui.painter(), pv.shrink(14.0), l.icon(), color);
-                            }
-                            // Fields share the space left of the thumbnail, so they always fit
-                            // inside the card.
-                            // (less the gap before the column and a small right margin)
-                            let avail = ui.available_width() - ui.spacing().item_spacing.x - 12.0;
-                            let half = ((avail - 6.0) / 2.0 - 24.0).max(28.0);
-                            let pair = |ui: &mut Ui, a: (&str, &mut f64), b: (&str, &mut f64)| {
-                                ui.horizontal(|ui| {
-                                    ui.spacing_mut().item_spacing.x = 6.0;
-                                    widgets::labeled_number(ui, a.0, a.1, half, 0.1);
-                                    widgets::labeled_number(ui, b.0, b.1, half, 0.1);
-                                });
-                            };
-                            ui.vertical(|ui| match l {
-                                PLayer::Box { x, z, w, h } => {
-                                    pair(ui, ("X", x), ("Z", z));
-                                    pair(ui, ("W", w), ("H", h));
-                                }
-                                PLayer::Circle { x, z, r } => {
-                                    pair(ui, ("X", x), ("Z", z));
-                                    widgets::labeled_number(ui, "Radius", r, avail - 62.0, 0.1);
-                                }
-                                PLayer::Split { x, z, angle } => {
-                                    pair(ui, ("X", x), ("Z", z));
-                                    widgets::labeled_number(ui, "Angle", angle, avail - 56.0, 1.0);
-                                }
-                                PLayer::Polygon { points } => {
-                                    ui.label(
-                                        egui::RichText::new(format!("{} points", points.len()))
-                                            .color(theme::TEXT),
-                                    );
-                                    ui.label(
-                                        egui::RichText::new("Drag the corners on the map")
-                                            .size(12.0)
-                                            .color(theme::TEXT_DIM),
-                                    );
-                                }
-                                PLayer::Time { cmp, ticks } => {
-                                    ui.label(
-                                        egui::RichText::new("InhabitedTime")
-                                            .size(12.5)
-                                            .color(theme::TEXT_MUTED),
-                                    );
-                                    ui.horizontal(|ui| {
-                                        egui::ComboBox::from_id_salt(("cmp", i))
-                                            .width(40.0)
-                                            .selected_text(COMPARISONS[*cmp].0)
-                                            .show_ui(ui, |ui| {
-                                                for (j, (s, _)) in COMPARISONS.iter().enumerate() {
-                                                    ui.selectable_value(cmp, j, *s);
-                                                }
-                                            });
-                                        ui.add(
-                                            egui::DragValue::new(ticks)
-                                                .speed(20.0)
-                                                .range(0.0..=f64::MAX)
-                                                .suffix(" ticks"),
-                                        );
-                                    });
-                                }
+                        ui.add_space(6.0);
+                        // The fields use the card's whole width, two to a line.
+                        let total = card_w;
+                        let half = (total - 6.0) / 2.0;
+                        let pair = |ui: &mut Ui, a: (&str, &mut f64), b: (&str, &mut f64)| {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 6.0;
+                                widgets::labeled_field(ui, a.0, a.1, half, 0.1);
+                                widgets::labeled_field(ui, b.0, b.1, half, 0.1);
                             });
-                        });
+                        };
+                        ui.spacing_mut().item_spacing.y = 6.0;
+                        match l {
+                            PLayer::Box { x, z, w, h } => {
+                                pair(ui, ("X", x), ("Z", z));
+                                pair(ui, ("W", w), ("H", h));
+                            }
+                            PLayer::Circle { x, z, r, .. } => {
+                                pair(ui, ("X", x), ("Z", z));
+                                widgets::labeled_field(ui, "Radius", r, total, 0.1);
+                            }
+                            PLayer::Split { x, z, angle, .. } => {
+                                pair(ui, ("X", x), ("Z", z));
+                                widgets::labeled_field(ui, "Angle", angle, total, 1.0);
+                            }
+                            PLayer::Polygon { points } => {
+                                ui.label(
+                                    egui::RichText::new(format!("{} points", points.len()))
+                                        .color(theme::TEXT),
+                                );
+
+                            }
+                            PLayer::Time { cmp, ticks } => {
+                                ui.label(
+                                    egui::RichText::new("Select if InhabitedTime is:")
+                                        .italics()
+                                        .size(12.5)
+                                        .color(theme::TEXT),
+                                );
+                                ui.horizontal(|ui| {
+                                    // As UMT offers: greater than, equal to, less than.
+                                    const ORDER: [usize; 3] = [4, 2, 0];
+                                    let mut at = ORDER.iter().position(|c| c == cmp).unwrap_or(1);
+                                    if widgets::segmented(ui, &mut at, &[">", "=", "<"], 96.0, true) {
+                                        *cmp = ORDER[at];
+                                    }
+                                    ui.add(
+                                        egui::DragValue::new(ticks)
+                                            .speed(20.0)
+                                            .range(0.0..=f64::MAX),
+                                    );
+                                });
+                            }
+                        }
                     });
-                    if ui
-                        .interact(
-                            resp.response.rect,
-                            ui.id().with(("layer", i)),
-                            Sense::click(),
-                        )
-                        .clicked()
-                    {
+                    ui.data_mut(|d| d.insert_temp(rect_key, resp.response.rect));
+                    if picked {
                         self.selected = Some(i);
-                    }
-                    ui.add_space(4.0);
+                    }                    ui.add_space(4.0);
                 }
                 if let Some(i) = remove {
                     self.layers.remove(i);
                     self.selected = None;
                 }
             });
-        // Hold-to-prune.
+        // The Prune button, with Undo above it in case it was pressed by accident.
         let r = Rect::from_min_size(
-            pos2(panel.left() + 6.0, panel.bottom() - 70.0),
-            vec2(LEFT_PANEL - 12.0, 62.0),
+            pos2(panel.left() + 6.0, panel.bottom() - 54.0),
+            vec2(LEFT_PANEL - 12.0, 46.0),
         );
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r));
-        let enabled = !self.layers.is_empty() && self.job.is_none();
-        let subtitle = if self.job.is_some() {
-            "Pruning…"
-        } else {
-            "Hold for 5 seconds"
-        };
-        if widgets::hold_button(
-            &mut child,
-            egui::Id::new("prune-hold"),
-            "Prune",
-            subtitle,
-            r.size(),
-            5.0,
-            enabled,
-        ) {
+        let enabled = (!self.layers.is_empty() || self.inverted) && self.job.is_none();
+        let label = if self.job.is_some() { "Pruning…" } else { "Prune" };
+        if widgets::primary(&mut child, label, r.size(), enabled).clicked() {
             let ctx = ui.ctx().clone();
             self.prune(&ctx, settings);
         }
     }
+    /// Reads, in the background, which chunks the dimension shown has (and their InhabitedTime
+    /// when a Time layer needs it).
+    fn read_chunks(&mut self, ctx: &egui::Context) {
+        if let Some(r) = self.chunks_job.as_ref().and_then(Job::take) {
+            self.chunks_job = None;
+            self.shade = None;
+            match r {
+                Ok(c) => {
+                    self.chunks = std::rc::Rc::new(c);
+                    self.chunks_loaded = true;
+                }
+                Err(e) => self.status = format!("Could not read the world's chunks: {e}"),
+            }
+        }
+        let Some(ws) = &self.ws else { return };
+        let (path, edition) = (ws.path.clone(), ws.edition);
+        let dim = match ws.map.dimension.as_str() {
+            "minecraft:the_nether" => -1,
+            "minecraft:the_end" => 1,
+            _ => 0,
+        };
+        let with_times = edition != UiEdition::Bedrock && self.layers.iter().any(|l| matches!(l, PLayer::Time { .. }));
+        let key = (path.clone(), ws.map.dimension.clone(), with_times);
+        if self.chunks_for.as_ref() == Some(&key) {
+            return;
+        }
+        self.chunks_for = Some(key);
+        self.chunks_loaded = false;
+        self.shade = None;
+        self.chunks_job = Some(Job::spawn_notifying("Reading chunks", ctx, move || {
+            match edition {
+                UiEdition::Java => mctk_prune::chunk_times_java(&path, dim, with_times),
+                // Bedrock numbers its dimensions Overworld 0, Nether 1, End 2.
+                UiEdition::Bedrock => mctk_prune::chunk_times_bedrock(&path, if dim == 0 { 0 } else if dim == -1 { 1 } else { 2 }),
+                _ => mctk_prune::chunk_times_console(&path, dim, with_times),
+            }
+            .map_err(|e| e.to_string())
+        }));
+    }
+
+    /// Writes the Bedrock world again with a compacted database, as a working copy.
+    fn optimize(&mut self, ctx: &egui::Context, settings: &Settings) {
+        let Some(ws) = &self.ws else { return };
+        let src = ws.path.clone();
+        let out = match settings.new_workspace("PRUNER", &ws.name) {
+            Ok(p) => p,
+            Err(e) => {
+                self.status = format!("Could not create the working folder: {e}");
+                return;
+            }
+        };
+        self.status = "Optimizing the world…".into();
+        self.optimizing = true;
+        self.job = Some(Job::spawn_notifying("Optimizing", ctx, move || {
+            mctk_prune::optimize_bedrock_world(&src, &out)
+                .map(|_| out.clone())
+                .map_err(|e| e.to_string())
+        }));
+    }
 
     fn map(&mut self, ui: &mut Ui) {
+        self.read_chunks(ui.ctx());
         let Some(ws) = &mut self.ws else { return };
+        // Chunks are picked with the pruning tools here, not by clicking.
+        ws.map.selectable = false;
         let frame = ws
             .map
             .show_map(ui, self.tool.is_none() && self.dragging.is_none());
         let p = ui.painter_at(frame.rect);
         // The shape being drawn is shaded too, so the prune area shows while placing it.
         let mut shown = self.layers.clone();
+        // Bedrock worlds record no InhabitedTime, so a Time layer picks nothing there.
+        if ws.edition == UiEdition::Bedrock {
+            shown.retain(|l| !matches!(l, PLayer::Time { .. }));
+        }
         shown.extend(self.preview_layer(frame.hover));
         let sel = selection(&shown, self.inverted);
+        let shapes: Vec<PLayer> = shown.iter().filter(|l| !matches!(l, PLayer::Time { .. })).cloned().collect();
+        let shapes_only = selection(&shapes, self.inverted);
         // Shade removed chunks.
         let b0 = frame.to_block(frame.rect.min);
         let b1 = frame.to_block(frame.rect.max);
         let (cx0, cz0) = ((b0.x / 16.0).floor() as i32, (b0.y / 16.0).floor() as i32);
         let (cx1, cz1) = ((b1.x / 16.0).ceil() as i32, (b1.y / 16.0).ceil() as i32);
         let cells = ((cx1 - cx0) as i64) * ((cz1 - cz0) as i64);
-        if !sel.layers.is_empty() && cells < 120_000 {
+        // (Inverted with no shapes removes everything, so everything is shaded.)
+        if (!sel.layers.is_empty() || self.inverted) && cells < 120_000 {
             let tint = Color32::from_rgba_unmultiplied(170, 40, 40, 80);
             let line = Stroke::new(1.3_f32, Color32::from_rgba_unmultiplied(235, 60, 60, 190));
-            for cz in cz0..cz1 {
-                for cx in cx0..cx1 {
-                    if sel.keeps(ChunkPos::new(cx, cz), None) {
-                        continue;
+            let key: ShadeKey = (shown.clone(), self.inverted, (cx0, cz0, cx1, cz1));
+            // Removing only touches chunks that exist, so in the normal mode only those are
+            // shaded (the inverted mode removes everything outside the shapes, so there it is
+            // everywhere). Until the chunks are known nothing is shaded in the normal mode.
+            let removed = match &self.shade {
+                _ if !self.inverted && !self.chunks_loaded => std::rc::Rc::new(Vec::new()),
+                Some((k, v)) if *k == key => v.clone(),
+                _ => {
+                    let mut v = Vec::new();
+                    for cz in cz0..cz1 {
+                        for cx in cx0..cx1 {
+                            let known = self.chunks.get(&(cx, cz));
+                            if !self.inverted && known.is_none() {
+                                continue;
+                            }
+                            // A Time layer selects by what was read from the chunk, so it never
+                            // selects a place with no chunk.
+                            let keeps = match known {
+                                Some(time) => sel.keeps(ChunkPos::new(cx, cz), *time),
+                                None => shapes_only.keeps(ChunkPos::new(cx, cz), None),
+                            };
+                            if !keeps {
+                                v.push((cx, cz));
+                            }
+                        }
                     }
-                    let a = frame.to_screen(vec2(cx as f32 * 16.0, cz as f32 * 16.0));
-                    let b = frame.to_screen(vec2(cx as f32 * 16.0 + 16.0, cz as f32 * 16.0 + 16.0));
-                    let r = Rect::from_min_max(a, b);
+                    let v = std::rc::Rc::new(v);
+                    self.shade = Some((key, v.clone()));
+                    v
+                }
+            };
+            for &(cx, cz) in removed.iter() {
+                let a = frame.to_screen(vec2(cx as f32 * 16.0, cz as f32 * 16.0));
+                let b = frame.to_screen(vec2(cx as f32 * 16.0 + 16.0, cz as f32 * 16.0 + 16.0));
+                let r = Rect::from_min_max(a, b);
+                let under_shape = !self.inverted && shapes_only.selects(ChunkPos::new(cx, cz), None);
+                if !under_shape {
                     p.rect_filled(r, 0.0, tint);
-                    if cells < 30_000 {
-                        hatch(&p, r, 16.0, line);
-                    }
+                }
+                if cells < 30_000 {
+                    hatch(&p, r, 16.0, line);
                 }
             }
         }
-        let to_screen = |c: (f64, f64)| frame.to_screen(vec2(c.0 as f32 * 16.0, c.1 as f32 * 16.0));
-        // Outlines march like UMT's (a dashed white line moving over a black one).
-        let phase = (ui.input(|i| i.time) * 24.0 % 20.0) as f32;
+        let to_screen = |c: (f64, f64)| frame.to_screen(vec2(c.0 as f32 * 16.0, c.1 as f32 * 16.0));        // The shapes themselves are tinted too, exactly: one picture of where any shape is, so
+        // overlapping shapes are one area and the tint does not pile up into a solid colour. (The
+        // chunks above are what will go, a whole chunk at a time; this is the shape that picked
+        // them.)
+        if !self.inverted && !shapes.is_empty() {
+            let key: MaskKey = (
+                shapes.clone(),
+                [frame.rect.min.x, frame.rect.min.y, frame.rect.max.x, frame.rect.max.y, b0.x, b0.y, b1.x, b1.y].map(f32::to_bits),
+            );
+            let fresh = !matches!(&self.mask, Some((k, _)) if *k == key);
+            if fresh {
+                const STEP: f32 = 3.0;
+                let (w, h) = ((frame.rect.width() / STEP).ceil() as usize, (frame.rect.height() / STEP).ceil() as usize);
+                let tint = Color32::from_rgba_unmultiplied(170, 40, 40, 80);
+                let mut pixels = Vec::with_capacity(w * h);
+                for j in 0..h {
+                    for i in 0..w {
+                        let at = frame.rect.min + vec2((i as f32 + 0.5) * STEP, (j as f32 + 0.5) * STEP);
+                        let block = frame.to_block(at);
+                        let chunk = (block.x as f64 / 16.0, block.y as f64 / 16.0);
+                        pixels.push(if shapes.iter().any(|l| l.contains(chunk)) { tint } else { Color32::TRANSPARENT });
+                    }
+                }
+                let image = egui::ColorImage { size: [w.max(1), h.max(1)], pixels };
+                let texture = ui.ctx().load_texture("prune-shapes", image, egui::TextureOptions::LINEAR);
+                self.mask = Some((key, texture));
+            }
+            if let Some((_, texture)) = &self.mask {
+                p.image(
+                    texture.id(),
+                    frame.rect,
+                    Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                    Color32::WHITE,
+                );
+            }
+        }        // The chosen layer's outline marches like UMT's (a dashed white line moving over a black
+        // one); the others are plain red lines, joined where shapes overlap.
+        let time = ui.input(|i| i.time);
         ui.ctx().request_repaint();
-        let ants = |p: &egui::Painter, pts: &[Pos2]| {
-            p.add(Shape::line(
-                pts.to_vec(),
-                Stroke::new(2.4_f32, Color32::BLACK),
-            ));
+        let view = frame.rect.expand(40.0);
+        let ants = |p: &egui::Painter, pts: &[Pos2], closed: bool| {
+            let pts: Vec<Pos2> = if pts.len() == 2 {
+                match clip_segment(pts[0], pts[1], view) {
+                    Some((a, b)) => vec![a, b],
+                    None => return,
+                }
+            } else {
+                pts.to_vec()
+            };
+            p.add(Shape::line(pts.clone(), Stroke::new(2.4_f32, Color32::BLACK)));
+            let len: f32 = pts.windows(2).map(|w| w[0].distance(w[1])).sum();
+            // A closed outline gets a dash length that divides it exactly, so the pattern
+            // meets itself at the start with no visible seam.
+            let (dash, offset) = if closed && len > 20.0 {
+                let period = len / (len / 20.0).round().max(1.0);
+                (period / 2.0, (time * 24.0) as f32 % period)
+            } else {
+                (10.0, (time * 24.0 % 20.0) as f32)
+            };
             p.extend(Shape::dashed_line_with_offset(
-                pts,
+                &pts,
                 Stroke::new(2.4_f32, Color32::WHITE),
-                &[10.0],
-                &[10.0],
-                phase,
+                &[dash],
+                &[dash],
+                offset,
             ));
         };
+        let to_chunk = |q: Pos2| {
+            let b = frame.to_block(q);
+            ((b.x / 16.0) as f64, (b.y / 16.0) as f64)
+        };
+        // Before the shapes are drawn, so one just made shows its dots at once.
+        self.interact(&frame);
+        let pointer = frame.response.hover_pos();
+        // The arrow of a split: a shaft and head, each over a black one for contrast.
+        let head = |p: &egui::Painter, from: Pos2, tip: Pos2, white: Color32, width: f32| {
+            let d = (tip - from).normalized();
+            if !d.x.is_finite() {
+                return;
+            }
+            let side = vec2(-d.y, d.x);
+            for (w, c) in [(width + 1.8, Color32::BLACK), (width, white)] {
+                let back = tip - d * 14.0;
+                p.add(Shape::line(vec![from, tip], Stroke::new(w, c)));
+                p.add(Shape::line(
+                    vec![back + side * 8.0, tip, back - side * 8.0],
+                    Stroke::new(w, c),
+                ));
+            }
+        };
         for (i, l) in self.layers.iter().enumerate() {
-            let pts: Vec<Pos2> = match l {
-                PLayer::Box { x, z, w, h } => {
-                    [(*x, *z), (x + w, *z), (x + w, z + h), (*x, z + h), (*x, *z)]
-                        .iter()
-                        .map(|c| to_screen(*c))
-                        .collect()
-                }
-                PLayer::Circle { x, z, r } => (0..=64)
-                    .map(|k| {
-                        let a = k as f64 / 64.0 * std::f64::consts::TAU;
-                        to_screen((x + r * a.cos(), z + r * a.sin()))
-                    })
-                    .collect(),
-                PLayer::Split { x, z, angle } => {
-                    let a = angle.to_radians();
-                    vec![
-                        to_screen((x - 4000.0 * a.cos(), z - 4000.0 * a.sin())),
-                        to_screen((x + 4000.0 * a.cos(), z + 4000.0 * a.sin())),
-                    ]
-                }
-                PLayer::Polygon { points } => {
-                    let mut v: Vec<Pos2> = points.iter().map(|c| to_screen(*c)).collect();
-                    if let Some(f) = v.first().copied() {
-                        v.push(f);
+            let outline = l.outline();
+            let pts: Vec<Pos2> = outline.iter().map(|c| to_screen(*c)).collect();
+            let closed = !matches!(l, PLayer::Split { .. });
+            if pts.len() < 2 {
+                continue;
+            }
+            if let Some((tail, tip)) = l.arrow() {
+                // The dividing line, and the arrow to the side that is selected.
+                let (tail, tip) = (to_screen(tail), to_screen(tip));
+                if self.selected == Some(i) {
+                    ants(&p, &pts, false);
+                    // Ends just short of the dot at the tip, so the head is not covered.
+                    let dir = (tip - tail).normalized();
+                    let stop = if dir.x.is_finite() { tip - dir * 9.0 } else { tip };
+                    if (stop - tail).dot(dir) > 4.0 {
+                        head(&p, tail, stop, Color32::WHITE, 2.2);
                     }
-                    v
+                } else {
+                    p.add(Shape::line(pts.clone(), Stroke::new(2.0_f32, theme::RED)));
                 }
-                PLayer::Time { .. } => Vec::new(),
-            };
-            if pts.len() > 1 {
-                ants(&p, &pts);
+            } else if self.selected == Some(i) {
+                // The chosen shape keeps its whole outline, marching, over the others.
+                ants(&p, &pts, closed);
+            } else {
+                // The others are plain red lines, joined where shapes overlap.
+                let others: Vec<&PLayer> = self
+                    .layers
+                    .iter()
+                    .enumerate()
+                    .filter(|(j, _)| *j != i)
+                    .map(|(_, o)| o)
+                    .collect();
+                let (runs, _) = visible_runs(&pts, &others, &to_chunk, view);
+                for run in runs {
+                    p.add(Shape::line(run, Stroke::new(2.0_f32, theme::RED)));
+                }
             }
             if self.selected == Some(i) {
-                for h in l.handles() {
+                // Round dots move the whole shape, squares reshape it; one under the pointer
+                // (or being dragged) turns red and the cursor becomes the move cursor.
+                let under = if self.dragging.is_none() {
+                    pointer.and_then(|q| l.pick_handle(q, &to_screen))
+                } else {
+                    None
+                };
+                for (hi, h) in l.handles().into_iter().enumerate() {
                     let s = to_screen(h);
-                    p.rect_filled(
-                        Rect::from_center_size(s, Vec2::splat(10.0)),
-                        0.0,
-                        Color32::WHITE,
-                    );
+                    let dragged = self.dragging == Some((i, hi));
+                    let hot = dragged || under == Some(hi);
+                    let moves = l.is_move_handle(hi);
+                    if hot {
+                        let cursor = if moves {
+                            egui::CursorIcon::Move
+                        } else {
+                            // The resize cursor along the line from the shape's middle to the dot.
+                            let from = to_screen(l.anchor());
+                            let deg = (s.y - from.y).atan2(s.x - from.x).to_degrees().rem_euclid(180.0);
+                            match deg {
+                                d if !(22.5..157.5).contains(&d) => egui::CursorIcon::ResizeHorizontal,
+                                d if d < 67.5 => egui::CursorIcon::ResizeNwSe,
+                                d if d < 112.5 => egui::CursorIcon::ResizeVertical,
+                                _ => egui::CursorIcon::ResizeNeSw,
+                            }
+                        };
+                        ui.ctx().set_cursor_icon(cursor);
+                    }
+                    let fill = if hot { theme::RED } else { Color32::WHITE };
+                    // Every dot is a square; a box's move dot stretches over the chunks around its
+                    // centre when that is not the middle of one.
+                    let sq = match l.move_span().filter(|_| moves) {
+                        Some((lo, hi_)) => Rect::from_two_pos(to_screen(lo), to_screen(hi_)).expand(5.0),
+                        None => Rect::from_center_size(s, Vec2::splat(10.0)),
+                    };
+                    // The move dot is see-through until it is used.
+                    let faint = moves && !hot;
+                    p.rect_filled(sq, 0.0, if faint { Color32::from_white_alpha(40) } else { fill });
                     p.rect_stroke(
-                        Rect::from_center_size(s, Vec2::splat(10.0)),
+                        sq,
                         0.0,
-                        Stroke::new(1.0_f32, Color32::BLACK),
+                        Stroke::new(1.0_f32, if faint { Color32::from_black_alpha(70) } else { Color32::BLACK }),
                         egui::StrokeKind::Outside,
                     );
                 }
             }
         }
-        self.interact(&frame);
         // Shape being drawn.
         if let Some((a, b)) = self.drawing {
             let preview = match self.tool {
-                Some(Tool::Box) => Some(vec![
-                    to_screen(a),
-                    to_screen((b.0, a.1)),
-                    to_screen(b),
-                    to_screen((a.0, b.1)),
-                    to_screen(a),
-                ]),
+                Some(Tool::Box) => {
+                    // The whole chunks it will cover, as it will be made.
+                    let (x0, x1) = (a.0.min(b.0).floor(), a.0.max(b.0).ceil());
+                    let (z0, z1) = (a.1.min(b.1).floor(), a.1.max(b.1).ceil());
+                    Some(vec![
+                        to_screen((x0, z0)),
+                        to_screen((x1, z0)),
+                        to_screen((x1, z1)),
+                        to_screen((x0, z1)),
+                        to_screen((x0, z0)),
+                    ])
+                }
                 Some(Tool::Circle) => {
-                    let r = ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt();
+                    let r = circle_radius(a, b);
                     Some(
                         (0..=64)
                             .map(|k| {
@@ -789,22 +1822,37 @@ impl PrunerPage {
                             .collect(),
                     )
                 }
-                Some(Tool::Split) => Some(vec![to_screen(a), to_screen(b)]),
+                Some(Tool::Split) => {
+                    let l = PLayer::Split {
+                        x: a.0,
+                        z: a.1,
+                        angle: ((b.1 - a.1).atan2(b.0 - a.0).to_degrees() - 90.0).rem_euclid(360.0),
+                        len: circle_radius(a, b),
+                    };
+                    let line: Vec<Pos2> = l.outline().iter().map(|c| to_screen(*c)).collect();
+                    ants(&p, &line, false);
+                    let (from, tip) = (to_screen(a), to_screen(b));
+                    let dir = (tip - from).normalized();
+                    if dir.x.is_finite() && from.distance(tip) > 14.0 {
+                        head(&p, from, tip - dir * 9.0, Color32::WHITE, 2.2);
+                    }
+                    None
+                }
                 _ => None,
             };
             if let Some(pts) = preview {
-                ants(&p, &pts);
+                ants(&p, &pts, !matches!(self.tool, Some(Tool::Split)));
             }
         }
         if !self.polygon.is_empty() {
             // Always drawn closed: the corners so far, the pointer, then back to the first.
             let mut pts: Vec<Pos2> = self.polygon.iter().map(|c| to_screen(*c)).collect();
             if let Some(h) = frame.hover {
-                pts.push(frame.to_screen(h));
+                pts.push(to_screen(centre((h.x as f64 / 16.0, h.y as f64 / 16.0))));
             }
             let corners = pts.clone();
             pts.push(pts[0]);
-            ants(&p, &pts);
+            ants(&p, &pts, true);
             for q in &corners {
                 p.circle_filled(*q, 4.0, Color32::WHITE);
             }
@@ -824,6 +1872,18 @@ impl PrunerPage {
                 Color32::WHITE,
             );
         }
+        // No chunk is outlined under the pointer while it is on a dot or area of the chosen shape.
+        // (While one is being dragged the chunk under the pointer is outlined again.)
+        let on_handle = self.dragging.is_none()
+            && self.selected.and_then(|i| self.layers.get(i)).is_some_and(|l| {
+                frame
+                    .response
+                    .hover_pos()
+                    .is_some_and(|q| l.pick_handle(q, &to_screen).is_some())
+            });
+        if let Some(ws) = self.ws.as_mut() {
+            ws.map.hide_hover = on_handle;
+        }
         ws_chrome(self.ws.as_mut(), ui, &frame);
     }
 
@@ -832,7 +1892,7 @@ impl PrunerPage {
         if !self.polygon.is_empty() {
             let mut points = self.polygon.clone();
             if let Some(h) = hover {
-                points.push(((h.x / 16.0) as f64, (h.y / 16.0) as f64));
+                points.push(centre((h.x as f64 / 16.0, h.y as f64 / 16.0)));
             }
             return (points.len() >= 3).then_some(PLayer::Polygon { points });
         }
@@ -851,12 +1911,13 @@ impl PrunerPage {
             Tool::Circle => PLayer::Circle {
                 x: a.0,
                 z: a.1,
-                r: ((c.0 - a.0).powi(2) + (c.1 - a.1).powi(2)).sqrt(),
+                r: circle_radius(a, c),
+                a: (c.1 - a.1).atan2(c.0 - a.0),
             },
             Tool::Split => PLayer::Split {
                 x: a.0,
                 z: a.1,
-                angle: (c.1 - a.1).atan2(c.0 - a.0).to_degrees().rem_euclid(360.0),
+                angle: ((c.1 - a.1).atan2(c.0 - a.0).to_degrees() - 90.0).rem_euclid(360.0), len: circle_radius(a, c),
             },
             Tool::Polygon => return None,
         })
@@ -870,11 +1931,10 @@ impl PrunerPage {
         if resp.drag_started_by(egui::PointerButton::Primary) {
             if let (Some(i), Some(pos)) = (self.selected, pointer) {
                 if let Some(l) = self.layers.get(i) {
-                    for (hi, h) in l.handles().into_iter().enumerate() {
-                        let s = frame.to_screen(vec2(h.0 as f32 * 16.0, h.1 as f32 * 16.0));
-                        if s.distance(pos) < 9.0 {
-                            self.dragging = Some((i, hi));
-                        }
+                    let to_screen =
+                        |c: (f64, f64)| frame.to_screen(vec2(c.0 as f32 * 16.0, c.1 as f32 * 16.0));
+                    if let Some(hi) = l.pick_handle(pos, &to_screen) {
+                        self.dragging = Some((i, hi));
                     }
                 }
             }
@@ -893,16 +1953,16 @@ impl PrunerPage {
         }
         let Some(tool) = self.tool else { return };
         let Some(pos) = pointer else { return };
-        let c = chunk(frame.to_block(pos));
+        // New shapes snap to the middle of the chunk under the pointer.
+        let c = centre(chunk(frame.to_block(pos)));
         match tool {
             // As UMT: left-click adds a corner, right-click places the last one and closes
             // the polygon back to the first corner.
             Tool::Polygon => {
-                let corner = ((c.0 * 2.0).round() / 2.0, (c.1 * 2.0).round() / 2.0);
                 if resp.clicked_by(egui::PointerButton::Primary) {
-                    self.polygon.push(corner);
+                    self.polygon.push(c);
                 } else if resp.clicked_by(egui::PointerButton::Secondary) {
-                    self.polygon.push(corner);
+                    self.polygon.push(c);
                     if self.polygon.len() >= 3 {
                         self.layers.push(PLayer::Polygon {
                             points: std::mem::take(&mut self.polygon),
@@ -936,12 +1996,13 @@ impl PrunerPage {
                             Tool::Circle => PLayer::Circle {
                                 x: a.0,
                                 z: a.1,
-                                r: ((c.0 - a.0).powi(2) + (c.1 - a.1).powi(2)).sqrt(),
+                                r: circle_radius(a, c),
+                                a: (c.1 - a.1).atan2(c.0 - a.0),
                             },
                             _ => PLayer::Split {
                                 x: a.0,
                                 z: a.1,
-                                angle: (c.1 - a.1).atan2(c.0 - a.0).to_degrees().rem_euclid(360.0),
+                                angle: ((c.1 - a.1).atan2(c.0 - a.0).to_degrees() - 90.0).rem_euclid(360.0), len: circle_radius(a, c),
                             },
                         };
                         self.layers.push(layer);
@@ -965,11 +2026,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn outlines_that_meet_a_box_meet_the_line_it_is_drawn_with() {
+        let b = PLayer::Box { x: 0.0, z: 0.0, w: 4.0, h: 4.0 };
+        // The outline runs through the middles of the corner chunks, half a chunk in.
+        assert!(!b.outline_contains((0.25, 2.0)) && b.outline_contains((0.75, 2.0)));
+        assert!(b.contains((0.25, 2.0)));
+    }
+
+    #[test]
     fn layers_convert_from_chunk_units() {
         let c = PLayer::Circle {
             x: -5.5,
             z: 0.5,
             r: 8.0,
+            a: 0.0,
         };
         assert_eq!(
             c.to_layer(),
@@ -985,14 +2055,16 @@ mod tests {
             w: 4.0,
             h: 2.0,
         };
+        // Corner dots sit in corner chunks: the box covers the opposite corner chunk (0, 0) and
+        // the chunk (6, -2) under the dot.
         b.drag_handle(2, (6.4, -1.2));
         assert_eq!(
             b,
             PLayer::Box {
                 x: 0.0,
-                z: -1.0,
-                w: 6.0,
-                h: 1.0
+                z: -2.0,
+                w: 7.0,
+                h: 3.0
             }
         );
         assert!(

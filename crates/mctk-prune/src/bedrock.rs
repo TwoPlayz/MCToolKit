@@ -2,7 +2,7 @@
 //! actors listed in its `digp` record. The world is then saved with a freshly compacted
 //! database, which is UMT's "Optimize" step.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
 use mctk_anvil::ChunkPos;
@@ -56,6 +56,33 @@ pub fn prune_bedrock(
         removed: removed.len(),
         notes: vec![format!("{records} database records deleted")],
     })
+}
+
+/// Every chunk column of a dimension (Bedrock's ids: 0 Overworld, 1 Nether, 2 End) of the
+/// world `src`, by chunk position. Bedrock worlds record no InhabitedTime, so the times are
+/// all `None`. To preview a prune: only chunks that exist can be removed.
+pub fn chunk_times_bedrock(src: &Path, dimension: i32) -> Result<HashMap<(i32, i32), Option<i64>>, Error> {
+    let world = BedrockWorld::open(src)?;
+    let mut chunks = HashMap::new();
+    for k in world.db.entries.keys() {
+        if let Key::Chunk(c) = Key::decode(k) {
+            if c.dimension.id() == dimension {
+                chunks.insert((c.x, c.z), None);
+            }
+        }
+    }
+    Ok(chunks)
+}
+
+/// Opens the Bedrock world `src` (folder or `.mcworld`) and writes it to `out` (empty or
+/// missing) with a freshly compacted database: the space the game leaves behind when it deletes
+/// records is given back, and nothing else changes. Gives the records the database holds.
+pub fn optimize_bedrock_world(src: &Path, out: &Path) -> Result<usize, Error> {
+    let world = BedrockWorld::open(src)?;
+    let records = world.db.entries.len();
+    prepare_output(src, out)?;
+    world.save_to_folder(out)?;
+    Ok(records)
 }
 
 /// Opens the Bedrock world `src` (folder or `.mcworld`), prunes it and saves the result

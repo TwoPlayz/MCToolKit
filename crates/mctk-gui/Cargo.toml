@@ -17,14 +17,14 @@ mctk-java.workspace = true
 mctk-bedrock.workspace = true
 mctk-console.workspace = true
 mctk-convert.workspace = true
+mctk-registry.workspace = true
+mctk-replace.workspace = true
 mctk-prune.workspace = true
 mctk-mapping.workspace = true
 mctk-world.workspace = true
-mctk-lua.workspace = true
 eframe = "=0.31.1"
 rfd = "=0.15.3"
 flate2.workspace = true
-crc32fast = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 zip.workspace = true
 serde_json.workspace = true

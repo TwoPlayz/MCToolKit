@@ -1,0 +1,19 @@
+[package]
+name = "mctk-replace"
+description = "Scans worlds for what a target version cannot represent and resolves replacements"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mctk-registry.workspace = true
+mctk-java.workspace = true
+mctk-anvil.workspace = true
+mctk-nbt.workspace = true
+mctk-bedrock.workspace = true
+indexmap.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+flate2.workspace = true

@@ -42,7 +42,7 @@ pub fn detect(path: &Path) -> Option<Edition> {
     let name = path.file_name()?.to_string_lossy().to_ascii_lowercase();
     if name.ends_with(".mcworld") {
         Some(Edition::Bedrock)
-    } else if name == "gamedata" || name.ends_with(".dat") || name.ends_with(".bin") {
+    } else if name == "gamedata" || name.ends_with(".dat") || name.ends_with(".bin") || name.ends_with(".wii") || name.ends_with(".ext") {
         Some(Edition::Console)
     } else {
         None

@@ -1,10 +1,10 @@
-//! Embeds the built-in extensions (`assets/extensions/**`) as a file list.
+//! Embeds the small pictures in `assets/info/` as a file list.
 
 use std::path::{Path, PathBuf};
 
 fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
     let mut entries: Vec<_> = std::fs::read_dir(dir)
-        .expect("assets/extensions")
+        .expect("assets/info")
         .flatten()
         .map(|e| e.path())
         .collect();
@@ -20,7 +20,7 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
 
 fn main() {
     let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
-    let root = manifest_dir.join("assets/extensions");
+    let root = manifest_dir.join("assets/info");
     println!("cargo:rerun-if-changed={}", root.display());
     let mut files = Vec::new();
     walk(&root, &mut files);
@@ -38,7 +38,7 @@ fn main() {
         ));
     }
     code.push_str("];\n");
-    let out = PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("builtin_extensions.rs");
+    let out = PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("info_assets.rs");
     std::fs::write(out, code).unwrap();
 
     // The exe's icon (Explorer, taskbar, Alt-Tab), from the same mark used for the

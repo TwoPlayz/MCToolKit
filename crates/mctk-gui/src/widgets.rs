@@ -56,9 +56,43 @@ pub fn open_discord(ui: &Ui) {
 
 /// Grey button with an optional icon; `width` 0 sizes it to its content.
 pub fn button(ui: &mut Ui, icon: Option<Icon>, text: &str, width: f32, enabled: bool) -> Response {
-    let font = theme::regular(14.0);
-    let content = text_width(ui, text, &font) + if icon.is_some() { 26.0 } else { 0.0 };
-    let size = vec2(if width > 0.0 { width } else { content + 24.0 }, 32.0);
+    button_coloured(ui, icon, text, width, enabled, false)
+}
+
+/// The same button, green while it is usable: the next thing to do.
+pub fn green_button(ui: &mut Ui, icon: Option<Icon>, text: &str, width: f32, enabled: bool) -> Response {
+    button_coloured(ui, icon, text, width, enabled, true)
+}
+
+/// A button as tall as the other controls in a toolbar (28 px rather than 32).
+pub fn compact_button(ui: &mut Ui, text: &str, enabled: bool) -> Response {
+    button_sized(ui, None, text, 0.0, enabled, false, 28.0)
+}
+
+fn button_coloured(
+    ui: &mut Ui,
+    icon: Option<Icon>,
+    text: &str,
+    width: f32,
+    enabled: bool,
+    green: bool,
+) -> Response {
+    button_sized(ui, icon, text, width, enabled, green, 32.0)
+}
+
+fn button_sized(
+    ui: &mut Ui,
+    icon: Option<Icon>,
+    text: &str,
+    width: f32,
+    enabled: bool,
+    green: bool,
+    height: f32,
+) -> Response {
+    let k = theme::ui_scale();
+    let font = theme::regular(14.0 * k);
+    let content = text_width(ui, text, &font) + if icon.is_some() { 26.0 * k } else { 0.0 };
+    let size = vec2(if width > 0.0 { width } else { content + 24.0 * k }, height * k);
     let (rect, resp) = ui.allocate_exact_size(
         size,
         if enabled {
@@ -69,13 +103,17 @@ pub fn button(ui: &mut Ui, icon: Option<Icon>, text: &str, width: f32, enabled: 
     );
     let fill = if !enabled {
         theme::TILE
+    } else if green {
+        if resp.hovered() { theme::accent_hover() } else { theme::accent() }
     } else if resp.hovered() {
         theme::BUTTON_HOVER
     } else {
         theme::BUTTON
     };
     ui.painter().rect_filled(rect, theme::radius(4), fill);
-    let color = if enabled {
+    let color = if enabled && green {
+        Color32::WHITE
+    } else if enabled {
         theme::TEXT
     } else {
         theme::TEXT_DIM
@@ -85,12 +123,12 @@ pub fn button(ui: &mut Ui, icon: Option<Icon>, text: &str, width: f32, enabled: 
         let cx = if text.is_empty() {
             rect.center().x
         } else {
-            start + 9.0
+            start + 9.0 * k
         };
-        let r = Rect::from_center_size(egui::pos2(cx, rect.center().y), Vec2::splat(18.0));
+        let r = Rect::from_center_size(egui::pos2(cx, rect.center().y), Vec2::splat(18.0 * k));
         icons::paint(ui.painter(), r, i, color);
     }
-    let tx = if icon.is_some() { start + 26.0 } else { start };
+    let tx = if icon.is_some() { start + 26.0 * k } else { start };
     ui.painter().text(
         egui::pos2(tx, rect.center().y),
         Align2::LEFT_CENTER,
@@ -118,9 +156,9 @@ pub fn primary(ui: &mut Ui, text: &str, size: Vec2, enabled: bool) -> Response {
     let fill = if !enabled {
         theme::BUTTON
     } else if resp.hovered() {
-        theme::GREEN_HOVER
+        theme::accent_hover()
     } else {
-        theme::GREEN
+        theme::accent()
     };
     ui.painter().rect_filled(rect, theme::radius(5), fill);
     let color = if enabled {
@@ -163,26 +201,6 @@ pub fn big_button(ui: &mut Ui, text: &str, size: Vec2) -> Response {
     resp
 }
 
-/// Small square icon-only button.
-pub fn icon_button(ui: &mut Ui, icon: Icon, size: f32, tooltip: &str) -> Response {
-    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
-    if resp.hovered() {
-        ui.painter()
-            .rect_filled(rect, theme::radius(4), theme::BUTTON_HOVER);
-    }
-    let color = if resp.hovered() {
-        theme::TEXT
-    } else {
-        theme::TEXT_MUTED
-    };
-    icons::paint(ui.painter(), rect.shrink(size * 0.22), icon, color);
-    if tooltip.is_empty() {
-        resp
-    } else {
-        resp.on_hover_text(tooltip)
-    }
-}
-
 /// Green pill switch with a label.
 pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str, enabled: bool) -> Response {
     toggle_with(ui, on, label, enabled, theme::regular(15.0))
@@ -218,10 +236,11 @@ fn toggle_with(
     let fill = if !enabled {
         theme::CHIP
     } else {
+        let on = theme::accent();
         Color32::from_rgb(
-            (0x3A as f32 + (0x43 - 0x3A) as f32 * t) as u8,
-            (0x40 as f32 + (0xA9 - 0x40) as f32 * t) as u8,
-            (0x49 as f32 + (0x75 - 0x49) as f32 * t) as u8,
+            (0x3A as f32 + (on.r() as f32 - 0x3A as f32) * t) as u8,
+            (0x40 as f32 + (on.g() as f32 - 0x40 as f32) * t) as u8,
+            (0x49 as f32 + (on.b() as f32 - 0x49 as f32) * t) as u8,
         )
     };
     ui.painter().rect_filled(track, theme::radius(9), fill);
@@ -258,18 +277,19 @@ pub fn segmented(
     width: f32,
     enabled: bool,
 ) -> bool {
-    let font = theme::regular(13.5);
+    let k = theme::ui_scale();
+    let font = theme::regular(13.5 * k);
     // Segments fit their text; a fixed width is shared out in proportion to it.
     let mut widths: Vec<f32> = options
         .iter()
-        .map(|o| text_width(ui, o, &font) + 22.0)
+        .map(|o| text_width(ui, o, &font) + 22.0 * k)
         .collect();
     if width > 0.0 {
         let natural: f32 = widths.iter().sum();
         widths.iter_mut().for_each(|w| *w *= width / natural);
     }
     let total: f32 = widths.iter().sum();
-    let (rect, _) = ui.allocate_exact_size(vec2(total, 30.0), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(total, 30.0 * k), Sense::hover());
     ui.painter()
         .rect_filled(rect, theme::radius(4), theme::DEEP);
     let mut x = rect.left();
@@ -297,7 +317,7 @@ pub fn segmented(
             ui.painter().rect_stroke(
                 r.shrink(1.0),
                 theme::radius(4),
-                Stroke::new(1.2_f32, theme::BLUE),
+                Stroke::new(1.2_f32, theme::accent()),
                 StrokeKind::Inside,
             );
         } else if resp.hovered() && enabled {
@@ -309,7 +329,7 @@ pub fn segmented(
             (_, false) => theme::TEXT_DIM,
             _ => theme::TEXT_MUTED,
         };
-        let f = if sel { theme::bold(13.5) } else { font.clone() };
+        let f = if sel { theme::bold(13.5 * k) } else { font.clone() };
         ui.painter()
             .text(r.center(), Align2::CENTER_CENTER, *opt, f, color);
         x += w;
@@ -317,7 +337,231 @@ pub fn segmented(
     changed
 }
 
-/// Edition / app tile: icon above a label.
+/// The corners of a drop-down button: square along the bottom while its list is open, so the two
+/// look like one piece.
+pub fn dropdown_corners(open: bool) -> egui::CornerRadius {
+    if open {
+        egui::CornerRadius { nw: 4, ne: 4, sw: 0, se: 0 }
+    } else {
+        theme::radius(4)
+    }
+}
+
+/// Whether the drop-down list `id` is showing.
+pub fn dropdown_open(ui: &Ui, id: Id) -> bool {
+    ui.memory(|m| m.is_popup_open(id))
+}
+
+/// Tells drop-downs that the page being drawn sits in a scaled layer (see the converter), so
+/// their lists, which are layers of their own, take the same scale and place.
+pub fn set_page_transform(ctx: &egui::Context, transform: Option<egui::emath::TSTransform>) {
+    let key = Id::new("page-transform");
+    ctx.data_mut(|d| match transform {
+        Some(t) => d.insert_temp(key, t),
+        None => {
+            d.remove_temp::<egui::emath::TSTransform>(key);
+        }
+    });
+}
+
+/// The scale in force for the page being drawn, if any.
+pub fn page_transform(ctx: &egui::Context) -> Option<egui::emath::TSTransform> {
+    ctx.data(|d| d.get_temp(Id::new("page-transform")))
+}
+
+/// The list of a drop-down, hung straight under `anchor` with a flat top, the same colour and
+/// width, so it joins the button. A click anywhere but on the button closes it.
+pub fn dropdown(
+    ui: &mut Ui,
+    id: Id,
+    anchor: &Response,
+    fill: Color32,
+    border: Option<Stroke>,
+    add: impl FnOnce(&mut Ui, f32),
+) {
+    dropdown_pinned(ui, id, anchor, fill, border, add, 0.0, |_, _| {});
+}
+
+/// A drop-down whose list scrolls but whose last row, `pinned` points tall, stays in view under
+/// it however many rows there are (for an "Open another world" that must always be reachable).
+/// The list is as long as its rows need, up to the room the window has.
+#[allow(clippy::too_many_arguments)]
+pub fn dropdown_pinned(
+    ui: &mut Ui,
+    id: Id,
+    anchor: &Response,
+    fill: Color32,
+    border: Option<Stroke>,
+    add: impl FnOnce(&mut Ui, f32),
+    pinned: f32,
+    add_pinned: impl FnOnce(&mut Ui, f32),
+) {
+    if !dropdown_open(ui, id) {
+        return;
+    }
+    let width = anchor.rect.width();
+    let transform = page_transform(ui.ctx());
+    if let Some(t) = transform {
+        ui.ctx()
+            .set_transform_layer(egui::LayerId::new(egui::Order::Foreground, id.with("list")), t);
+    }
+    egui::Area::new(id.with("list"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(anchor.rect.left_bottom())
+        .constrain(transform.is_none())
+        .show(ui.ctx(), |ui| {
+            let corners = egui::CornerRadius { nw: 0, ne: 0, sw: 4, se: 4 };
+            let shown = egui::Frame::new()
+                .fill(fill)
+                .corner_radius(corners)
+                .inner_margin(egui::Margin::ZERO)
+                .show(ui, |ui| {
+                    ui.set_width(width);
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    // Plain rows (selectable labels) stretch across the whole list.
+                    // A long list (many versions) scrolls instead of running off the window.
+                    // (In a scaled page the window's edge is further off, in the page's own units.)
+                    let bottom = match transform {
+                        Some(t) => t.inverse() * ui.ctx().screen_rect().right_bottom(),
+                        None => ui.ctx().screen_rect().right_bottom(),
+                    }
+                    .y;
+                    let room = (bottom - anchor.rect.bottom() - 12.0 - pinned).max(84.0);
+                    egui::ScrollArea::vertical()
+                        .max_height(room)
+                        .auto_shrink([false, true])
+                        .id_salt(id.with("scroll"))
+                        .show(ui, |ui| {
+                            ui.with_layout(egui::Layout::top_down_justified(egui::Align::LEFT), |ui| {
+                                add(ui, width);
+                            });
+                        });
+                    if pinned > 0.0 {
+                        add_pinned(ui, width);
+                    }
+                });
+            if let Some(stroke) = border {
+                // Drawn a little above the list and clipped to it, so there is no line along the
+                // top where it joins the button.
+                let rect = shown.response.rect;
+                ui.painter().with_clip_rect(rect).rect_stroke(
+                    rect.with_min_y(rect.top() - 2.0),
+                    corners,
+                    stroke,
+                    StrokeKind::Inside,
+                );
+            }
+        });
+    let click = ui.input(|i| i.pointer.any_click().then(|| i.pointer.interact_pos()).flatten());
+    let click = click.map(|p| transform.map_or(p, |t| t.inverse() * p));
+    if click.is_some_and(|p| !anchor.rect.contains(p)) {
+        ui.memory_mut(|m| m.close_popup());
+    }
+}
+
+/// A drop-down for choosing one of `labels`: the button is as wide as the longest of them (so the
+/// list is never wider than it), and the list drops straight from it. Gives the index picked.
+pub fn choice(ui: &mut Ui, id_salt: &str, current: usize, labels: &[&str]) -> Option<usize> {
+    let font = theme::regular(14.0);
+    let widest = labels.iter().map(|l| text_width(ui, l, &font)).fold(0.0, f32::max);
+    let id = ui.make_persistent_id(("choice", id_salt));
+    let (r, resp) = ui.allocate_exact_size(vec2(widest + 44.0, 28.0), Sense::click());
+    let open = dropdown_open(ui, id);
+    ui.painter().rect_filled(
+        r,
+        dropdown_corners(open),
+        if resp.hovered() { theme::BUTTON_HOVER } else { theme::BUTTON },
+    );
+    ui.painter().text(
+        r.left_center() + vec2(10.0, 0.0),
+        Align2::LEFT_CENTER,
+        labels.get(current).copied().unwrap_or(""),
+        font,
+        theme::TEXT,
+    );
+    icons::paint(
+        ui.painter(),
+        Rect::from_center_size(r.right_center() - vec2(12.0, 0.0), Vec2::splat(10.0)),
+        if open { Icon::ChevronUp } else { Icon::ChevronDown },
+        theme::TEXT_MUTED,
+    );
+    if resp.clicked() {
+        ui.memory_mut(|m| m.toggle_popup(id));
+    }
+    let mut picked = None;
+    let tints = (theme::BUTTON_HOVER, Color32::from_white_alpha(14));
+    dropdown(ui, id, &resp, theme::BUTTON, None, |ui, _| {
+        for (i, l) in labels.iter().enumerate() {
+            if dropdown_item(ui, i == current, i + 1 == labels.len(), tints, l).clicked() {
+                picked = Some(i);
+            }
+        }
+    });
+    picked
+}
+
+/// The three dimension buttons of the Chunk Locator (Overworld, Nether, The End) in their dark
+/// panel; `current` is the one lit. Gives the one clicked.
+pub fn dimension_buttons(ui: &mut Ui, current: usize, enabled: bool) -> Option<usize> {
+    let (rect, _) = ui.allocate_exact_size(vec2(150.0, 44.0), Sense::hover());
+    ui.painter().rect_filled(rect, theme::radius(5), theme::DEEP);
+    let mut picked = None;
+    for (i, label) in ["Overworld", "Nether", "The End"].into_iter().enumerate() {
+        let r = Rect::from_min_size(rect.min + vec2(4.0 + i as f32 * 48.0, 4.0), vec2(46.0, 36.0));
+        let resp = ui.interact(r, ui.id().with(("dim-button", i)), Sense::click()).on_hover_text(label);
+        let selected = current == i;
+        if resp.hovered() && !selected && enabled {
+            ui.painter().rect_filled(r, theme::radius(4), theme::BUTTON_HOVER);
+        }
+        if selected {
+            ui.painter().rect_filled(r, theme::radius(4), theme::CARD);
+            ui.painter().rect_stroke(
+                r,
+                theme::radius(4),
+                Stroke::new(1.2_f32, theme::accent()),
+                StrokeKind::Inside,
+            );
+        }
+        crate::map_view::dim_tile(ui.painter(), Rect::from_center_size(r.center(), Vec2::splat(30.0)), i);
+        if resp.clicked() && !selected && enabled {
+            picked = Some(i);
+        }
+    }
+    picked
+}
+
+/// One text row of a drop-down list: square, tinted when hovered or when it is the current choice,
+/// like the rows of the world drop-down.
+pub fn dropdown_item(
+    ui: &mut Ui,
+    selected: bool,
+    last: bool,
+    (hover, current): (Color32, Color32),
+    text: &str,
+) -> Response {
+    let (row, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::click());
+    // The last row follows the list's rounded bottom corners.
+    let corners = egui::CornerRadius { nw: 0, ne: 0, sw: if last { 4 } else { 0 }, se: if last { 4 } else { 0 } };
+    if resp.hovered() && selected {
+        // The current choice keeps its colour and only lightens.
+        ui.painter().rect_filled(row, corners, current);
+        ui.painter().rect_filled(row, corners, Color32::from_white_alpha(18));
+    } else if resp.hovered() {
+        ui.painter().rect_filled(row, corners, hover);
+    } else if selected {
+        ui.painter().rect_filled(row, corners, current);
+    }
+    ui.painter().text(
+        row.left_center() + vec2(7.0, 0.0),
+        Align2::LEFT_CENTER,
+        text,
+        theme::regular(13.0),
+        theme::TEXT,
+    );
+    resp
+}
+
+/// Edition / app tile: icon above a label. `attached` squares its bottom for a strip under it.
 pub fn tile(
     ui: &mut Ui,
     icon: Icon,
@@ -325,6 +569,7 @@ pub fn tile(
     size: Vec2,
     selected: bool,
     enabled: bool,
+    attached: bool,
 ) -> Response {
     let (rect, resp) = ui.allocate_exact_size(
         size,
@@ -335,16 +580,21 @@ pub fn tile(
         },
     );
     let fill = if selected {
-        theme::GREEN
+        theme::accent()
     } else if resp.hovered() && enabled {
         theme::BUTTON_HOVER
     } else {
         theme::TILE
     };
-    ui.painter().rect_filled(rect, theme::radius(5), fill);
+    let corners = if attached {
+        egui::CornerRadius { nw: 5, ne: 5, sw: 0, se: 0 }
+    } else {
+        theme::radius(5)
+    };
+    ui.painter().rect_filled(rect, corners, fill);
     ui.painter().rect_stroke(
         rect,
-        theme::radius(5),
+        corners,
         Stroke::new(1.0_f32, theme::BORDER),
         StrokeKind::Inside,
     );
@@ -399,31 +649,75 @@ fn labeled_number_row(
     speed: f64,
 ) -> Response {
     ui.spacing_mut().item_spacing.x = 0.0;
-    let (lr, _) = ui.allocate_exact_size(
-        vec2(text_width(ui, label, &theme::regular(13.0)) + 16.0, 28.0),
-        Sense::hover(),
+    // Styled like the Locate bar: a lighter label cell beside a dark field with the number at
+    // its right.
+    let label_w = text_width(ui, label, &theme::regular(14.0)) + 20.0;
+    let (row, _) = ui.allocate_exact_size(vec2(label_w + width, 28.0), Sense::hover());
+    let cell = egui::Rect::from_min_size(row.min, vec2(label_w, 28.0));
+    ui.painter().rect_filled(
+        cell,
+        egui::CornerRadius { nw: 5, sw: 5, ne: 0, se: 0 },
+        Color32::from_rgb(43, 48, 59),
     );
     ui.painter().rect_filled(
-        lr,
-        egui::CornerRadius {
-            nw: 4,
-            sw: 4,
-            ne: 0,
-            se: 0,
-        },
-        theme::BUTTON,
+        egui::Rect::from_min_max(egui::pos2(cell.right(), row.top()), row.max),
+        egui::CornerRadius { nw: 0, sw: 0, ne: 5, se: 5 },
+        Color32::from_rgb(12, 14, 18),
     );
     ui.painter().text(
-        lr.center(),
+        cell.center(),
         Align2::CENTER_CENTER,
         label,
-        theme::regular(13.0),
-        theme::TEXT,
+        theme::regular(14.0),
+        Color32::WHITE,
     );
-    ui.add_sized(
-        vec2(width, 28.0),
-        egui::DragValue::new(value).speed(speed).max_decimals(2),
+    let field = egui::Rect::from_min_max(
+        egui::pos2(cell.right() + 4.0, row.top()),
+        egui::pos2(row.right() - 8.0, row.bottom()),
+    );
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .max_rect(field)
+            .layout(egui::Layout::right_to_left(egui::Align::Center)),
+        |ui| {
+            let s = ui.style_mut();
+            for w in [
+                &mut s.visuals.widgets.inactive,
+                &mut s.visuals.widgets.hovered,
+                &mut s.visuals.widgets.active,
+            ] {
+                w.weak_bg_fill = Color32::TRANSPARENT;
+                w.bg_fill = Color32::TRANSPARENT;
+                w.bg_stroke = Stroke::NONE;
+            }
+            s.spacing.interact_size = vec2(1.0, 28.0);
+            ui.add(egui::DragValue::new(value).speed(speed).max_decimals(2))
+        },
     )
+    .inner
+}
+
+/// A number field whose whole width, label cell included, is `total`.
+pub fn labeled_field(ui: &mut Ui, label: &str, value: &mut f64, total: f32, speed: f64) -> Response {
+    let label_w = text_width(ui, label, &theme::regular(14.0)) + 20.0;
+    labeled_number(ui, label, value, (total - label_w).max(24.0), speed)
+}
+
+/// A small square icon button that lights up on hover, like the close crosses of tabs and toasts.
+pub fn square_icon_button(ui: &mut Ui, icon: Icon, tooltip: &str) -> Response {
+    let k = theme::ui_scale();
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(24.0 * k), Sense::click());
+    if resp.hovered() {
+        ui.painter()
+            .rect_filled(rect, theme::radius(4), Color32::from_white_alpha(28));
+    }
+    icons::paint(
+        ui.painter(),
+        rect.shrink(6.0 * k),
+        icon,
+        if resp.hovered() { Color32::WHITE } else { theme::TEXT_MUTED },
+    );
+    resp.on_hover_text(tooltip)
 }
 
 /// Small caps section label with a chevron (PLAYERS, MAPS, ALL FILES).
@@ -467,12 +761,12 @@ pub enum StepState {
 }
 
 /// The INPUT → SAVE hexagon stepper; returns the step that was clicked, if any.
-pub fn stepper(ui: &mut Ui, labels: &[&str], current: usize, reachable: usize) -> Option<usize> {
-    let spacing = 120.0;
+pub fn stepper(ui: &mut Ui, labels: &[&str], current: usize, reachable: usize, k: f32) -> Option<usize> {
+    let spacing = 120.0 * k;
     let width = spacing * (labels.len() - 1) as f32;
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 80.0), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 80.0 * k), Sense::hover());
     let x0 = rect.center().x - width / 2.0;
-    let y = rect.top() + 52.0;
+    let y = rect.top() + 52.0 * k;
     let p = ui.painter();
     for i in 0..labels.len() - 1 {
         let done = i < current;
@@ -480,7 +774,7 @@ pub fn stepper(ui: &mut Ui, labels: &[&str], current: usize, reachable: usize) -
         let b = egui::pos2(x0 + (i + 1) as f32 * spacing, y);
         p.line_segment(
             [a, b],
-            Stroke::new(5.0_f32, if done { theme::GREEN } else { theme::CHIP }),
+            Stroke::new(5.0_f32 * k, if done { theme::accent() } else { theme::CHIP }),
         );
     }
     let mut clicked = None;
@@ -493,43 +787,55 @@ pub fn stepper(ui: &mut Ui, labels: &[&str], current: usize, reachable: usize) -
         } else {
             StepState::Pending
         };
+        // Only a step that can be gone to is a button: no hand or highlight on the others.
+        let usable = i <= reachable && i != current;
         let resp = ui.interact(
-            Rect::from_center_size(c, Vec2::splat(36.0)),
+            Rect::from_center_size(c, Vec2::splat(36.0 * k)),
             Id::new(("step", i)),
-            Sense::click(),
+            if usable { Sense::click() } else { Sense::hover() },
         );
-        if resp.clicked() && i <= reachable && i != current {
+        if usable && resp.hovered() {
+            // The step's own hexagon, a little larger.
+            ui.painter().add(Shape::convex_polygon(
+                icons::hexagon(c, 26.0 * k),
+                Color32::from_white_alpha(28),
+                Stroke::NONE,
+            ));
+        }
+        if resp.clicked() && usable {
             clicked = Some(i);
         }
-        let hex = icons::hexagon(c, 16.0);
+        let hex = icons::hexagon(c, 16.0 * k);
         let p = ui.painter();
         let image = match state {
             StepState::Done => "STEP_COMPLETE",
             StepState::Current => "STEP_IN_PROGRESS",
             StepState::Pending => "STEP_INCOMPLETE",
         };
-        let drawn = icons::image(
-            p,
-            Rect::from_center_size(c, vec2(34.0, 40.0)),
-            image,
-            Color32::WHITE,
-        );
+        // The step artwork is green; on a page with another accent the hexagons are drawn instead.
+        let drawn = theme::current_accent() == theme::Accent::Green
+            && icons::image(
+                p,
+                Rect::from_center_size(c, vec2(34.0, 40.0) * k),
+                image,
+                Color32::WHITE,
+            );
         match state {
             _ if drawn => {}
             StepState::Done => {
-                p.add(Shape::convex_polygon(hex, theme::GREEN, Stroke::NONE));
-                icons::paint(
-                    p,
-                    Rect::from_center_size(c, Vec2::splat(16.0)),
-                    Icon::Check,
-                    theme::BG,
-                );
+                p.add(Shape::convex_polygon(hex, theme::accent(), Stroke::NONE));
+                // A tick cut out of the filled hexagon (the Check icon is green artwork).
+                let at = |x: f32, y: f32| egui::pos2(c.x - 8.0 * k + x * 16.0 * k, c.y - 8.0 * k + y * 16.0 * k);
+                p.add(Shape::line(
+                    vec![at(0.2, 0.52), at(0.42, 0.72), at(0.8, 0.3)],
+                    Stroke::new(2.5_f32 * k, theme::CARD),
+                ));
             }
             StepState::Current => {
                 p.add(Shape::convex_polygon(
                     hex,
                     theme::CARD,
-                    Stroke::new(2.5_f32, theme::GREEN),
+                    Stroke::new(2.5_f32 * k, theme::accent()),
                 ));
             }
             StepState::Pending => {
@@ -539,97 +845,17 @@ pub fn stepper(ui: &mut Ui, labels: &[&str], current: usize, reachable: usize) -
         let color = if state == StepState::Pending {
             theme::TEXT_DIM
         } else {
-            theme::GREEN
+            theme::accent()
         };
         p.text(
-            egui::pos2(c.x, rect.top() + 18.0),
+            egui::pos2(c.x, rect.top() + 18.0 * k),
             Align2::CENTER_CENTER,
             *label,
-            theme::regular(14.0),
+            theme::regular(14.0 * k),
             color,
         );
     }
     clicked
-}
-
-/// A button that fires only after being held for `seconds` (the Pruner's safety catch).
-pub fn hold_button(
-    ui: &mut Ui,
-    id: Id,
-    title: &str,
-    subtitle: &str,
-    size: Vec2,
-    seconds: f64,
-    enabled: bool,
-) -> bool {
-    let (rect, resp) = ui.allocate_exact_size(
-        size,
-        if enabled {
-            Sense::click_and_drag()
-        } else {
-            Sense::hover()
-        },
-    );
-    let now = ui.input(|i| i.time);
-    let mut fired = false;
-    let start: Option<f64> = ui.data(|d| d.get_temp(id));
-    if enabled && resp.is_pointer_button_down_on() {
-        let s = start.unwrap_or(now);
-        if start.is_none() {
-            ui.data_mut(|d| d.insert_temp(id, s));
-        }
-        if now - s >= seconds {
-            fired = true;
-            ui.data_mut(|d| d.remove::<f64>(id));
-        } else {
-            ui.ctx().request_repaint();
-        }
-    } else if start.is_some() {
-        ui.data_mut(|d| d.remove::<f64>(id));
-    }
-    let progress = ui
-        .data(|d| d.get_temp::<f64>(id))
-        .map_or(0.0, |s| ((now - s) / seconds).clamp(0.0, 1.0)) as f32;
-    let p = ui.painter();
-    p.rect_filled(
-        rect,
-        theme::radius(5),
-        if resp.hovered() && enabled {
-            theme::BUTTON_HOVER
-        } else {
-            theme::CARD
-        },
-    );
-    if progress > 0.0 {
-        let fill = Rect::from_min_size(rect.min, vec2(rect.width() * progress, rect.height()));
-        p.rect_filled(fill, theme::radius(5), theme::PRUNER_ACCENT);
-    }
-    p.rect_stroke(
-        rect,
-        theme::radius(5),
-        Stroke::new(1.0_f32, theme::BORDER),
-        StrokeKind::Inside,
-    );
-    let color = if enabled {
-        Color32::WHITE
-    } else {
-        theme::TEXT_DIM
-    };
-    p.text(
-        rect.center() - vec2(0.0, 9.0),
-        Align2::CENTER_CENTER,
-        title,
-        theme::bold(17.0),
-        color,
-    );
-    p.text(
-        rect.center() + vec2(0.0, 11.0),
-        Align2::CENTER_CENTER,
-        subtitle,
-        theme::bold(12.0),
-        color,
-    );
-    fired
 }
 
 /// Thin progress bar.
@@ -642,7 +868,7 @@ pub fn progress_bar(ui: &mut Ui, fraction: f32, width: f32) {
             rect.min,
             vec2(rect.width() * fraction.clamp(0.0, 1.0), rect.height()),
         );
-        ui.painter().rect_filled(r, theme::radius(6), theme::GREEN);
+        ui.painter().rect_filled(r, theme::radius(6), theme::accent());
     }
 }
 

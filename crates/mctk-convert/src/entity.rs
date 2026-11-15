@@ -1,4 +1,4 @@
-﻿//! Entity and player conversion, both ways.
+//! Entity and player conversion, both ways.
 //!
 //! Java accepts entity data with missing fields (the game fills in defaults), so a Bedrock
 //! actor is turned into the fields both editions share: type, position, motion, rotation,
@@ -8,9 +8,9 @@
 //!
 //! A Java entity becomes a Bedrock actor in one of two ways. Living mobs the vanilla behaviour
 //! data describes get their `definitions` (`+minecraft:rabbit`, `+adult`) and attributes.
-//! Every other entity whose type both editions share is written as Chunker writes it: the
-//! type, position, motion and rotation only, which the game accepts. Paintings (see
-//! `painting_to_actor`) and item frames (see `mctk_chunker::frame`) need their own handling.
+//! Every other entity whose type both editions share is written with only its type,
+//! position, motion and rotation, which the game accepts. Paintings (see `painting_to_actor`)
+//! and item frames (see `frames`) need their own handling.
 
 use mctk_nbt::{Compound, List, Tag, TagType};
 
@@ -18,7 +18,7 @@ use crate::block_entity::item_to_java;
 use crate::java_bedrock::EditionReport;
 
 /// Bedrock entity ids that Java spells differently.
-const RENAMED: [(&str, &str); 8] = [
+const RENAMED: [(&str, &str); 14] = [
     ("minecraft:villager_v2", "minecraft:villager"),
     ("minecraft:zombie_villager_v2", "minecraft:zombie_villager"),
     ("minecraft:xp_orb", "minecraft:experience_orb"),
@@ -27,6 +27,13 @@ const RENAMED: [(&str, &str); 8] = [
     ("minecraft:vindication_illager", "minecraft:vindicator"),
     ("minecraft:zombie_pigman", "minecraft:zombified_piglin"),
     ("minecraft:eye_of_ender_signal", "minecraft:eye_of_ender"),
+    // Confirmed against the Bedrock server's own entity list.
+    ("minecraft:thrown_trident", "minecraft:trident"),
+    ("minecraft:fishing_hook", "minecraft:fishing_bobber"),
+    ("minecraft:tropicalfish", "minecraft:tropical_fish"),
+    ("minecraft:fireworks_rocket", "minecraft:firework_rocket"),
+    ("minecraft:xp_bottle", "minecraft:experience_bottle"),
+    ("minecraft:wind_charge_projectile", "minecraft:wind_charge"),
 ];
 
 /// Bedrock-only or player-bound entities that have no Java counterpart.
@@ -42,18 +49,19 @@ const NOT_CONVERTED: [&str; 6] = [
 /// Height of a standing player's eyes above their feet.
 const BEDROCK_PLAYER_EYE_HEIGHT: f64 = 1.62;
 
-/// The Java id of a Bedrock entity: Chunker's type table first, then the older Bedrock ids
-/// the table does not list, and otherwise the id as it is.
+/// The Java id of a Bedrock entity: the renamed ids first, and otherwise the id as it is.
 fn java_entity_id(bedrock: &str) -> Option<String> {
     if NOT_CONVERTED.contains(&bedrock) {
         return None;
     }
-    Some(
-        mctk_chunker::entity::bedrock_to_java_type(bedrock)
-            .or_else(|| RENAMED.iter().find(|(b, _)| *b == bedrock).map(|(_, j)| *j))
-            .unwrap_or(bedrock)
-            .to_string(),
-    )
+    if let Some(chest) = match bedrock {
+        "minecraft:boat" => Some(false),
+        "minecraft:chest_boat" => Some(true),
+        _ => None,
+    } {
+        return Some(java_boat_id(0, chest));
+    }
+    Some(RENAMED.iter().find(|(b, _)| *b == bedrock).map_or(bedrock, |(_, j)| *j).to_string())
 }
 
 /// A Java UUID derived from Bedrock's unique id (Java needs one per entity).
@@ -68,14 +76,14 @@ fn painting_to_java(actor: &Compound, offset: (i32, i32), report: &mut EditionRe
         .get("Motif")
         .or_else(|| actor.get("Motive"))
         .and_then(Tag::as_str)
-        .and_then(mctk_chunker::entity::motive_from_bedrock);
+        .and_then(crate::paintings::motive_from_bedrock);
     let Some(motive) = motive else {
         report.skip("entities: minecraft:painting (unknown picture)", 1);
         return None;
     };
-    let facing = mctk_chunker::entity::Facing::from_byte(i64_of(actor, "Direction").unwrap_or(0));
+    let facing = crate::paintings::Facing::from_byte(i64_of(actor, "Direction").unwrap_or(0));
     let p = floats(actor, "Pos", 3);
-    let (mut neutral, mut tile) = mctk_chunker::entity::java_position((p[0], p[1], p[2]), motive, facing);
+    let (mut neutral, mut tile) = crate::paintings::java_position((p[0], p[1], p[2]), motive, facing);
     neutral.0 += offset.0 as f64 * 16.0;
     neutral.2 += offset.1 as f64 * 16.0;
     tile.0 += offset.0 * 16;
@@ -182,6 +190,11 @@ pub(crate) fn actor_to_java(
     if ident == "minecraft:painting" {
         return painting_to_java(actor, offset, report);
     }
+    let id = match ident {
+        "minecraft:boat" => java_boat_id(i64_of(actor, "Variant").unwrap_or(0), false),
+        "minecraft:chest_boat" => java_boat_id(i64_of(actor, "Variant").unwrap_or(0), true),
+        _ => id,
+    };
     let mut out = Compound::new();
     out.insert("id".into(), Tag::String(id.clone()));
     common_fields(actor, offset, &mut out);
@@ -215,7 +228,7 @@ pub(crate) fn actor_to_java(
         }
         "minecraft:cushion" => {
             let variant = i64_of(actor, "Variant").unwrap_or(0).clamp(0, 15);
-            let dye = mctk_chunker::ids::DYES[(15 - variant) as usize].0;
+            let dye = crate::block_entities_more::DYES[(15 - variant) as usize];
             out.insert("color".into(), Tag::String(dye.into()));
         }
         "minecraft:item" => {
@@ -402,16 +415,64 @@ const NEEDS_DATA: [&str; 4] = [
     "minecraft:glow_item_frame",
 ];
 
-/// The Bedrock id of a Java entity: Chunker's type table, then the older ids it does not
-/// list, and then an id Bedrock's behaviour data knows under the same name.
+/// The Bedrock id of a Java entity (see `bedrock_type`), for the block entities that name a mob.
+pub(crate) fn bedrock_entity_id(java: &str) -> Option<String> {
+    bedrock_type(java)
+}
+
+/// The Java id of a Bedrock entity (see `java_entity_id`).
+pub(crate) fn java_entity_id_of(bedrock: &str) -> Option<String> {
+    java_entity_id(bedrock)
+}
+
+/// Boat woods in the order of Bedrock's Variant number; Java has one entity type per wood.
+const BOAT_WOODS: [&str; 10] = [
+    "oak", "spruce", "birch", "jungle", "acacia", "dark_oak", "mangrove", "bamboo", "cherry", "pale_oak",
+];
+
+/// The Java id of a boat of a Bedrock variant.
+fn java_boat_id(variant: i64, chest: bool) -> String {
+    let wood = BOAT_WOODS.get(variant.max(0) as usize).copied().unwrap_or("oak");
+    let kind = if wood == "bamboo" { "raft" } else { "boat" };
+    format!("minecraft:{wood}_{}{kind}", if chest { "chest_" } else { "" })
+}
+
+/// The Bedrock variant and chest flag of a Java boat id.
+fn boat_of(java: &str) -> Option<(i64, bool)> {
+    let name = java.strip_prefix("minecraft:")?;
+    let (name, chest) = match name.strip_suffix("_chest_boat").or_else(|| name.strip_suffix("_chest_raft")) {
+        Some(w) => (w, true),
+        None => (name.strip_suffix("_boat").or_else(|| name.strip_suffix("_raft"))?, false),
+    };
+    // A wood this list does not know (newer than the Bedrock version) becomes oak.
+    Some((BOAT_WOODS.iter().position(|w| *w == name).unwrap_or(0) as i64, chest))
+}
+
+/// The Bedrock id of a Java entity: the renamed ids, boats, and an id Bedrock knows under the
+/// same name.
 fn bedrock_type(java: &str) -> Option<String> {
     if JAVA_SKIPPED.contains(&java) || NEEDS_DATA.contains(&java) {
         return None;
     }
-    mctk_chunker::entity::java_to_bedrock_type(java)
-        .or_else(|| RENAMED.iter().find(|(_, j)| *j == java).map(|(b, _)| *b))
-        .or_else(|| mctk_mapping::bedrock_entity_definitions(java, false).map(|_| java))
+    // Every candidate must be an entity of the Bedrock version.
+    let known = |b: &&str| bedrock_entities().contains(*b);
+    if let Some((_, chest)) = boat_of(java) {
+        return Some(if chest { "minecraft:chest_boat" } else { "minecraft:boat" }.to_string());
+    }
+    RENAMED.iter().find(|(_, j)| *j == java).map(|(b, _)| *b).filter(known)
+        .or_else(|| Some(java).filter(known))
         .map(str::to_string)
+}
+
+/// The entity ids of the Bedrock version (built from the game itself; see `mctk-gen`).
+fn bedrock_entities() -> &'static std::collections::HashSet<String> {
+    static IDS: std::sync::OnceLock<std::collections::HashSet<String>> = std::sync::OnceLock::new();
+    IDS.get_or_init(|| {
+        let version = mctk_registry::builtin::bedrock_versions()[0];
+        mctk_registry::builtin::bedrock(version)
+            .map(|r| r.entities.into_iter().collect())
+            .unwrap_or_default()
+    })
 }
 
 fn internal_components(key: &[u8; 8]) -> Tag {
@@ -438,7 +499,7 @@ fn holds_items(java: &Compound) -> bool {
         })
 }
 
-/// Writes a Java entity as Chunker does: type, position, motion and rotation, which the game
+/// Writes a Java entity as its type, position, motion and rotation only, which the game
 /// completes with the defaults for the type.
 fn minimal_actor(
     java: &Compound,
@@ -469,9 +530,12 @@ fn minimal_actor(
         let dye = java
             .get("color")
             .and_then(Tag::as_str)
-            .and_then(|c| mctk_chunker::ids::DYES.iter().position(|(n, _, _)| *n == c))
+            .and_then(|c| crate::block_entities_more::DYES.iter().position(|n| *n == c))
             .unwrap_or(0);
         out.insert("Variant".into(), Tag::Int(15 - dye as i32));
+    }
+    if let Some((variant, _)) = boat_of(java_id) {
+        out.insert("Variant".into(), Tag::Int(variant as i32));
     }
     if holds_items(java) {
         report.skip(&format!("entity contents: {java_id}"), 1);
@@ -493,13 +557,13 @@ fn painting_to_actor(
         .or_else(|| java.get("Motive"))
         .and_then(Tag::as_str)
         .and_then(|n| {
-            mctk_chunker::entity::motive_from_java(n).or_else(|| mctk_chunker::entity::motive_from_bedrock(n))
+            crate::paintings::motive_from_java(n).or_else(|| crate::paintings::motive_from_bedrock(n))
         });
     let Some(motive) = motive else {
         report.skip("entities: minecraft:painting (unknown picture)", 1);
         return None;
     };
-    let facing = mctk_chunker::entity::Facing::from_byte(
+    let facing = crate::paintings::Facing::from_byte(
         i64_of(java, "facing").or_else(|| i64_of(java, "Facing")).unwrap_or(0),
     );
     let pos = floats(java, "Pos", 3);
@@ -513,7 +577,7 @@ fn painting_to_actor(
     };
     tile.0 += offset.0 * 16;
     tile.2 += offset.1 * 16;
-    let p = mctk_chunker::entity::bedrock_position(tile, motive, facing);
+    let p = crate::paintings::bedrock_position(tile, motive, facing);
     let chunk = (
         (p.0.floor() as i32).div_euclid(16),
         (p.2.floor() as i32).div_euclid(16),
@@ -973,6 +1037,39 @@ pub(crate) fn player_to_bedrock(
 }
 
 #[cfg(test)]
+mod bedrock_id_tests {
+    use super::*;
+
+    /// Every Java entity is either written with an id the Bedrock game has, or deliberately not
+    /// converted. Nothing is written with an id the game does not know.
+    #[test]
+    fn java_entities_only_become_real_bedrock_entities() {
+        let java = mctk_registry::builtin::java("26.3").unwrap();
+        let mut unmapped = Vec::new();
+        for id in &java.entities {
+            match bedrock_type(id) {
+                Some(b) => assert!(bedrock_entities().contains(&b), "{id} would be written as {b}, which Bedrock does not have"),
+                None => unmapped.push(id.clone()),
+            }
+        }
+        // The ids that used to come out wrong now follow the game's own names.
+        for (java, bedrock) in [
+            ("minecraft:evoker", "minecraft:evocation_illager"),
+            ("minecraft:zombified_piglin", "minecraft:zombie_pigman"),
+            ("minecraft:experience_orb", "minecraft:xp_orb"),
+            ("minecraft:end_crystal", "minecraft:ender_crystal"),
+            ("minecraft:trident", "minecraft:thrown_trident"),
+            ("minecraft:tropical_fish", "minecraft:tropicalfish"),
+            ("minecraft:firework_rocket", "minecraft:fireworks_rocket"),
+            ("minecraft:pig", "minecraft:pig"),
+        ] {
+            assert_eq!(bedrock_type(java).as_deref(), Some(bedrock), "{java}");
+        }
+        eprintln!("not converted to Bedrock ({}): {}", unmapped.len(), unmapped.join(", "));
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1082,7 +1179,7 @@ mod tests {
     }
 
     #[test]
-    fn other_entities_are_written_as_chunker_writes_them() {
+    fn other_entities_are_written_with_the_shared_fields_only() {
         let mut c = Compound::new();
         c.insert("id".into(), Tag::String("minecraft:chest_minecart".into()));
         c.insert("Pos".into(), double_list(&[17.5, 64.0, -3.0]));
@@ -1175,7 +1272,7 @@ mod tests {
 
     #[test]
     fn paintings_keep_picture_facing_and_block_through_both_editions() {
-        use mctk_chunker::entity::{Facing, MOTIVES, bedrock_position, motive_from_java};
+        use crate::paintings::{Facing, MOTIVES, bedrock_position, motive_from_java};
         for motive in &MOTIVES {
             for facing in [Facing::South, Facing::West, Facing::North, Facing::East] {
                 let mut java = Compound::new();

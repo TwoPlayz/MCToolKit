@@ -8,6 +8,7 @@
 
 mod archive;
 mod chunk;
+mod compressed;
 mod lzx_store;
 mod region;
 mod rle;
@@ -20,7 +21,10 @@ pub use lzx_store::xmem_store;
 pub use lzxd::WindowSize;
 pub use region::{ChunkCodec, ConsoleRegion, ConsoleRegionBuilder, RawConsoleChunk};
 pub use rle::{rle_decode, rle_encode};
-pub use save::{ConsoleSave, Platform, compress_xbox360, decompress_xbox360};
+pub use save::{
+    ConsoleSave, Platform, compress_windows64, compress_wiiu, compress_xbox360, decompress_windows64, decompress_wiiu,
+    decompress_xbox360,
+};
 pub use xmem::{Xbox360SaveHeader, xmem_decompress, xmem_decompress_all};
 
 #[derive(Debug, thiserror::Error)]
