@@ -87,6 +87,23 @@ pub fn java_versions() -> Vec<&'static str> {
     JAVA.iter().map(|(v, _)| *v).collect()
 }
 
+/// `(DataVersion, version name)` of every built-in Java version, newest first. Only the header
+/// of each table is read, so this is cheap.
+pub fn java_data_versions() -> Vec<(i32, &'static str)> {
+    JAVA.iter()
+        .filter_map(|(name, text)| {
+            let dv = text
+                .lines()
+                .take(8)
+                .find_map(|l| l.strip_prefix("data_version "))?
+                .trim()
+                .parse()
+                .ok()?;
+            Some((dv, *name))
+        })
+        .collect()
+}
+
 /// The registry of a built-in Java version.
 pub fn java(version: &str) -> Option<Registry> {
     let (_, text) = JAVA.iter().find(|(v, _)| *v == version)?;

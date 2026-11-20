@@ -1,4 +1,4 @@
-//! Colours, fonts and base style, matched to UMT's dark theme.
+//! Colours, fonts and base style: the dark theme.
 
 use std::sync::Arc;
 
@@ -167,7 +167,7 @@ pub fn install(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 
     ctx.style_mut(|s| {
-        // Labels are not selectable text in UMT (no I-beam cursor over them).
+        // Labels are not selectable text (no I-beam cursor over them).
         s.interaction.selectable_labels = false;
         let v = &mut s.visuals;
         *v = egui::Visuals::dark();

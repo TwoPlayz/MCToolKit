@@ -1,6 +1,6 @@
 //! Staged, multi-threaded chunk pipeline.
 //!
-//! UMT's `AreaProcessor` converts a world by turning every chunk into a series of small
+//! The converter converts a world by turning every chunk into a series of small
 //! tasks, one per stage, that run on a shared thread pool: Load, Parse, Prepare, Light,
 //! Render, Convert and Clean (observed behaviour of `AreaProcessor::dispatchNextTask`).
 //! Each time a stage finishes, the chunk's next stage becomes ready; when the user cancels,

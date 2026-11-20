@@ -1,6 +1,6 @@
 //! Bedrock Edition: deletes every database record of a removed chunk, including the
 //! actors listed in its `digp` record. The world is then saved with a freshly compacted
-//! database, which is UMT's "Optimize" step.
+//! database, which is the "Optimize" step.
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;

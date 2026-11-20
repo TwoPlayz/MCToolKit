@@ -1,1 +1,0 @@
-﻿The small pictures beside some tags in the NBT editor (the player's head, position, rotation, health, fire and hunger icons) come from UMT's Entity Info and Player Info extensions by OliverBroadbent (BSD 2-Clause, see LICENSE). The DataVersion names in data/data_versions.tsv come from Matt Pryze's DataVersion Resolver (BSD 2-Clause).

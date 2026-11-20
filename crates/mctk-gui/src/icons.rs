@@ -1,5 +1,5 @@
-//! Icons: Most are PNG images; the app logo, app icons and any icon
-//! without an image are vector drawings.
+//! Icons: most are SVG images (`assets/icons`, drawn by `resvg` at the exact size needed); the
+//! app logo, app icons and any icon without an image are drawn from lines.
 
 use std::collections::HashMap;
 use std::f32::consts::{PI, TAU};
@@ -12,114 +12,12 @@ use eframe::egui::{
 
 use crate::theme;
 
-macro_rules! images {
-    ($($name:literal),* $(,)?) => {
-        const IMAGES: &[(&str, &[u8])] = &[
-            $(($name, include_bytes!(concat!("../assets/icons/", $name, ".png"))),)*
-        ];
-    };
+mod bundled {
+    include!(concat!(env!("OUT_DIR"), "/icon_list.rs"));
 }
 
-images![
-    "ADD",
-    "ADD_h",
-    "ARROW_DOWN",
-    "ARROW_RIGHT",
-    "AUTHOR",
-    "CHUNK_LOCATOR",
-    "CHUNK_LOCATOR_h",
-    "CLOSE",
-    "CLOSE_h",
-    "CLOSE_ALT",
-    "CLOSE_ALT_h",
-    "CONVERTER_ARROW",
-    "EDITION_CHECK",
-    "EDITION_CROSS",
-    "EXTENSIONS",
-    "EXTENSIONS_h",
-    "FILE",
-    "FILE_h",
-    "FIND",
-    "FOLDER",
-    "FOLDER_h",
-    "INFO",
-    "INFO_h",
-    "MAX",
-    "MAX_h",
-    "MIN",
-    "MIN_h",
-    "PRUNER_BOX",
-    "PRUNER_BOX_h",
-    "PRUNER_CIRCLE",
-    "PRUNER_CIRCLE_h",
-    "PRUNER_LAYER_TRASH",
-    "PRUNER_LAYER_TRASH_h",
-    "PRUNER_OPTIMIZE",
-    "PRUNER_OPTIMIZE_h",
-    "PRUNER_POLYGON",
-    "PRUNER_POLYGON_h",
-    "PRUNER_SPLIT",
-    "PRUNER_SPLIT_h",
-    "PRUNER_TIME",
-    "PRUNER_TIME_h",
-    "REDO",
-    "REDO_h",
-    "REFRESH",
-    "REFRESH_h",
-    "SAVE",
-    "SAVE_h",
-    "SETTINGS",
-    "SETTINGS_h",
-    "SLICER",
-    "SLICER_h",
-    "STEP_COMPLETE",
-    "STEP_INCOMPLETE",
-    "STEP_IN_PROGRESS",
-    "STEP_NEXT",
-    "STEP_PREV",
-    "TRASH",
-    "TRASH_h",
-    "UNDO",
-    "UNDO_h",
-    "TAG_BYTE",
-    "TAG_SHORT",
-    "TAG_INT",
-    "TAG_LONG",
-    "TAG_FLOAT",
-    "TAG_DOUBLE",
-    "TAG_STRING",
-    "TAG_LIST",
-    "TAG_COMPOUND",
-    "TAG_BYTE_ARRAY",
-    "TAG_INT_ARRAY",
-    "TAG_LONG_ARRAY",
-    "THUMB_BOX_DELETE",
-    "THUMB_BOX_DELETE_INVERSE",
-    "THUMB_BOX_KEEP",
-    "THUMB_BOX_KEEP_INVERSE",
-    "THUMB_CIRCLE_DELETE",
-    "THUMB_CIRCLE_DELETE_INVERSE",
-    "THUMB_CIRCLE_KEEP",
-    "THUMB_CIRCLE_KEEP_INVERSE",
-    "THUMB_SPLIT_DELETE",
-    "THUMB_SPLIT_KEEP",
-    "THUMB_TIME",
-    "PLATFORM_JAVA",
-    "PLATFORM_JAVA_h",
-    "PLATFORM_BEDROCK",
-    "PLATFORM_BEDROCK_h",
-    "PLATFORM_X360",
-    "PLATFORM_X360_h",
-    "PLATFORM_PS3",
-    "PLATFORM_PS3_h",
-    "PLATFORM_WIIU",
-    "PLATFORM_WIIU_h",
-];
-
-static TEXTURES: OnceLock<HashMap<&'static str, TextureHandle>> = OnceLock::new();
-
-/// Premultiplied source pixels of the bundled images, for resampling.
-static SOURCES: OnceLock<HashMap<&'static str, image::RgbaImage>> = OnceLock::new();
+/// The parsed vector icons by file name (`ADD`, `ADD_h`, ...).
+static TREES: OnceLock<HashMap<&'static str, resvg::usvg::Tree>> = OnceLock::new();
 
 /// Bundled images resampled to an exact pixel size, by (name, width, height).
 type SizedCache = HashMap<(String, u32, u32), TextureHandle>;
@@ -190,7 +88,7 @@ const SMOOTH: egui::TextureOptions = egui::TextureOptions {
 static FILES: OnceLock<Mutex<HashMap<PathBuf, Option<TextureHandle>>>> = OnceLock::new();
 
 /// Draws an image file fitted in `r` (loaded once, then cached); false if it can't be read.
-/// Small pixel-art images are drawn with nearest filtering, as UMT shows them.
+/// Small pixel-art images are drawn with nearest filtering.
 pub fn file_image(p: &Painter, r: Rect, path: &Path) -> bool {
     file_image_tinted(p, r, path, Color32::WHITE)
 }
@@ -450,49 +348,51 @@ pub fn file_texture(ctx: &egui::Context, path: &Path) -> Option<TextureHandle> {
         .clone()
 }
 
-/// Decodes the bundled images into textures; call once at startup.
-pub fn install_textures(ctx: &egui::Context) {
-    SOURCES.get_or_init(|| {
-        IMAGES
+/// Parses the bundled vector icons; call once at startup.
+pub fn install_textures(_ctx: &egui::Context) {
+    TREES.get_or_init(|| {
+        let opt = resvg::usvg::Options::default();
+        bundled::SVGS
             .iter()
-            .filter_map(|(name, bytes)| {
-                let img = image::load_from_memory(bytes).ok()?.to_rgba8();
-                Some((*name, premultiply(img)))
-            })
-            .collect()
-    });
-    TEXTURES.get_or_init(|| {
-        IMAGES
-            .iter()
-            .filter_map(|(name, bytes)| {
-                let img = image::load_from_memory(bytes).ok()?.to_rgba8();
-                let size = [img.width() as usize, img.height() as usize];
-                let color = egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw());
-                Some((*name, ctx.load_texture(*name, color, SMOOTH)))
-            })
+            .filter_map(|(name, svg)| Some((*name, resvg::usvg::Tree::from_str(svg, &opt).ok()?)))
             .collect()
     });
 }
 
-/// Draws a bundled image fitted (aspect kept) and centred in `r`.
+/// Draws a bundled vector icon fitted (aspect kept) and centred in `r`. It is rendered at the
+/// exact number of screen pixels it covers (and snapped to the pixel grid), so it stays sharp at
+/// any size or zoom; each size is rendered once.
 pub fn image(p: &Painter, r: Rect, name: &str, tint: Color32) -> bool {
-    let Some(tex) = TEXTURES.get().and_then(|t| t.get(name)) else {
+    let Some(tree) = TREES.get().and_then(|t| t.get(name)) else {
         return false;
     };
-    match SOURCES.get().and_then(|s| s.get(name)) {
-        Some(src) => paint_sharp(p, r, name, src, tex, tint),
-        None => {
-            let [w, h] = tex.size();
-            let scale = (r.width() / w as f32).min(r.height() / h as f32);
-            let fitted = Rect::from_center_size(r.center(), vec2(w as f32, h as f32) * scale);
-            let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
-            p.image(tex.id(), fitted, uv, tint);
-        }
-    }
+    let (w, h) = (tree.size().width(), tree.size().height());
+    let scale = (r.width() / w).min(r.height() / h);
+    let ppp = p.ctx().pixels_per_point();
+    let px = (vec2(w, h) * scale * ppp).round();
+    let (pw, ph) = (px.x.clamp(1.0, 2048.0) as u32, px.y.clamp(1.0, 2048.0) as u32);
+    let size = px / ppp;
+    let min = ((r.center() - size / 2.0) * ppp).round() / ppp;
+    let fitted = Rect::from_min_size(min, size);
+    let cache = SIZED.get_or_init(Default::default);
+    let tex = cache
+        .lock()
+        .expect("sized icon cache")
+        .entry((name.to_string(), pw, ph))
+        .or_insert_with(|| {
+            let mut pixmap = resvg::tiny_skia::Pixmap::new(pw, ph).expect("icon size is at least 1x1");
+            let to_size = resvg::tiny_skia::Transform::from_scale(pw as f32 / w, ph as f32 / h);
+            resvg::render(tree, to_size, &mut pixmap.as_mut());
+            // tiny-skia's pixels are premultiplied RGBA.
+            let color = egui::ColorImage::from_rgba_premultiplied([pw as usize, ph as usize], pixmap.data());
+            p.ctx().load_texture(format!("{name}@{pw}x{ph}"), color, egui::TextureOptions::LINEAR)
+        })
+        .clone();
+    p.image(tex.id(), fitted, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), tint);
     true
 }
 
-/// The image for an icon, if UMT's artwork covers it.
+/// The image for an icon, if there is an image for it.
 fn image_name(icon: Icon) -> Option<&'static str> {
     Some(match icon {
         Icon::Java => "PLATFORM_JAVA",
@@ -510,7 +410,6 @@ fn image_name(icon: Icon) -> Option<&'static str> {
         Icon::ChevronRight => "ARROW_RIGHT",
         Icon::Save => "SAVE",
         Icon::Gear => "SETTINGS",
-        Icon::Extensions => "EXTENSIONS",
         Icon::ChunkGrid => "CHUNK_LOCATOR",
         Icon::Search => "FIND",
         Icon::Trash => "TRASH",
@@ -548,7 +447,7 @@ fn image_name(icon: Icon) -> Option<&'static str> {
     })
 }
 
-/// Draws `icon` from UMT's artwork: white asks for the highlighted (`_h`) variant, the dim
+/// Draws `icon` from its image: white asks for the highlighted (`_h`) variant, the dim
 /// greys fade it as disabled. Returns false when there is no image for the icon.
 fn paint_image(p: &Painter, r: Rect, icon: Icon, c: Color32) -> bool {
     let Some(name) = image_name(icon) else {
@@ -594,7 +493,6 @@ pub enum Icon {
     Rename,
     Save,
     Gear,
-    Extensions,
     ChunkGrid,
     Search,
     Trash,
@@ -891,13 +789,6 @@ pub fn paint(p: &Painter, r: Rect, icon: Icon, c: Color32) {
             }
             pen.dot(0.5, 0.5, 0.07, c);
         }
-        Icon::Extensions => {
-            pen.rect_stroke(0.14, 0.14, 0.44, 0.44, 1);
-            pen.rect_stroke(0.14, 0.56, 0.44, 0.86, 1);
-            pen.rect_stroke(0.56, 0.56, 0.86, 0.86, 1);
-            pen.line(&[(0.71, 0.12), (0.71, 0.46)]);
-            pen.line(&[(0.54, 0.29), (0.88, 0.29)]);
-        }
         Icon::ChunkGrid => {
             pen.rect_stroke(0.14, 0.14, 0.44, 0.44, 2);
             pen.rect_stroke(0.56, 0.14, 0.86, 0.44, 2);
@@ -1074,4 +965,39 @@ pub fn hexagon(c: Pos2, r: f32) -> Vec<Pos2> {
             pos2(c.x + r * a.cos(), c.y + r * a.sin())
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn render(tree: &resvg::usvg::Tree, side: u32) -> resvg::tiny_skia::Pixmap {
+        let mut pixmap = resvg::tiny_skia::Pixmap::new(side, side).unwrap();
+        let s = side as f32 / tree.size().width().max(tree.size().height());
+        resvg::render(tree, resvg::tiny_skia::Transform::from_scale(s, s), &mut pixmap.as_mut());
+        pixmap
+    }
+
+    /// Every bundled icon parses and draws something, so a broken SVG fails here and not on screen.
+    #[test]
+    fn every_bundled_icon_parses_and_draws() {
+        let opt = resvg::usvg::Options::default();
+        assert!(bundled::SVGS.len() > 90);
+        for (name, svg) in bundled::SVGS {
+            let tree = resvg::usvg::Tree::from_str(svg, &opt).unwrap_or_else(|e| panic!("{name}: {e}"));
+            let pixmap = render(&tree, 64);
+            assert!(pixmap.pixels().iter().any(|p| p.alpha() > 0), "{name} draws nothing");
+        }
+    }
+
+    /// The names the app asks for all exist.
+    #[test]
+    fn the_icons_the_app_uses_exist() {
+        let has = |n: &str| bundled::SVGS.iter().any(|(name, _)| *name == n);
+        for n in [
+            "POS", "ROT", "TAG_BYTE", "TAG_COMPOUND", "TAG_LONG_ARRAY", "THUMB_TIME", "PLATFORM_JAVA_h", "FOLDER_h",
+        ] {
+            assert!(has(n), "{n}");
+        }
+    }
 }

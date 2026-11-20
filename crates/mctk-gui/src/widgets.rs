@@ -1,4 +1,4 @@
-//! Custom-painted controls in UMT's style.
+//! Custom-painted controls.
 
 use eframe::egui::{
     self, Align2, Color32, CursorIcon, Id, Rect, Response, Sense, Shape, Stroke, StrokeKind, Ui,

@@ -234,7 +234,7 @@ fn lod_tile(ctx: &egui::Context, img: &MapImage, f: usize, tx: usize, ty: usize)
             let hy = avg_y(c);
             let n = (y > 0 && cells[(y - 1 - by0) * gw + (x - bx0)].1 > 0).then(|| avg_y(&cells[(y - 1 - by0) * gw + (x - bx0)]));
             let wst = (x > 0 && cells[(y - by0) * gw + (x - 1 - bx0)].1 > 0).then(|| avg_y(&cells[(y - by0) * gw + (x - 1 - bx0)]));
-            // From a chunk upward each cell is one flat colour, a mosaic of chunks as in UMT.
+            // From a chunk upward each cell is one flat colour, a mosaic of chunks.
             let land = if f >= 16 { alb } else { world::lit(alb, hy, 0, n, wst, soften) };
             // The more of the cell is water, the more it takes the colour of water of that depth.
             let share = c.3 as f32 / c.1 as f32;
@@ -540,7 +540,7 @@ impl MapView {
             clip.image(tex.id(), whole, uv_all, Color32::WHITE);
             if self.zoom < 1.0 && self.job.is_none() {
                 // The shrink whose pixels come nearest to (and not under) one screen pixel. Far
-                // enough out, a flat mosaic of chunks (then of 2, 4, 8... chunks) as in UMT.
+                // enough out, a flat mosaic of chunks (then of 2, 4, 8... chunks).
                 const STEPS: [usize; 8] = [2, 3, 4, 5, 6, 8, 10, 12];
                 const MOSAIC: [usize; 5] = [16, 32, 64, 128, 256];
                 let steps: &[usize] = if self.zoom < 0.3 { &MOSAIC } else { &STEPS };

@@ -143,7 +143,7 @@ impl Selection {
     }
 
     /// Whether pruning keeps the chunk: normal mode removes the selection, inverted
-    /// mode keeps only the selection (as UMT's Pruner does).
+    /// mode keeps only the selection.
     pub fn keeps(&self, pos: ChunkPos, inhabited: Option<i64>) -> bool {
         self.selects(pos, inhabited) == self.inverted
     }

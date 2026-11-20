@@ -31,6 +31,7 @@ serde_json.workspace = true
 mctk-leveldb.workspace = true
 raw-window-handle = "0.6"
 ureq = "2.12"
+resvg = { version = "0.50.0", default-features = false }
 
 [dev-dependencies]
 tiny-skia = "0.11"

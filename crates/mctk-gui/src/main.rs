@@ -1,4 +1,4 @@
-//! MCToolKit desktop app, laid out like Universal Minecraft Tool: a frameless dark window,
+//! MCToolKit desktop app: a frameless dark window,
 //! an app picker, and a sidebar with the NBT Editor, Converter and Pruner plus Settings
 //! and Settings. Long tasks run on background threads.
 
@@ -8,7 +8,6 @@ mod array_view;
 mod heads;
 mod hex_editor;
 mod info;
-mod info_assets;
 mod chunk_preview;
 mod converter;
 mod ctx_menu;
@@ -45,7 +44,7 @@ const TITLE_BAR: f32 = 38.0;
 const SIDEBAR: f32 = 70.0;
 /// Sidebar, the editor/pruner left panel and a map wide enough for the Locate bar, the
 /// dimension buttons and Slicer on one row.
-/// The smallest window (as UMT's).
+/// The smallest window.
 const MIN_WIDTH: f32 = 800.0;
 const MIN_HEIGHT: f32 = 490.0;
 
@@ -402,7 +401,7 @@ impl App {
             theme::regular(20.0),
             Color32::WHITE,
         );
-        // UMT shows the hovered app's description under the cards.
+        // The hovered app's description under the cards.
         let mut description = "";
         for (i, (icon, label, page, accent, about)) in [
             (
@@ -696,7 +695,7 @@ impl eframe::App for App {
 }
 
 /// Asks Windows 11 to round the corners of the frameless window (and give it the system
-/// outline and shadow), as UMT's window has. Older Windows ignores the request.
+/// outline and shadow). Older Windows ignores the request.
 #[cfg(windows)]
 fn round_corners(frame: &eframe::Frame) {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};

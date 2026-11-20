@@ -17,7 +17,7 @@ use crate::widgets;
 use crate::workspace::Workspace;
 use crate::world_picker::UiEdition;
 
-/// A layer in chunk units, as UMT shows them.
+/// A layer in chunk units.
 #[derive(Debug, Clone, PartialEq)]
 enum PLayer {
     Box { x: f64, z: f64, w: f64, h: f64 },
@@ -1334,7 +1334,7 @@ impl PrunerPage {
                                 self.polygon.clear();
                             }
                             None if *label == "Time" => {
-                                // As in UMT: equal to 0 ticks, which picks the chunks nobody
+                                // Equal to 0 ticks, which picks the chunks nobody
                                 // has spent time near.
                                 self.layers.push(PLayer::Time {
                                     cmp: 2,
@@ -1449,7 +1449,7 @@ impl PrunerPage {
                                         .color(theme::TEXT),
                                 );
                                 ui.horizontal(|ui| {
-                                    // As UMT offers: greater than, equal to, less than.
+                                    // Greater than, equal to, less than.
                                     const ORDER: [usize; 3] = [4, 2, 0];
                                     let mut at = ORDER.iter().position(|c| c == cmp).unwrap_or(1);
                                     if widgets::segmented(ui, &mut at, &[">", "=", "<"], 96.0, true) {
@@ -1655,7 +1655,7 @@ impl PrunerPage {
                     Color32::WHITE,
                 );
             }
-        }        // The chosen layer's outline marches like UMT's (a dashed white line moving over a black
+        }        // The chosen layer's outline marches (a dashed white line moving over a black
         // one); the others are plain red lines, joined where shapes overlap.
         let time = ui.input(|i| i.time);
         ui.ctx().request_repaint();
@@ -1956,7 +1956,7 @@ impl PrunerPage {
         // New shapes snap to the middle of the chunk under the pointer.
         let c = centre(chunk(frame.to_block(pos)));
         match tool {
-            // As UMT: left-click adds a corner, right-click places the last one and closes
+            // Left-click adds a corner, right-click places the last one and closes
             // the polygon back to the first corner.
             Tool::Polygon => {
                 if resp.clicked_by(egui::PointerButton::Primary) {

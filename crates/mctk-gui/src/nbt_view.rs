@@ -243,7 +243,7 @@ fn type_rank(t: TagType) -> u8 {
 
 /// Paints the icon or letter badge for a tag type.
 fn type_icon(p: &egui::Painter, r: Rect, t: TagType) {
-    // UMT's tag badges, falling back to drawn ones.
+    // The tag badges, falling back to drawn ones.
     let image = match t {
         TagType::Compound => "TAG_COMPOUND",
         TagType::List => "TAG_LIST",
@@ -317,7 +317,7 @@ fn date(ms: i64) -> String {
         12 => (12, "PM"),
         _ => (h - 12, "PM"),
     };
-    // UTC, as UMT shows it.
+    // UTC.
     format!(
         "{} {d:02}, {y}, {h12:02}:{min:02}{ampm}",
         MONTHS[(m - 1) as usize]
@@ -666,7 +666,6 @@ struct RowCtx<'a> {
     read_only: bool,
     width: f32,
     styles: &'a HashMap<TagPath, crate::info::TagStyle>,
-    extensions_dir: &'a std::path::Path,
     /// Something was cut or copied, so Paste has a tag to insert.
     has_clipboard: bool,
     /// The document is a file or record the root's menu may delete.
@@ -716,7 +715,7 @@ impl NbtTree {
     pub fn new(root: NamedTag) -> Self {
         let mut expanded = HashSet::new();
         expanded.insert(path_key(&Vec::new()));
-        // Open the first level, as UMT does for level.dat's Data compound.
+        // Open the first level, for level.dat's Data compound.
         if let Some(c) = root.tag.as_compound() {
             if c.len() == 1 {
                 if let Some(k) = c.keys().next() {
@@ -993,7 +992,7 @@ impl NbtTree {
                 if enabled {
                     type_icon(p, r, t);
                 } else {
-                    // Faded, as UMT shows the types that can't be added to the selection.
+                    // Faded: the types that can't be added to the selection.
                     let mut faded = p.clone();
                     faded.multiply_opacity(0.3);
                     type_icon(&faded, r, t);
@@ -1070,7 +1069,7 @@ impl NbtTree {
     }
 
     /// The selected container (or the root) that new tags are added to.
-    /// Where the toolbar's add buttons insert, and the only type allowed there (as UMT's
+    /// Where the toolbar's add buttons insert, and the only type allowed there (
     /// updateActionStates): a selected compound takes any type, a list only its element
     /// type (any while it has none), and other tags nothing.
     /// Whether every item of the list at `p` is deleted (so it is as good as empty).
@@ -1419,9 +1418,20 @@ impl NbtTree {
         }
         // The notes from info (a picture and a label), else our own hint.
         let style = cx.styles.get(&path);
-        if let Some(icon) = style.and_then(|s| s.icon.as_ref()) {
+        if let Some(icon) = style.and_then(|s| s.icon) {
             let ir = Rect::from_min_size(pos2(after, rect.top() + 1.0 * k), Vec2::splat(rh - 2.0 * k));
-            if icons::file_image(&p, ir, &cx.extensions_dir.join(icon)) {
+            let drawn = match icon {
+                crate::info::NoteIcon::Pack(names) => names
+                    .iter()
+                    .find_map(|n| icons::pack_texture(n))
+                    .is_some_and(|f| icons::file_image(&p, ir, &f)),
+                crate::info::NoteIcon::Own(i) => {
+                    icons::paint(&p, ir, i, theme::TEXT_MUTED);
+                    true
+                }
+                crate::info::NoteIcon::Image(name) => icons::image(&p, ir, name, Color32::WHITE),
+            };
+            if drawn {
                 after += rh + 2.0 * k;
             }
         }
@@ -1511,7 +1521,7 @@ impl NbtTree {
                 Tag::Compound(c) => {
                     let is_container = c.get("id").and_then(Tag::as_str).is_some_and(|i| crate::inventory::Kind::of_container(i).is_some());
                     let outer = cx.container.replace(is_container);
-                    // Shown as UMT does: by type, then name; the stored order is unchanged.
+                    // Shown by type, then name; the stored order is unchanged.
                     let mut keys: Vec<String> = c.keys().cloned().collect();
                     keys.sort_by_cached_key(|k| (type_rank(c[k].tag_type()), k.to_lowercase()));
                     for k in keys {
@@ -3304,7 +3314,7 @@ impl NbtTree {
         }
     }
 
-    pub fn ui(&mut self, ui: &mut Ui, full_precision: bool, extensions_dir: &std::path::Path) {
+    pub fn ui(&mut self, ui: &mut Ui, full_precision: bool) {
         if self.hex.is_some() {
             self.hex_ui(ui);
             return;
@@ -3409,7 +3419,6 @@ impl NbtTree {
                     read_only,
                     width: ui.available_width(),
                     styles: &self.styles,
-                    extensions_dir,
                     has_clipboard,
                     deletable: self.deletable,
                     marks: &marks,
@@ -3890,7 +3899,7 @@ mod tests {
         assert!(!t.dirty);
     }
     #[test]
-    fn hints_read_like_umt() {
+    fn hints_read_naturally() {
         assert_eq!(
             hint("GameType", &Tag::Int(1)),
             Some(("Creative".into(), true))
@@ -3899,7 +3908,7 @@ mod tests {
             hint("Time", &Tag::Long(823)),
             Some(("41 seconds".into(), false))
         );
-        // The value UMT shows as "October 29, 2026, 03:36AM" for the sample world.
+        // The value shown as "October 29, 2026, 03:36AM" for the sample world.
         assert_eq!(date(1_793_245_010_889), "October 29, 2026, 03:36AM");
     }
 }

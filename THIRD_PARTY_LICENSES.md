@@ -8,10 +8,8 @@ with the LGPL. The same information is shown in the app under **Settings → Abo
 | Work | Used for | Licence |
 |---|---|---|
 | [Lato](https://www.latofonts.com) (© Łukasz Dziedzic) | The app's typeface ([`OFL.txt`](crates/mctk-gui/assets/fonts/OFL.txt)) | SIL OFL 1.1 |
-| [Universal Minecraft Tool](https://universalminecrafttool.com) extensions | The small pictures and DataVersion names in the NBT editor (`crates/mctk-gui/assets/info`, which has its own `LICENSE`) | BSD 2-Clause |
 
-Per-file provenance is in [`crates/mctk-mapping/data/NOTICE.md`](crates/mctk-mapping/data/NOTICE.md),
-[`crates/mctk-gui/assets/info/README.md`](crates/mctk-gui/assets/info/README.md).
+Per-file provenance is in [`crates/mctk-mapping/data/NOTICE.md`](crates/mctk-mapping/data/NOTICE.md).
 
 Minecraft is a trademark of Mojang Synergies AB. MCToolKit is not affiliated with Mojang or
 Microsoft.
@@ -111,6 +109,7 @@ permissive option. Regenerate with `cargo metadata` when dependencies change.
 | [crunchy](https://github.com/eira-fransham/crunchy) | 0.2.4 | MIT |
 | [crypto-common](https://github.com/RustCrypto/traits) | 0.1.7 | MIT OR Apache-2.0 |
 | [cursor-icon](https://github.com/rust-windowing/cursor-icon) | 1.2.0 | MIT OR Apache-2.0 OR Zlib |
+| [data-url](https://github.com/servo/rust-url) | 0.3.2 | MIT OR Apache-2.0 |
 | [derive_arbitrary](https://github.com/rust-fuzz/arbitrary) | 1.5.0 | MIT OR Apache-2.0 |
 | [digest](https://github.com/RustCrypto/traits) | 0.10.7 | MIT OR Apache-2.0 |
 | [dispatch](http://github.com/SSheldon/rust-dispatch) | 0.2.0 | MIT |
@@ -139,6 +138,7 @@ permissive option. Regenerate with `cargo metadata` when dependencies change.
 | [equivalent](https://github.com/indexmap-rs/equivalent) | 1.0.3 | Apache-2.0 OR MIT |
 | [errno](https://github.com/lambda-fairy/rust-errno) | 0.3.14 | MIT OR Apache-2.0 |
 | [error-code](https://github.com/DoumanAsh/error-code) | 3.4.0 | BSL-1.0 |
+| [euclid](https://github.com/servo/euclid) | 0.22.14 | MIT OR Apache-2.0 |
 | [event-listener](https://github.com/smol-rs/event-listener) | 5.4.2 | Apache-2.0 OR MIT |
 | [event-listener-strategy](https://github.com/smol-rs/event-listener-strategy) | 0.5.4 | Apache-2.0 OR MIT |
 | [fastrand](https://github.com/smol-rs/fastrand) | 2.5.0 | Apache-2.0 OR MIT |
@@ -146,6 +146,7 @@ permissive option. Regenerate with `cargo metadata` when dependencies change.
 | [fdeflate](https://github.com/image-rs/fdeflate) | 0.3.7 | MIT OR Apache-2.0 |
 | [find-msvc-tools](https://github.com/rust-lang/cc-rs) | 0.1.15 | MIT OR Apache-2.0 |
 | [flate2](https://github.com/rust-lang/flate2-rs) | 1.1.10 | MIT OR Apache-2.0 |
+| [float-cmp](https://github.com/mikedilger/float-cmp) | 0.9.0 | MIT |
 | [foldhash](https://github.com/orlp/foldhash) | 0.1.5 | Zlib |
 | [foreign-types](https://github.com/sfackler/foreign-types) | 0.5.0 | MIT/Apache-2.0 |
 | [foreign-types-macros](https://github.com/sfackler/foreign-types) | 0.2.4 | MIT/Apache-2.0 |
@@ -192,6 +193,7 @@ permissive option. Regenerate with `cargo metadata` when dependencies change.
 | [idna](https://github.com/servo/rust-url/) | 1.1.0 | MIT OR Apache-2.0 |
 | [idna_adapter](https://github.com/hsivonen/idna_adapter) | 1.2.2 | Apache-2.0 OR MIT |
 | [image](https://github.com/image-rs/image) | 0.25.10 | MIT OR Apache-2.0 |
+| [imagesize](https://github.com/Roughsketch/imagesize) | 0.15.0 | MIT |
 | [immutable-chunkmap](https://github.com/estokes/immutable-chunkmap) | 2.1.5 | Apache-2.0 OR MIT |
 | [indexmap](https://github.com/indexmap-rs/indexmap) | 2.14.2 | Apache-2.0 OR MIT |
 | [is_terminal_polyfill](https://github.com/polyfill-rs/is_terminal_polyfill) | 1.70.2 | MIT OR Apache-2.0 |
@@ -205,6 +207,7 @@ permissive option. Regenerate with `cargo metadata` when dependencies change.
 | [js-sys](https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/js-sys) | 0.3.106 | MIT OR Apache-2.0 |
 | [khronos_api](https://github.com/brendanzab/gl-rs/) | 3.1.0 | Apache-2.0 |
 | [khronos-egl](https://github.com/timothee-haudebourg/khronos-egl) | 6.0.0 | MIT/Apache-2.0 |
+| [kurbo](https://github.com/linebender/kurbo) | 0.13.1 | Apache-2.0 OR MIT |
 | [libc](https://github.com/rust-lang/libc) | 0.2.191 | MIT OR Apache-2.0 |
 | [libloading](https://github.com/nagisa/rust_libloading/) | 0.8.9 | ISC |
 | [libredox](https://gitlab.redox-os.org/redox-os/libredox.git) | 0.1.25 | MIT |
@@ -268,6 +271,7 @@ permissive option. Regenerate with `cargo metadata` when dependencies change.
 | [parking_lot_core](https://github.com/Amanieu/parking_lot) | 0.9.12 | MIT OR Apache-2.0 |
 | [paste](https://github.com/dtolnay/paste) | 1.0.15 | MIT OR Apache-2.0 |
 | [percent-encoding](https://github.com/servo/rust-url/) | 2.3.2 | MIT OR Apache-2.0 |
+| [pico-args](https://github.com/RazrFalcon/pico-args) | 0.5.0 | MIT |
 | [pin-project](https://github.com/taiki-e/pin-project) | 1.1.13 | Apache-2.0 OR MIT |
 | [pin-project-internal](https://github.com/taiki-e/pin-project) | 1.1.13 | Apache-2.0 OR MIT |
 | [pin-project-lite](https://github.com/taiki-e/pin-project-lite) | 0.2.17 | Apache-2.0 OR MIT |
@@ -278,6 +282,7 @@ permissive option. Regenerate with `cargo metadata` when dependencies change.
 | [png](https://github.com/image-rs/image-png) | 0.18.1 | MIT OR Apache-2.0 |
 | [polling](https://github.com/smol-rs/polling) | 3.11.0 | Apache-2.0 OR MIT |
 | [pollster](https://github.com/zesterer/pollster) | 0.4.0 | Apache-2.0/MIT |
+| [polycool](https://github.com/linebender/kurbo) | 0.4.0 | MIT OR Apache-2.0 |
 | [potential_utf](https://github.com/unicode-org/icu4x) | 0.1.6 | Unicode-3.0 |
 | [ppv-lite86](https://github.com/cryptocorrosion/cryptocorrosion) | 0.2.21 | MIT OR Apache-2.0 |
 | [proc-macro2](https://github.com/dtolnay/proc-macro2) | 1.0.107 | MIT OR Apache-2.0 |
@@ -301,8 +306,11 @@ permissive option. Regenerate with `cargo metadata` when dependencies change.
 | [r-efi](https://github.com/r-efi/r-efi) | 5.3.0 | MIT OR Apache-2.0 OR LGPL-2.1-or-later |
 | [r-efi](https://github.com/r-efi/r-efi) | 6.0.0 | MIT OR Apache-2.0 OR LGPL-2.1-or-later |
 | [renderdoc-sys](https://github.com/ebkalderon/renderdoc-rs) | 1.1.0 | MIT OR Apache-2.0 |
+| [resvg](https://github.com/linebender/resvg) | 0.50.0 | Apache-2.0 OR MIT |
 | [rfd](https://github.com/PolyMeilex/rfd) | 0.15.3 | MIT |
+| [rgb](https://github.com/kornelski/rust-rgb) | 0.8.53 | MIT |
 | [ring](https://github.com/briansmith/ring) | 0.17.14 | Apache-2.0 AND ISC |
+| [roxmltree](https://github.com/RazrFalcon/roxmltree) | 0.21.2 | MIT OR Apache-2.0 |
 | [rustc_version](https://github.com/djc/rustc-version-rs) | 0.4.1 | MIT OR Apache-2.0 |
 | [rustc-hash](https://github.com/rust-lang-nursery/rustc-hash) | 1.1.0 | Apache-2.0/MIT |
 | [rustc-hash](https://github.com/rust-lang/rustc-hash) | 2.1.3 | Apache-2.0 OR MIT |
@@ -329,6 +337,8 @@ permissive option. Regenerate with `cargo metadata` when dependencies change.
 | [simd_cesu8](https://github.com/seancroach/simd_cesu8) | 1.2.0 | Apache-2.0 OR MIT |
 | [simd-adler32](https://github.com/mcountryman/simd-adler32) | 0.3.10 | MIT |
 | [simdutf8](https://github.com/rusticstuff/simdutf8) | 0.1.5 | MIT OR Apache-2.0 |
+| [simplecss](https://github.com/linebender/simplecss) | 0.2.2 | Apache-2.0 OR MIT |
+| [siphasher](https://github.com/jedisct1/rust-siphash) | 1.0.4 | MIT OR Apache-2.0 |
 | [slab](https://github.com/tokio-rs/slab) | 0.4.12 | MIT |
 | [slotmap](https://github.com/orlp/slotmap) | 1.1.1 | Zlib |
 | [smallvec](https://github.com/servo/rust-smallvec) | 1.16.4 | MIT OR Apache-2.0 |
@@ -344,6 +354,7 @@ permissive option. Regenerate with `cargo metadata` when dependencies change.
 | [strum](https://github.com/Peternator7/strum) | 0.26.3 | MIT |
 | [strum_macros](https://github.com/Peternator7/strum) | 0.26.4 | MIT |
 | [subtle](https://github.com/dalek-cryptography/subtle) | 2.6.1 | BSD-3-Clause |
+| [svgtypes](https://github.com/linebender/svgtypes) | 0.16.2 | Apache-2.0 OR MIT |
 | [syn](https://github.com/dtolnay/syn) | 2.0.119 | MIT OR Apache-2.0 |
 | [syn](https://github.com/dtolnay/syn) | 3.0.9 | MIT OR Apache-2.0 |
 | [synstructure](https://github.com/mystor/synstructure) | 0.14.0 | MIT |
@@ -355,7 +366,9 @@ permissive option. Regenerate with `cargo metadata` when dependencies change.
 | [thiserror-impl](https://github.com/dtolnay/thiserror) | 2.0.21 | MIT OR Apache-2.0 |
 | [tiff](https://github.com/image-rs/image-tiff) | 0.11.3 | MIT |
 | [tiny-skia](https://github.com/RazrFalcon/tiny-skia) | 0.11.4 | BSD-3-Clause |
+| [tiny-skia](https://github.com/linebender/tiny-skia) | 0.12.0 | BSD-3-Clause |
 | [tiny-skia-path](https://github.com/RazrFalcon/tiny-skia/tree/master/path) | 0.11.4 | BSD-3-Clause |
+| [tiny-skia-path](https://github.com/linebender/tiny-skia/tree/master/path) | 0.12.0 | BSD-3-Clause |
 | [tinystr](https://github.com/unicode-org/icu4x) | 0.8.5 | Unicode-3.0 |
 | [tokio](https://github.com/tokio-rs/tokio) | 1.54.1 | MIT |
 | [toml](https://github.com/toml-rs/toml) | 1.1.8+spec-1.1.0 | MIT OR Apache-2.0 |
@@ -378,6 +391,7 @@ permissive option. Regenerate with `cargo metadata` when dependencies change.
 | [ureq](https://github.com/algesten/ureq) | 2.12.1 | MIT OR Apache-2.0 |
 | [url](https://github.com/servo/rust-url) | 2.5.8 | MIT OR Apache-2.0 |
 | [urlencoding](https://github.com/kornelski/rust_urlencoding) | 2.1.3 | MIT |
+| [usvg](https://github.com/linebender/resvg) | 0.50.0 | Apache-2.0 OR MIT |
 | [utf8_iter](https://github.com/hsivonen/utf8_iter) | 1.0.4 | Apache-2.0 OR MIT |
 | [utf8parse](https://github.com/alacritty/vte) | 0.2.2 | Apache-2.0 OR MIT |
 | [uuid](https://github.com/uuid-rs/uuid) | 1.29.0 | Apache-2.0 OR MIT |

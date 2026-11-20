@@ -121,7 +121,7 @@ fn world_detail(mode: Option<i64>, difficulty: Option<i64>, hardcore: bool) -> S
     [mode, difficulty].into_iter().flatten().collect::<Vec<_>>().join(", ")
 }
 
-/// A world's picture, or Minecraft's pack.png when it has none (as UMT shows).
+/// A world's picture, or Minecraft's pack.png when it has none.
 fn draw_picture(p: &egui::Painter, rect: Rect, e: &Entry) {
     if !e.icon.as_deref().is_some_and(|i| icons::file_image(p, rect, i))
         && !icons::pack_file("pack.png").is_some_and(|i| icons::file_image(p, rect, &i))
@@ -470,7 +470,7 @@ impl WorldPicker {
             .icon
             .as_deref()
             .is_some_and(|i| icons::file_image(p, icon, i))
-            // Minecraft's pack.png, as UMT shows for worlds without an image.
+            // Minecraft's pack.png for worlds without an image.
             && !icons::pack_file("pack.png").is_some_and(|i| icons::file_image(p, icon, &i))
         {
             p.rect_filled(icon, theme::radius(3), theme::CHIP);

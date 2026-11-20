@@ -1,7 +1,7 @@
 //! Chunk pruning: delete every chunk inside (or, inverted, outside) a selection.
 //!
 //! A [`Selection`] is a union of layers — Box, Circle, Split, Polygon and Time
-//! (InhabitedTime). As in UMT's Pruner, normal mode removes the selected chunks and
+//! (InhabitedTime). Normal mode removes the selected chunks and
 //! inverted mode keeps only the selected chunks. Pruning never modifies the source world:
 //! every function writes a pruned copy.
 
@@ -51,7 +51,7 @@ fn applies(filter: Option<i32>, dimension: Option<i32>) -> bool {
 }
 
 fn check_selection(selection: &Selection) -> Result<(), Error> {
-    // Inverted with nothing selected keeps nothing: as in UMT, it prunes the whole world.
+    // Inverted with nothing selected keeps nothing: it prunes the whole world.
     if selection.layers.is_empty() && !selection.inverted {
         return Err(Error::Invalid(
             "the selection has no layers; add at least one".into(),

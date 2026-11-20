@@ -1,4 +1,4 @@
-//! The hex editor an array tag opens, laid out as in UMT: a toolbar (Overwrite or Insert,
+//! The hex editor an array tag opens: a toolbar (Overwrite or Insert,
 //! bytes per line, close), then the offsets, the bytes in hex and the same bytes as text.
 //! Import and Export read and write the bytes as a raw file.
 

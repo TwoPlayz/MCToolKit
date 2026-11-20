@@ -779,13 +779,11 @@ impl EditorPage {
                             }
                         }
                         "players" => {
-                            let default = settings.info_dir().join("Player.png");
-                            let default = default.is_file().then_some(default);
                             for (label, src) in ws.players() {
                                 // A player's UUID is shown as their name and skin head once
                                 // the profile service has been asked about it.
                                 let profile = heads::profile(&settings.working_dir().join("heads"), &label, ui.ctx());
-                                let img = profile.as_ref().and_then(|p| p.head.clone()).or_else(|| default.clone());
+                                let img = profile.as_ref().and_then(|p| p.head.clone());
                                 let shown = profile.as_ref().map_or(label.as_str(), |p| p.name.as_str());
                                 let resp =
                                     file_row_img(ui, 1, img.as_deref(), Icon::User, shown, None);
@@ -1080,8 +1078,7 @@ fn kind_icon(
         let stem = base.split('.').next().unwrap_or(base);
         let head = heads::profile(&settings.working_dir().join("heads"), stem, ui.ctx())
             .and_then(|p| p.head);
-        let img = settings.info_dir().join("Player.png");
-        return (head.or_else(|| img.is_file().then_some(img)), Icon::User);
+        return (head, Icon::User);
     }
     (None, Icon::File)
 }
@@ -1932,7 +1929,7 @@ fn tabs(
                 d.source,
                 DocSource::File(_) | DocSource::BedrockKey(_) | DocSource::ConsoleEntry(_)
             ) && !d.tree.read_only;
-            d.tree.ui(&mut child, full_precision, &settings.info_dir());
+            d.tree.ui(&mut child, full_precision);
             if !d.tree.status.is_empty() {
                 *status = std::mem::take(&mut d.tree.status);
             }

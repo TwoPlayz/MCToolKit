@@ -1,0 +1,3 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="192" height="192">
+  <defs><pattern id="h_thumb_box_delete_inverse" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="2.6" height="7" fill="#F0332B"/></pattern></defs><path d="M0 0H48V48H0ZM15 11H33L37 15V33L33 37H15L11 33V15Z" fill="url(#h_thumb_box_delete_inverse)" fill-rule="evenodd"/><path d="M15 11H33L37 15V33L33 37H15L11 33V15Z" fill="none" stroke="#F0332B" stroke-width="3" stroke-linejoin="miter"/>
+</svg>

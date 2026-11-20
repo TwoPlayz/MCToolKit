@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use mctk_nbt::{Compound, Tag};
 
+use crate::icons::Icon;
 use crate::nbt_view::{Seg, TagPath};
 
 /// A note beside one tag.
@@ -15,9 +16,25 @@ pub struct TagStyle {
     pub label: Option<String>,
     /// A colour name ("lime", "gold", ...) or `#rrggbb`.
     pub color: Option<String>,
-    /// A picture's file name in the info folder.
-    pub icon: Option<String>,
+    /// A small picture drawn before the label.
+    pub icon: Option<NoteIcon>,
 }
+
+/// Where a note's picture comes from.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum NoteIcon {
+    /// The first of these textures the resource pack has (paths under `assets/minecraft/textures`).
+    Pack(&'static [&'static str]),
+    /// One of the app's own icons.
+    Own(Icon),
+    /// One of the bundled vector icons by name (`POS`, `ROT`).
+    Image(&'static str),
+}
+
+const HEART: NoteIcon = NoteIcon::Pack(&["gui/sprites/hud/heart/full.png", "item/apple.png"]);
+const GOLD_HEART: NoteIcon = NoteIcon::Pack(&["gui/sprites/hud/heart/absorbing_full.png", "item/golden_apple.png"]);
+const HUNGER: NoteIcon = NoteIcon::Pack(&["gui/sprites/hud/food_full.png", "item/cooked_beef.png"]);
+const FIRE: NoteIcon = NoteIcon::Pack(&["block/fire_0.png", "item/fire_charge.png", "item/flint_and_steel.png"]);
 
 pub type Styles = HashMap<TagPath, TagStyle>;
 
@@ -87,8 +104,8 @@ impl Styler {
         }
     }
 
-    fn icon(&mut self, p: TagPath, file: &str) {
-        self.out.entry(p).or_default().icon = Some(file.to_string());
+    fn icon(&mut self, p: TagPath, icon: NoteIcon) {
+        self.out.entry(p).or_default().icon = Some(icon);
     }
 
     /// A `DataVersion` says which game version wrote the file.
@@ -319,7 +336,7 @@ impl Styler {
                 _ => {}
             }
             self.put(key(at, "foodLevel"), text, None);
-            self.icon(key(at, "foodLevel"), "hunger.png");
+            self.icon(key(at, "foodLevel"), HUNGER);
         }
     }
 
@@ -438,7 +455,7 @@ impl Styler {
             text += &format!(" \"{custom}\"");
         }
         self.put(at.clone(), text, Some(GREY));
-        self.icon(at.clone(), "Player.png");
+        self.icon(at.clone(), NoteIcon::Own(Icon::User));
 
         let bedrock = self.edition == edition::BEDROCK;
         if let Some(Tag::List(pos)) = c.get("Pos") {
@@ -447,7 +464,7 @@ impl Styler {
                 let r = |x: f64| (x + 0.5).floor() as i64;
                 let p = key(at, "Pos");
                 self.put(p.clone(), format!("X:{}, Y:{}, Z:{}", r(v[0]), r(v[1]), r(v[2])), Some(GREY));
-                self.icon(p.clone(), "Pos.png");
+                self.icon(p.clone(), NoteIcon::Image("POS"));
                 for (i, axis) in ["X", "Y", "Z"].into_iter().enumerate() {
                     self.put(index(&p, i), axis, None);
                 }
@@ -465,7 +482,7 @@ impl Styler {
                 self.put(index(&p, 0), format!("Yaw: {yaw}"), None);
                 self.put(index(&p, 1), format!("Pitch: {pitch}"), None);
                 self.put(p.clone(), format!("{yaw} and {pitch}"), Some(GREY));
-                self.icon(p, "Rot.png");
+                self.icon(p, NoteIcon::Image("ROT"));
             }
         }
         if let Some(Tag::List(motion)) = c.get("Motion") {
@@ -493,14 +510,14 @@ impl Styler {
         };
         if let Some(h) = health {
             self.put(key(at, "Health"), format!("{} Hearts", trim_zero(h / 2.0)), None);
-            self.icon(key(at, "Health"), "Health.png");
+            self.icon(key(at, "Health"), HEART);
         }
         if let Some(Tag::Short(v)) = c.get("Fire") {
             if *v <= 0 {
                 self.put(key(at, "Fire"), "Not on fire", None);
             } else {
                 self.put(key(at, "Fire"), format!("Fire extinguishes in {}", ticks_to_time(*v as f64, true)), None);
-                self.icon(key(at, "Fire"), "Fire.png");
+                self.icon(key(at, "Fire"), FIRE);
             }
         }
         if let Some(Tag::Short(v)) = c.get("Air") {
@@ -518,7 +535,7 @@ impl Styler {
         if let Some(Tag::Float(v)) = c.get("AbsorptionAmount") {
             if *v > 0.0 {
                 self.put(key(at, "AbsorptionAmount"), format!("{} Hearts", trim_zero(v / 2.0)), None);
-                self.icon(key(at, "AbsorptionAmount"), "ExtraHealth.png");
+                self.icon(key(at, "AbsorptionAmount"), GOLD_HEART);
             }
         }
         if let Some(Tag::List(effects)) = c.get("ActiveEffects") {
@@ -682,13 +699,12 @@ fn data_version_name(v: i32) -> Option<String> {
     static TABLE: std::sync::OnceLock<HashMap<i32, &'static str>> = std::sync::OnceLock::new();
     TABLE
         .get_or_init(|| {
-            include_str!("../data/data_versions.tsv")
-                .lines()
-                .filter_map(|l| {
-                    let (n, name) = l.split_once('\t')?;
-                    Some((n.parse().ok()?, name))
-                })
-                .collect()
+            // Our own registries record the DataVersion of every release they cover.
+            let mut t = HashMap::new();
+            for (dv, name) in mctk_registry::builtin::java_data_versions() {
+                t.entry(dv).or_insert(name);
+            }
+            t
         })
         .get(&v)
         .map(|s| s.to_string())
@@ -717,7 +733,7 @@ mod tests {
         assert_eq!(mode.label.as_deref(), Some("Creative"));
         let food = &s[&vec![Seg::Key("foodLevel".into())]];
         assert_eq!(food.label.as_deref(), Some("10 Food (Full)"));
-        assert_eq!(s[&TagPath::new()].icon.as_deref(), Some("Player.png"));
+        assert_eq!(s[&TagPath::new()].icon, Some(NoteIcon::Own(Icon::User)));
     }
 
     #[test]

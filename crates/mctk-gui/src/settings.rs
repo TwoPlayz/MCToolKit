@@ -211,13 +211,6 @@ impl Settings {
         PathBuf::from(&self.working_dir)
     }
 
-    /// Where the pictures beside some tags are kept (written out on first use).
-    pub fn info_dir(&self) -> PathBuf {
-        let dir = self.working_dir().join("info");
-        crate::info_assets::install(&dir);
-        dir
-    }
-
     /// `<resource pack>/assets/minecraft/textures`, when the pack is set and present.
     pub fn texture_pack(&self) -> Option<PathBuf> {
         let p = PathBuf::from(&self.resource_pack).join(r"assets\minecraft\textures");
@@ -325,22 +318,13 @@ const RUST_DEPENDENCIES: &str = include_str!("../assets/rust-dependencies.tsv");
 
 /// Non-Rust code, data and assets MCToolKit builds on: (name, what it is used for, licence,
 /// link, licence text when it ships with the app).
-const EXTERNAL: [(&str, &str, &str, &str, Option<&str>); 2] = [
-    (
-        "Lato font",
-        "The app's typeface, by \u{141}ukasz Dziedzic",
-        "SIL Open Font License 1.1",
-        "https://www.latofonts.com",
-        Some(LATO_LICENSE),
-    ),
-    (
-        "Universal Minecraft Tool extensions (pictures and version names)",
-        "The small pictures and DataVersion names in the NBT editor (Pryze Software LLC, OliverBroadbent)",
-        "BSD 2-Clause",
-        "https://universalminecrafttool.com",
-        None,
-    ),
-];
+const EXTERNAL: [(&str, &str, &str, &str, Option<&str>); 1] = [(
+    "Lato font",
+    "The app's typeface, by \u{141}ukasz Dziedzic",
+    "SIL Open Font License 1.1",
+    "https://www.latofonts.com",
+    Some(LATO_LICENSE),
+)];
 
 fn license_text(ui: &mut Ui, id: &str, text: &str) {
     ui.add_space(4.0);
