@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::f32::consts::{PI, TAU};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 
 use eframe::egui::{
     self, Align2, Color32, Painter, Pos2, Rect, Shape, Stroke, TextureHandle, pos2, vec2,
@@ -93,14 +93,14 @@ pub fn file_image(p: &Painter, r: Rect, path: &Path) -> bool {
     file_image_tinted(p, r, path, Color32::WHITE)
 }
 
-/// Draws an image file in grey (its colours as light and dark only), first frame of an
+/// Draws an image file in gray (its colors as light and dark only), first frame of an
 /// animated one.
 pub fn gray_image(p: &Painter, r: Rect, path: &Path) -> bool {
     static GRAY: OnceLock<Mutex<HashMap<PathBuf, Option<TextureHandle>>>> = OnceLock::new();
     let tex = GRAY
         .get_or_init(Default::default)
         .lock()
-        .expect("grey icons")
+        .expect("gray icons")
         .entry(path.to_path_buf())
         .or_insert_with(|| {
             let img = image::open(path).ok()?.to_rgba8();
@@ -113,7 +113,7 @@ pub fn gray_image(p: &Painter, r: Rect, path: &Path) -> bool {
                 px[2] = l;
             }
             let color = egui::ColorImage::from_rgba_unmultiplied([side as usize, side as usize], img.as_raw());
-            Some(p.ctx().load_texture(format!("grey:{}", path.display()), color, egui::TextureOptions::NEAREST))
+            Some(p.ctx().load_texture(format!("gray:{}", path.display()), color, egui::TextureOptions::NEAREST))
         })
         .clone();
     let Some(tex) = tex else { return false };
@@ -169,43 +169,301 @@ pub fn file_image_tinted(p: &Painter, r: Rect, path: &Path, tint: Color32) -> bo
 
 static FILE_SOURCES: OnceLock<Mutex<HashMap<PathBuf, Arc<image::RgbaImage>>>> = OnceLock::new();
 
-static PACK: Mutex<Option<PathBuf>> = Mutex::new(None);
-
-/// Sets the resource pack textures folder (`…/assets/minecraft/textures`).
-pub fn set_texture_pack(dir: Option<PathBuf>) {
-    let mut pack = PACK.lock().expect("pack");
-    if *pack != dir {
-        *pack = dir;
-    }
+/// A file of the game's assets beside the textures (`models/block/stone.json`,
+/// `blockstates/...`), the latest release's (see `assets`).
+pub fn pack_asset(rel: &str) -> Option<PathBuf> {
+    crate::assets::fetch(&format!("assets/minecraft/{rel}"))
 }
 
-/// A file in the resource pack's textures folder, such as `block/netherrack.png`.
+/// A texture of the game, such as `block/netherrack.png`, the latest release's (see `assets`).
 pub fn pack_texture(name: &str) -> Option<PathBuf> {
-    let p = PACK.lock().expect("pack").as_ref()?.join(name);
-    p.is_file().then_some(p)
+    crate::assets::fetch(&format!("assets/minecraft/textures/{name}"))
 }
 
 /// The texture of an item or block by its id (`minecraft:diamond_sword` or `diamond_sword`):
-/// the pack's item picture, else its block picture. Looked up once per name.
+/// its item picture, else its block picture. Looked up once per name.
 pub fn item_texture(id: &str) -> Option<PathBuf> {
-    static CACHE: Mutex<Option<(Option<PathBuf>, HashMap<String, Option<PathBuf>>)>> = Mutex::new(None);
+    static CACHE: LazyLock<Mutex<HashMap<String, Option<PathBuf>>>> = LazyLock::new(Default::default);
     let name = id.rsplit(':').next().unwrap_or(id).to_ascii_lowercase();
-    let pack = PACK.lock().expect("pack").clone();
-    let mut cache = CACHE.lock().expect("item textures");
-    // A different pack starts a fresh list.
-    if cache.as_ref().is_none_or(|(p, _)| *p != pack) {
-        *cache = Some((pack, HashMap::new()));
+    if let Some(found) = CACHE.lock().expect("item textures").get(&name) {
+        return found.clone();
     }
-    let (_, found) = cache.as_mut().expect("just set");
+    let found = find_item_texture(&name);
+    CACHE.lock().expect("item textures").insert(name, found.clone());
     found
-        .entry(name.clone())
-        .or_insert_with(|| find_item_texture(&name))
-        .clone()
+}
+
+/// Draws an item (by id) as the game's inventory shows it: its pictures for a flat item; a
+/// block, or a thing the game draws in code (chests, heads), seen from above at an angle; a
+/// block that is no item (a crop, a candle cake) by its block's model; else the picture its
+/// name suggests. Multiplied by `tint` (enchanted items are purple). False when there is
+/// nothing to draw.
+pub fn item_icon(p: &Painter, r: Rect, id: &str, tint: Color32) -> bool {
+    let model = crate::models::item_model(id);
+    if let Some(crate::models::ItemModel::Flat(layers)) = model.as_deref() {
+        let mut drawn = false;
+        for (k, layer) in layers.iter().enumerate() {
+            if let Some(f) = pack_texture(layer) {
+                // Dyed layers (leather, potions) as the plain undyed color the game shows.
+                let color = if k > 0 && layer_tinted(id, k) { Color32::from_rgb(0xA0, 0x65, 0x40) } else { tint };
+                drawn |= file_image_tinted(p, r, &f, color);
+            }
+        }
+        if drawn {
+            return true;
+        }
+    }
+    let bare = id.trim_start_matches("minecraft:");
+    // The shield: the face of its board, cut from its picture.
+    if bare == "shield" {
+        if let Some(tex) = pack_texture("entity/shield/shield_base_nopattern.png").and_then(|f| file_texture(p.ctx(), &f)) {
+            let side = r.height().min(r.width());
+            let face = Rect::from_center_size(r.center(), vec2(side * 12.0 / 22.0, side));
+            p.image(tex.id(), face, Rect::from_min_max(pos2(1.0 / 64.0, 1.0 / 64.0), pos2(13.0 / 64.0, 23.0 / 64.0)), tint);
+            return true;
+        }
+    }
+    if let Some(tex) = solid_icon(p.ctx(), bare, model.as_deref(), false) {
+        let side = r.width().min(r.height());
+        p.image(tex.id(), Rect::from_center_size(r.center(), vec2(side, side)), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), tint);
+        return true;
+    }
+    item_texture(id).is_some_and(|f| file_image_tinted(p, r, &f, tint))
+}
+
+/// The picture of an item drawn solid (a block model, a thing drawn in code, or the block of a
+/// name that is no item), made once and kept; `None` when it is none of those.
+fn solid_icon(ctx: &egui::Context, bare: &str, model: Option<&crate::models::ItemModel>, gray: bool) -> Option<TextureHandle> {
+    static ICONS: LazyLock<Mutex<HashMap<(String, bool), Option<TextureHandle>>>> = LazyLock::new(Default::default);
+    if let Some(t) = ICONS.lock().ok()?.get(&(bare.to_string(), gray)) {
+        return t.clone();
+    }
+    let leaf = crate::world::block_tint(&format!("{bare}@plains"), "");
+    let from_model = |m: &crate::models::Model| -> Vec<IconQuad> { m.quads.iter().map(|q| (q.pos, q.uv, q.tex.clone(), if q.tint { leaf } else { [1.0; 3] })).collect() };
+    let (quads, fit): (Vec<IconQuad>, bool) = match model {
+        Some(crate::models::ItemModel::Model(m)) if !m.quads.is_empty() => (from_model(m), false),
+        Some(crate::models::ItemModel::Flat(_)) => (Vec::new(), false),
+        // Drawn in code by the game (chests, heads, the pot, statues): the same boxes the world
+        // view builds, turned with their front to the viewer (heads and statues count their
+        // turn from the other side to chests).
+        _ if crate::entities::is_block_entity(bare) => {
+            let front = if bare.ends_with("_head") || bare.ends_with("_skull") || bare.ends_with("copper_golem_statue") {
+                "facing=south,type=single,rotation=0"
+            } else {
+                "facing=north,type=single,rotation=8"
+            };
+            let quads = crate::entities::block_entity(bare, front, None).unwrap_or_default();
+            (quads.into_iter().map(|q| (q.pos, q.uv, q.tex, q.tint)).collect(), true)
+        }
+        // A block that is no item: its block, in its first state.
+        _ => match crate::models::baked(bare, &crate::models::shown_state(bare)) {
+            Some(b) => (from_model(b.pick(0, 0, 0)), false),
+            None => (Vec::new(), false),
+        },
+    };
+    let made = if quads.is_empty() { None } else { render_icon(&quads, fit) }
+        .map(|mut img| {
+            if gray {
+                for px in &mut img.pixels {
+                    let [r, g, b, a] = px.to_array();
+                    let l = (0.3 * r as f32 + 0.59 * g as f32 + 0.11 * b as f32) as u8;
+                    *px = Color32::from_rgba_premultiplied(l, l, l, a);
+                }
+            }
+            ctx.load_texture(format!("item-icon:{bare}:{gray}"), img, egui::TextureOptions::LINEAR)
+        });
+    ICONS.lock().ok()?.insert((bare.to_string(), gray), made.clone());
+    made
+}
+
+/// Like [`item_icon`], in gray (light and dark only), as the menus' own icons are.
+pub fn item_icon_gray(p: &Painter, r: Rect, id: &str) -> bool {
+    let model = crate::models::item_model(id);
+    if let Some(crate::models::ItemModel::Flat(layers)) = model.as_deref() {
+        if layers.first().and_then(|l| pack_texture(l)).is_some_and(|f| gray_image(p, r, &f)) {
+            return true;
+        }
+    }
+    let bare = id.trim_start_matches("minecraft:");
+    if let Some(tex) = solid_icon(p.ctx(), bare, model.as_deref(), true) {
+        let side = r.width().min(r.height());
+        p.image(tex.id(), Rect::from_center_size(r.center(), vec2(side, side)), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        return true;
+    }
+    item_texture(id).is_some_and(|f| gray_image(p, r, &f))
+}
+
+/// A face to draw in an icon: its corners (clockwise from outside, in the block's space), each
+/// corner's place in its picture, the picture and its color.
+type IconQuad = ([[f32; 3]; 4], [[f32; 2]; 4], Arc<str>, [f32; 3]);
+
+/// Whether an item's layer `k` takes a dye color (left at a plain one here).
+fn layer_tinted(id: &str, k: usize) -> bool {
+    let n = id.trim_start_matches("minecraft:");
+    k == 1 && (n.starts_with("leather_") || n.contains("potion") || n == "tipped_arrow" || n.ends_with("firework_star"))
+}
+
+/// A picture of the pack as pixels (for drawing icons), read once.
+fn pixels(tex: &str) -> Option<Arc<image::RgbaImage>> {
+    static PIXELS: LazyLock<Mutex<HashMap<String, Option<Arc<image::RgbaImage>>>>> = LazyLock::new(Default::default);
+    if let Some(p) = PIXELS.lock().ok()?.get(tex) {
+        return p.clone();
+    }
+    let img = pack_texture(tex).and_then(|f| image::open(f).ok()).map(|i| Arc::new(i.to_rgba8()));
+    PIXELS.lock().ok()?.insert(tex.to_string(), img.clone());
+    img
+}
+
+/// Size of a made icon, in pixels; drawn at twice that and averaged down, for smooth edges.
+const ICON: usize = 64;
+
+/// Faces drawn as the inventory draws a block: turned 225 degrees about up and tipped 30
+/// degrees towards the viewer, its top lit fully and its sides darker, each pixel the nearest
+/// face's (so a chest's lock stands in front of its lid). At the game's size for a block, or
+/// (`fit`, for the smaller things drawn in code) filling the picture.
+fn render_icon(quads: &[IconQuad], fit: bool) -> Option<egui::ColorImage> {
+    render_icon_sized(quads, fit, ICON)
+}
+
+/// What a mob's (or anything's) faces look like from the inventory's angle, filling a picture
+/// `px` across (for looking at models in tests).
+#[cfg(test)]
+pub(crate) fn render_quads(quads: &[crate::entities::EQuad], px: usize) -> Option<egui::ColorImage> {
+    let q: Vec<IconQuad> = quads.iter().map(|q| (q.pos, q.uv, q.tex.clone(), q.tint)).collect();
+    render_icon_sized(&q, true, px)
+}
+
+fn render_icon_sized(quads: &[IconQuad], fit: bool, icon: usize) -> Option<egui::ColorImage> {
+    let n = icon * 2;
+    let (sy, cy) = (225f32.to_radians().sin(), 225f32.to_radians().cos());
+    let (sx, cx) = (30f32.to_radians().sin(), 30f32.to_radians().cos());
+    // Into the view: about y, then x; x right, y up, z towards the viewer.
+    let view = |q: [f32; 3]| {
+        let (x, y, z) = (q[0] - 0.5, q[1] - 0.5, q[2] - 0.5);
+        let (x1, z1) = (x * cy + z * sy, -x * sy + z * cy);
+        let (y2, z2) = (y * cx - z1 * sx, y * sx + z1 * cx);
+        [x1, y2, z2]
+    };
+    let side = n as f32;
+    // Sized as the game sizes a block (5/8 of the slot across its corners), or to fill it.
+    let (mut s, mut c) = (side * 0.625 * 1.05, [side / 2.0, side / 2.0]);
+    if fit {
+        let (mut lo, mut hi) = ([f32::MAX; 2], [f32::MIN; 2]);
+        for q in quads {
+            for corner in q.0 {
+                let v = view(corner);
+                lo = [lo[0].min(v[0]), lo[1].min(v[1])];
+                hi = [hi[0].max(v[0]), hi[1].max(v[1])];
+            }
+        }
+        let extent = (hi[0] - lo[0]).max(hi[1] - lo[1]).max(1e-3);
+        s = side * 0.92 / extent;
+        c = [side / 2.0 - (lo[0] + hi[0]) / 2.0 * s, side / 2.0 + (lo[1] + hi[1]) / 2.0 * s];
+    }
+    let mut color = vec![[0.0f32; 4]; n * n];
+    let mut depth = vec![f32::MIN; n * n];
+    let mut any = false;
+    for (pos, uvs, tex_file, color3) in quads {
+        let v = pos.map(view);
+        // Seen from behind: hidden.
+        let (a, b) = ([v[1][0] - v[0][0], v[1][1] - v[0][1]], [v[3][0] - v[0][0], v[3][1] - v[0][1]]);
+        if a[0] * b[1] - a[1] * b[0] > 0.0 {
+            continue;
+        }
+        let Some(img) = pixels(tex_file) else { continue };
+        let (tw, th) = (img.width() as f32, img.height() as f32);
+        // An animated picture is a strip of frames: the first one.
+        let frame = (tw / th).min(1.0);
+        // Lit by which way it faces once turned: up full, the two sides seen less.
+        let normal = {
+            let (e, f) = ([v[1][0] - v[0][0], v[1][1] - v[0][1], v[1][2] - v[0][2]], [v[3][0] - v[0][0], v[3][1] - v[0][1], v[3][2] - v[0][2]]);
+            let m = [e[1] * f[2] - e[2] * f[1], e[2] * f[0] - e[0] * f[2], e[0] * f[1] - e[1] * f[0]];
+            let l = (m[0] * m[0] + m[1] * m[1] + m[2] * m[2]).sqrt().max(1e-6);
+            [m[0] / l, m[1] / l, m[2] / l]
+        };
+        let light = if normal[1].abs() > 0.7 { 1.0 } else if normal[0] < 0.0 { 0.8 } else { 0.6 };
+        let screen = v.map(|p| [c[0] + p[0] * s, c[1] - p[1] * s, p[2]]);
+        for tri in [[0, 1, 2], [0, 2, 3]] {
+            let [p0, p1, p2] = tri.map(|i| screen[i]);
+            let [t0, t1, t2] = tri.map(|i| uvs[i]);
+            let area = (p1[0] - p0[0]) * (p2[1] - p0[1]) - (p1[1] - p0[1]) * (p2[0] - p0[0]);
+            if area.abs() < 1e-6 {
+                continue;
+            }
+            let x0 = p0[0].min(p1[0]).min(p2[0]).floor().max(0.0) as usize;
+            let x1 = (p0[0].max(p1[0]).max(p2[0]).ceil() as usize).min(n);
+            let y0 = p0[1].min(p1[1]).min(p2[1]).floor().max(0.0) as usize;
+            let y1 = (p0[1].max(p1[1]).max(p2[1]).ceil() as usize).min(n);
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+                    let w0 = ((p1[0] - px) * (p2[1] - py) - (p1[1] - py) * (p2[0] - px)) / area;
+                    let w1 = ((p2[0] - px) * (p0[1] - py) - (p2[1] - py) * (p0[0] - px)) / area;
+                    let w2 = 1.0 - w0 - w1;
+                    if w0 < -1e-4 || w1 < -1e-4 || w2 < -1e-4 {
+                        continue;
+                    }
+                    let z = p0[2] * w0 + p1[2] * w1 + p2[2] * w2;
+                    let i = y * n + x;
+                    if z <= depth[i] {
+                        continue;
+                    }
+                    let u = t0[0] * w0 + t1[0] * w1 + t2[0] * w2;
+                    let vv = (t0[1] * w0 + t1[1] * w1 + t2[1] * w2) * frame;
+                    let tx = ((u * tw) as i64).clamp(0, tw as i64 - 1) as u32;
+                    let ty = ((vv * th) as i64).clamp(0, th as i64 - 1) as u32;
+                    let px = img.get_pixel(tx, ty).0;
+                    let alpha = px[3] as f32 / 255.0;
+                    if alpha < 0.1 {
+                        continue;
+                    }
+                    let rgb = [0, 1, 2].map(|k| px[k] as f32 / 255.0 * light * color3[k]);
+                    let d = &mut color[i];
+                    if alpha >= 0.5 {
+                        // Solid: it is what is seen here.
+                        *d = [rgb[0], rgb[1], rgb[2], 1.0];
+                        depth[i] = z;
+                    } else {
+                        // See-through (glass, ice): over what is behind it.
+                        for k in 0..3 {
+                            d[k] = rgb[k] * alpha + d[k] * (1.0 - alpha);
+                        }
+                        d[3] = alpha + d[3] * (1.0 - alpha);
+                    }
+                    any = true;
+                }
+            }
+        }
+    }
+    if !any {
+        return None;
+    }
+    // Averaged down to the icon's size, as premultiplied color.
+    let mut out = Vec::with_capacity(icon * icon);
+    for y in 0..icon {
+        for x in 0..icon {
+            let mut sum = [0.0f32; 4];
+            for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                let p = color[(y * 2 + dy) * n + x * 2 + dx];
+                for k in 0..3 {
+                    sum[k] += p[k] * p[3];
+                }
+                sum[3] += p[3];
+            }
+            out.push(Color32::from_rgba_premultiplied(
+                (sum[0] / 4.0 * 255.0) as u8,
+                (sum[1] / 4.0 * 255.0) as u8,
+                (sum[2] / 4.0 * 255.0) as u8,
+                (sum[3] / 4.0 * 255.0) as u8,
+            ));
+        }
+    }
+    Some(egui::ColorImage { size: [icon, icon], pixels: out })
 }
 
 /// What a texture of the pack is called for items and blocks that have none of their own name:
 /// a stair or slab is drawn as the block it is made of, a block by one of its faces, a bed or
-/// banner by its colour of wool.
+/// banner by its color of wool.
 fn find_item_texture(name: &str) -> Option<PathBuf> {
     // Items that look like another one.
     let alias = match name {
@@ -223,7 +481,10 @@ fn find_item_texture(name: &str) -> Option<PathBuf> {
         "damaged_anvil" => "damaged_anvil_top",
         "sticky_piston" => "piston_top_sticky",
         "tipped_arrow" => "arrow",
-        n if n.ends_with("_spawn_egg") => "spawn_egg",
+        // Blocks with no look of their own in an inventory: what they are made of or in.
+        "bubble_column" => "water",
+        "end_portal" | "end_gateway" => "end_portal_frame",
+        "moving_piston" => "piston",
         n if n.ends_with("_map") => "filled_map",
         n => n,
     };
@@ -276,15 +537,14 @@ fn find_item_texture(name: &str) -> Option<PathBuf> {
     None
 }
 
-/// A file at the resource pack's root, such as `pack.png`.
+/// A file at MCToolKit's own resource pack's root, such as `pack.png`.
 pub fn pack_file(name: &str) -> Option<PathBuf> {
-    let textures = PACK.lock().expect("pack").clone()?;
-    let p = textures.parent()?.parent()?.parent()?.join(name);
-    p.is_file().then_some(p)
+    let p = crate::assets::root()?.join(name);
+    p.is_file().then_some(p).or_else(|| crate::assets::fetch(name))
 }
 
 /// Draws an isometric block from the pack's top and side textures; false if missing.
-/// The top is multiplied by `tint` (grass is greyscale in the pack).
+/// The top is multiplied by `tint` (grass is grayscale in the pack).
 pub fn block(p: &Painter, r: Rect, top: &str, side: &str, tint: Color32) -> bool {
     let ctx = p.ctx();
     let (Some(t), Some(s)) = (
@@ -359,7 +619,7 @@ pub fn install_textures(_ctx: &egui::Context) {
     });
 }
 
-/// Draws a bundled vector icon fitted (aspect kept) and centred in `r`. It is rendered at the
+/// Draws a bundled vector icon fitted (aspect kept) and centered in `r`. It is rendered at the
 /// exact number of screen pixels it covers (and snapped to the pixel grid), so it stays sharp at
 /// any size or zoom; each size is rendered once.
 pub fn image(p: &Painter, r: Rect, name: &str, tint: Color32) -> bool {
@@ -430,11 +690,11 @@ fn image_name(icon: Icon) -> Option<&'static str> {
         Icon::Maximize | Icon::Restore => "MAX",
         Icon::User => "AUTHOR",
         Icon::ArrowRight => "CONVERTER_ARROW",
-        // Drawn as lines, so they take any colour and can point either way.
+        // Drawn as lines, so they take any color and can point either way.
         Icon::Logo
+        | Icon::MobRemove
         | Icon::AppEditor
         | Icon::AppConverter
-        | Icon::AppPruner
         | Icon::ChevronDown
         | Icon::ChevronUp
         | Icon::ArrowUp
@@ -447,14 +707,38 @@ fn image_name(icon: Icon) -> Option<&'static str> {
     })
 }
 
+/// Whether a bundled picture is plain: only grays and white (a glyph to color as wanted).
+fn is_plain(name: &str) -> bool {
+    static PLAIN: LazyLock<Mutex<HashMap<String, bool>>> = LazyLock::new(Default::default);
+    if let Some(v) = PLAIN.lock().expect("plain icons").get(name) {
+        return *v;
+    }
+    // Rendered small once, and its pixels looked at.
+    let v = TREES.get().and_then(|t| t.get(name)).is_some_and(|tree| {
+        let (w, h) = (tree.size().width(), tree.size().height());
+        let Some(mut pixmap) = resvg::tiny_skia::Pixmap::new(32, 32) else { return false };
+        resvg::render(tree, resvg::tiny_skia::Transform::from_scale(32.0 / w, 32.0 / h), &mut pixmap.as_mut());
+        pixmap.data().chunks_exact(4).all(|p| {
+            let (r, g, b, a) = (p[0], p[1], p[2], p[3]);
+            a < 16 || (r.abs_diff(g) < 24 && g.abs_diff(b) < 24 && r.abs_diff(b) < 24)
+        })
+    });
+    PLAIN.lock().expect("plain icons").insert(name.to_string(), v);
+    v
+}
+
 /// Draws `icon` from its image: white asks for the highlighted (`_h`) variant, the dim
-/// greys fade it as disabled. Returns false when there is no image for the icon.
+/// grays fade it as disabled. Returns false when there is no image for the icon.
 fn paint_image(p: &Painter, r: Rect, icon: Icon, c: Color32) -> bool {
     let Some(name) = image_name(icon) else {
         return false;
     };
-    let disabled = c == theme::TEXT_DIM || c == theme::CHIP;
-    let tint = if disabled {
+    let disabled = c == theme::text_dim() || c == theme::chip();
+    // The artwork is light glyphs for a dark page; in the light theme a plain (gray and white)
+    // picture takes the color asked for instead (colored ones, as the editions', keep theirs).
+    let tint = if theme::is_light() && is_plain(name) {
+        if disabled { c.gamma_multiply(0.55) } else { c }
+    } else if disabled {
         Color32::from_white_alpha(70)
     } else {
         Color32::WHITE
@@ -470,7 +754,6 @@ pub enum Icon {
     Logo,
     AppEditor,
     AppConverter,
-    AppPruner,
     Java,
     Bedrock,
     Xbox360,
@@ -516,8 +799,10 @@ pub enum Icon {
     Restore,
     User,
     ArrowRight,
-    /// Red/grey "not supported" cross (extension editions).
+    /// Red/gray "not supported" cross (extension editions).
     Cross,
+    /// A figure with a cross: removing mobs and other entities.
+    MobRemove,
 }
 
 struct Pen<'a> {
@@ -603,8 +888,8 @@ pub fn paint(p: &Painter, r: Rect, icon: Icon, c: Color32) {
         return;
     }
     let pen = Pen { p, r, c };
-    let grey = theme::TEXT_MUTED;
-    let bg = theme::BG;
+    let gray = theme::text_muted();
+    let bg = theme::bg();
     match icon {
         Icon::Logo => {
             // The original box mark. See `examples/gen_logo.rs` for the matching
@@ -627,7 +912,7 @@ pub fn paint(p: &Painter, r: Rect, icon: Icon, c: Color32) {
             w.line(&[(0.5, 0.52), (0.5, 0.84)]);
         }
         Icon::AppEditor => {
-            let frame = Pen { p, r, c: grey };
+            let frame = Pen { p, r, c: gray };
             frame.rect_stroke(0.14, 0.12, 0.86, 0.88, 3);
             pen.line(&[(0.36, 0.28), (0.36, 0.72)]);
             for y in [0.3, 0.5, 0.7] {
@@ -641,21 +926,9 @@ pub fn paint(p: &Painter, r: Rect, icon: Icon, c: Color32) {
             // (which has some width behind its tip), leaving a visible gap on each side.
             pen.line(&[(0.22, 0.42), (0.22, 0.22), (0.78, 0.22), (0.78, 0.42)]);
             pen.head((0.78, 0.42), PI / 2.0);
-            let g = Pen { p, r, c: grey };
+            let g = Pen { p, r, c: gray };
             g.line(&[(0.78, 0.58), (0.78, 0.78), (0.22, 0.78), (0.22, 0.58)]);
             g.head((0.22, 0.58), -PI / 2.0);
-        }
-        Icon::AppPruner => {
-            for row in 0..3 {
-                for col in 0..3 {
-                    let (x, y) = (0.14 + col as f32 * 0.25, 0.14 + row as f32 * 0.25);
-                    if col == 2 || (row == 0 && col == 1) {
-                        pen.rect_fill(x, y, x + 0.2, y + 0.2, 1, c);
-                    } else {
-                        Pen { p, r, c: grey }.rect_stroke(x, y, x + 0.2, y + 0.2, 1);
-                    }
-                }
-            }
         }
         Icon::Java => {
             pen.rect_fill(0.08, 0.3, 0.92, 0.72, 3, c);
@@ -918,6 +1191,12 @@ pub fn paint(p: &Painter, r: Rect, icon: Icon, c: Color32) {
             pen.line(&[(0.1, 0.5), (0.86, 0.5)]);
             pen.line(&[(0.6, 0.22), (0.88, 0.5), (0.6, 0.78)]);
         }
+        Icon::MobRemove => {
+            pen.dot(0.38, 0.3, 0.14, c);
+            pen.fill(&[(0.1, 0.82), (0.17, 0.56), (0.59, 0.56), (0.62, 0.66), (0.52, 0.82)], c);
+            pen.line(&[(0.66, 0.6), (0.92, 0.86)]);
+            pen.line(&[(0.92, 0.6), (0.66, 0.86)]);
+        }
     }
 }
 
@@ -943,7 +1222,7 @@ pub fn badge(p: &Painter, r: Rect, text: &str, fill: Color32, bracketed: bool) {
             Align2::CENTER_CENTER,
             text,
             theme::bold(11.0),
-            theme::TEXT,
+            theme::text(),
         );
     } else {
         p.rect_filled(r.shrink(1.0), theme::radius(2), fill);

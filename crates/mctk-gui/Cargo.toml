@@ -22,7 +22,11 @@ mctk-replace.workspace = true
 mctk-prune.workspace = true
 mctk-mapping.workspace = true
 mctk-world.workspace = true
-eframe = "=0.31.1"
+# The world viewer draws with wgpu on the GPU (Vulkan, or Direct3D 12 on Windows, which eframe
+# leaves out by default); OpenGL stays as the fallback.
+eframe = { version = "=0.31.1", features = ["wgpu"] }
+wgpu = { version = "24", default-features = false, features = ["dx12", "wgsl"] }
+bytemuck = { version = "1", features = ["derive"] }
 rfd = "=0.15.3"
 flate2.workspace = true
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

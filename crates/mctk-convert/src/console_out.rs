@@ -535,6 +535,75 @@ const CLEAR: &[u8] = &[
     83, 90, 92, 101, 102, 104, 105, 106, 107, 111, 115, 131, 132, 140, 141, 142, 143, 171,
 ];
 
+/// The light a block gives (by its numeric id, as the console game has them).
+fn light_emitted(id: u8) -> u8 {
+    match id {
+        10 | 11 | 51 | 89 | 91 | 119 | 124 | 138 | 169 => 15,
+        50 | 198 => 14,
+        62 => 13,
+        90 => 11,
+        74 | 94 | 150 => 9,
+        76 | 130 => 7,
+        213 => 3,
+        39 | 117 | 120 | 122 => 1,
+        _ => 0,
+    }
+}
+
+/// How much more than a step's 1 light loses going into a see-through block: water 3,
+/// leaves 1 (as the game dims them).
+fn light_cost(id: u8) -> u8 {
+    match id {
+        8 | 9 => 3,
+        18 | 161 => 1,
+        _ => 0,
+    }
+}
+
+/// Spreads light (one value per block, in the console's block order) from where it is to the
+/// see-through blocks around, a step dimmer each block (more through water and leaves), within
+/// the chunk: as the game's lighting fills in from the sky and from glowing blocks.
+fn spread_light(light: &mut [u8], ids: &[u8], h: usize) {
+    let mut queue: std::collections::VecDeque<(usize, usize, usize)> = std::collections::VecDeque::new();
+    for y in 0..h {
+        for z in 0..16 {
+            for x in 0..16 {
+                if light[console_block_index(x, y, z)] > 1 {
+                    queue.push_back((x, y, z));
+                }
+            }
+        }
+    }
+    while let Some((x, y, z)) = queue.pop_front() {
+        let here = light[console_block_index(x, y, z)];
+        let near = [
+            (x.wrapping_sub(1), y, z),
+            (x + 1, y, z),
+            (x, y.wrapping_sub(1), z),
+            (x, y + 1, z),
+            (x, y, z.wrapping_sub(1)),
+            (x, y, z + 1),
+        ];
+        for (nx, ny, nz) in near {
+            if nx >= 16 || nz >= 16 || ny >= h {
+                continue;
+            }
+            let at = console_block_index(nx, ny, nz);
+            let id = ids[at];
+            if !CLEAR.contains(&id) && light_emitted(id) == 0 {
+                continue;
+            }
+            let v = here.saturating_sub(1 + light_cost(id));
+            if v > light[at] {
+                light[at] = v;
+                if v > 1 {
+                    queue.push_back((nx, ny, nz));
+                }
+            }
+        }
+    }
+}
+
 /// Flower pot contents: the item the pot holds to the data value the console game keeps.
 fn potted(name: &str) -> Option<u8> {
     Some(match name.trim_start_matches("minecraft:potted_") {
@@ -672,9 +741,10 @@ fn chunk_to_console(chunk: &Chunk, entities: &[Tag], dim: i32, raised: i32, ctx:
         }
     }
 
-    // Heights and a plain sky light: full above the highest opaque block, none below.
+    // Heights, and the light as the game would work it out (within the chunk): the sky's down
+    // each column (dimmed by water and leaves) and spread sideways and down under overhangs, and
+    // the glowing blocks' spread out from them.
     let mut heightmap = vec![0i8; 256];
-    let mut sky = vec![0u8; 32768];
     let set = |arr: &mut [u8], i: usize, v: u8| {
         if i % 2 == 0 {
             arr[i / 2] = (arr[i / 2] & 0xf0) | v;
@@ -682,25 +752,44 @@ fn chunk_to_console(chunk: &Chunk, entities: &[Tag], dim: i32, raised: i32, ctx:
             arr[i / 2] = (arr[i / 2] & 0x0f) | (v << 4);
         }
     };
+    let h = height as usize;
+    let cells = 16 * 16 * h;
+    let mut sky_v = vec![0u8; cells];
+    let mut lamp_v = vec![0u8; cells];
+    let cell = |x: usize, y: usize, z: usize| console_block_index(x, y, z);
     for z in 0..16usize {
         for x in 0..16usize {
-            let mut lit = true;
             let mut top = 0usize;
-            for y in (0..height as usize).rev() {
-                let at = console_block_index(x, y, z);
+            let mut light = if dim == -1 { 0u8 } else { 15u8 };
+            for y in (0..h).rev() {
+                let at = cell(x, y, z);
                 let id = ids[at];
                 if id != 0 && top == 0 {
                     top = y + 1;
                 }
-                if lit && !CLEAR.contains(&id) {
-                    lit = false;
+                if light > 0 {
+                    if !CLEAR.contains(&id) {
+                        light = 0;
+                    } else {
+                        light = light.saturating_sub(light_cost(id));
+                    }
                 }
-                if lit && dim != -1 {
-                    set(&mut sky, at, 15);
+                sky_v[at] = light;
+                let glow = light_emitted(id);
+                if glow > 0 {
+                    lamp_v[at] = glow;
                 }
             }
             heightmap[z * 16 + x] = top.min(255) as i8;
         }
+    }
+    spread_light(&mut sky_v, &ids, h);
+    spread_light(&mut lamp_v, &ids, h);
+    let mut sky = vec![0u8; 32768];
+    let mut lamp = vec![0u8; 32768];
+    for i in 0..cells.min(32768 * 2) {
+        set(&mut sky, i, sky_v[i]);
+        set(&mut lamp, i, lamp_v[i]);
     }
 
     // Biomes: one per column, from the cell at the surface section.
@@ -796,7 +885,7 @@ fn chunk_to_console(chunk: &Chunk, entities: &[Tag], dim: i32, raised: i32, ctx:
     level.insert("Blocks".into(), Tag::ByteArray(ids.iter().map(|&b| b as i8).collect()));
     level.insert("Data".into(), nibbles(&packed_data));
     level.insert("SkyLight".into(), nibbles(&sky));
-    level.insert("BlockLight".into(), nibbles(&vec![0u8; 32768]));
+    level.insert("BlockLight".into(), nibbles(&lamp));
     level.insert("HeightMap".into(), Tag::ByteArray(heightmap));
     level.insert("TerrainPopulatedFlags".into(), Tag::Short(2046));
     level.insert("Biomes".into(), Tag::ByteArray(biomes));
@@ -1022,6 +1111,51 @@ fn unused(_: &Tag) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Light spreads a step dimmer each block through air, not through stone, more slowly
+    /// through water; sky light reaches in under an overhang.
+    #[test]
+    fn light_spreads_as_the_game_does() {
+        let h = 128;
+        let mut ids = vec![0u8; 16 * 16 * h];
+        // A stone wall along x = 10.
+        for y in 0..h {
+            for z in 0..16 {
+                ids[console_block_index(10, y, z)] = 1;
+            }
+        }
+        let mut lamp = vec![0u8; 16 * 16 * h];
+        lamp[console_block_index(5, 60, 5)] = 14;
+        spread_light(&mut lamp, &ids, h);
+        assert_eq!(lamp[console_block_index(6, 60, 5)], 13);
+        assert_eq!(lamp[console_block_index(9, 60, 5)], 10);
+        assert_eq!(lamp[console_block_index(11, 60, 5)], 0, "not through stone");
+        // Through water: a step and its cost.
+        ids[console_block_index(5, 61, 5)] = 9;
+        let mut lamp = vec![0u8; 16 * 16 * h];
+        lamp[console_block_index(5, 60, 5)] = 14;
+        spread_light(&mut lamp, &ids, h);
+        assert_eq!(lamp[console_block_index(5, 61, 5)], 10);
+        // Sky light under an overhang: a stone roof over (0..4, 70, 0..4) with the column under
+        // it dark from above, lit from the open side.
+        let mut ids = vec![0u8; 16 * 16 * h];
+        let mut sky = vec![0u8; 16 * 16 * h];
+        for z in 0..16 {
+            for x in 0..16 {
+                for y in (0..h).rev() {
+                    let roof = x < 4 && z < 4 && y == 70;
+                    if roof {
+                        ids[console_block_index(x, y, z)] = 1;
+                    }
+                    let covered = x < 4 && z < 4 && y <= 70;
+                    sky[console_block_index(x, y, z)] = if covered { 0 } else { 15 };
+                }
+            }
+        }
+        spread_light(&mut sky, &ids, h);
+        assert_eq!(sky[console_block_index(3, 69, 2)], 14, "beside the open side");
+        assert_eq!(sky[console_block_index(0, 69, 0)], 11, "four blocks in");
+    }
 
     #[test]
     fn states_go_back_to_the_ids_they_came_from() {

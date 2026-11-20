@@ -14,8 +14,8 @@ use mctk_java::{BlockStorage, Chunk, JavaWorld};
 pub use mctk_world::detect;
 pub use mctk_world::Edition;
 
-/// Approximate map colour for a block name (no game textures are used).
-pub fn block_colour(name: &str) -> [u8; 3] {
+/// Approximate map color for a block name (no game textures are used).
+pub fn block_color(name: &str) -> [u8; 3] {
     let n = name.trim_start_matches("minecraft:");
     const TABLE: &[(&str, [u8; 3])] = &[
         ("water", [63, 118, 228]),
@@ -83,7 +83,7 @@ pub fn block_colour(name: &str) -> [u8; 3] {
         .find(|(k, _)| n.contains(k))
         .map(|(_, c)| *c)
         .unwrap_or_else(|| {
-            // Stable muted colour for anything else.
+            // Stable muted color for anything else.
             let h = n
                 .bytes()
                 .fold(5381u32, |h, b| h.wrapping_mul(33) ^ b as u32);
@@ -96,7 +96,7 @@ pub fn block_colour(name: &str) -> [u8; 3] {
 }
 
 /// Names for the common pre-1.13 numeric ids (console and old Java chunks).
-fn legacy_name(id: u16) -> &'static str {
+pub(crate) fn legacy_name(id: u16) -> &'static str {
     match id {
         1 => "stone",
         2 => "grass_block",
@@ -104,8 +104,11 @@ fn legacy_name(id: u16) -> &'static str {
         4 => "cobblestone",
         5 => "planks",
         7 => "bedrock",
-        8 | 9 => "water",
-        10 | 11 => "lava",
+        // Flowing water and lava (8, 10), level not known: drawn as flowing halfway.
+        8 => "water#4",
+        9 => "water",
+        10 => "lava#4",
+        11 => "lava",
         12 => "sand",
         13 => "gravel",
         14..=16 | 21 | 56 | 73 | 129 => "ore",
@@ -113,7 +116,8 @@ fn legacy_name(id: u16) -> &'static str {
         18 | 161 => "leaves",
         20 => "glass",
         24 => "sandstone",
-        31 | 32 => "short_grass",
+        31 => "short_grass",
+        32 => "dead_bush",
         35 => "wool",
         37 | 38 | 175 => "flower",
         45 => "brick",
@@ -144,16 +148,18 @@ enum Kind {
     Water,
 }
 
-/// A block name worked out once: its number on the map, its colour and its kind.
+/// A block name worked out once: its number on the map, its color and its kind.
 #[derive(Clone, Copy)]
 struct Resolved {
     id: u16,
     rgb: [u8; 3],
     kind: Kind,
     cover: f32,
+    /// Water itself (a source or flowing), not something growing in it.
+    liquid: bool,
 }
 
-/// One block column of a chunk as the map sees it: the colour, how high it is, how deep the water
+/// One block column of a chunk as the map sees it: the color, how high it is, how deep the water
 /// over it is, the block it shows and (for a plant or leaves) the ground showing through below.
 #[derive(Clone, Copy)]
 struct Column {
@@ -164,6 +170,9 @@ struct Column {
     base: u16,
     /// A plant or leaves drawn over `base`; 0 when there is none.
     over: u16,
+    /// The height of `base` (the ground, or the bottom under water) and of `over`.
+    gy: i32,
+    oy: i32,
 }
 
 /// Names of the blocks on the map, shared by every chunk drawn; id 0 is "nothing here".
@@ -171,7 +180,7 @@ static NAMES: std::sync::LazyLock<Mutex<(Vec<String>, std::collections::HashMap<
     std::sync::LazyLock::new(|| Mutex::new((Vec::new(), std::collections::HashMap::new())));
 
 /// The number a block name is known by on the map (the same name always gets the same number).
-fn intern(name: &str) -> u16 {
+pub(crate) fn intern(name: &str) -> u16 {
     let n = name.trim_start_matches("minecraft:");
     let mut g = NAMES.lock().expect("block names");
     if let Some(i) = g.1.get(n) {
@@ -189,8 +198,78 @@ pub fn block_name(id: u16) -> Option<String> {
     g.0.get((id as usize).checked_sub(1)?).cloned()
 }
 
+/// The block states (`facing=east,half=bottom`) of numbers given out by [`intern_state`].
+static STATES: std::sync::LazyLock<Mutex<std::collections::HashMap<u16, std::sync::Arc<str>>>> = std::sync::LazyLock::new(Default::default);
+
+/// The number for a block name with its full block state (`props` as `key=value` pairs joined
+/// by commas, in any order): a number of its own, whose [`block_name`] is `name` as usual and
+/// whose [`block_props`] are the state. For the 3D view, which draws every state as the game does.
+/// (Once numbers run short, the name alone.)
+pub(crate) fn intern_state(name: &str, props: &str) -> u16 {
+    if props.is_empty() {
+        return intern(name);
+    }
+    let n = name.trim_start_matches("minecraft:");
+    let key = format!("{n}\u{1}{props}");
+    let mut g = NAMES.lock().expect("block names");
+    if let Some(i) = g.1.get(&key) {
+        return *i;
+    }
+    if g.0.len() >= 64_000 {
+        drop(g);
+        return intern(name);
+    }
+    g.0.push(n.to_string());
+    let id = g.0.len() as u16;
+    g.1.insert(key, id);
+    drop(g);
+    STATES.lock().expect("block states").insert(id, props.into());
+    id
+}
+
+/// The block state a number was given with (see [`intern_state`]), if any.
+pub(crate) fn block_props(id: u16) -> Option<std::sync::Arc<str>> {
+    STATES.lock().ok()?.get(&id).cloned()
+}
+
+/// What the game multiplies a block's tinted faces by (0 to 1 a channel): its biome's grass or
+/// leaf color, water's blue, redstone dust's red by its power, a stem's color by its age.
+/// `name` is the map name (with the biome after `@` for grass and leaves).
+pub(crate) fn block_tint(name: &str, props: &str) -> [f32; 3] {
+    let n = name.trim_start_matches("minecraft:");
+    let plain = bare(n);
+    let biome = n.split_once('@').map(|(_, b)| b);
+    let (grass, foliage) = biome.map_or(([145.0, 189.0, 89.0], [119.0, 171.0, 47.0]), biome_colors);
+    let prop = |k: &str| props.split(',').find_map(|p| p.strip_prefix(k)?.strip_prefix('=')).and_then(|v| v.parse::<f32>().ok());
+    let hex = |c: u32| [(c >> 16) as f32, ((c >> 8) & 255) as f32, (c & 255) as f32];
+    let rgb = match plain {
+        "birch_leaves" => hex(0x80A755),
+        "spruce_leaves" => hex(0x619961),
+        "lily_pad" => hex(0x208030),
+        "water" | "flowing_water" | "water_cauldron" | "bubble_column" => {
+            if biome.is_some_and(|b| b.contains("swamp")) { hex(0x617B64) } else { hex(0x3F76E4) }
+        }
+        "redstone_wire" => {
+            let f = prop("power").unwrap_or(0.0) / 15.0;
+            let r = if f > 0.0 { f * 0.6 + 0.4 } else { 0.3 };
+            return [r, (f * f * 0.7 - 0.5).max(0.0), (f * f * 0.6 - 0.7).max(0.0)];
+        }
+        "melon_stem" | "pumpkin_stem" => {
+            let a = prop("age").unwrap_or(0.0);
+            [a * 32.0, 255.0 - a * 8.0, a * 4.0]
+        }
+        "attached_melon_stem" | "attached_pumpkin_stem" => hex(0xE0C71C),
+        "oak_leaves" | "jungle_leaves" | "acacia_leaves" | "dark_oak_leaves" | "mangrove_leaves" | "vine" => foliage,
+        "grass_block" | "short_grass" | "tall_grass" | "fern" | "large_fern" | "potted_fern" | "sugar_cane" | "bush" | "pink_petals" | "wildflowers" | "leaf_litter" => grass,
+        // Only the blocks the game gives a color are tinted: a tinted face of any other (the
+        // stonecutter's saw) is drawn as it is.
+        _ => [255.0; 3],
+    };
+    rgb.map(|c| c / 255.0)
+}
+
 /// Whether a block grows on the ground rather than being the ground: flowers, grass, ferns...
-fn is_plant(n: &str) -> bool {
+pub(crate) fn is_plant(n: &str) -> bool {
     const EXACT: &[&str] = &[
         "short_grass", "tall_grass", "fern", "large_fern", "dead_bush", "vine", "lily_pad", "sugar_cane",
         "flower", "hanging_roots", "glow_lichen", "sweet_berry_bush", "brown_mushroom", "red_mushroom",
@@ -242,7 +321,8 @@ fn resolve(name: &str) -> Resolved {
             if kind == Kind::Leaves { 0.8 } else { 0.3 },
             |(_, c)| c,
         );
-        let res = Resolved { id: intern(n), rgb: surface_colour(n), kind, cover };
+        let liquid = matches!(bare(n), "water" | "flowing_water");
+        let res = Resolved { id: intern(n), rgb: surface_color(n), kind, cover, liquid };
         r.insert(name.to_string(), res);
         res
     })
@@ -257,6 +337,13 @@ fn make_column(each: impl FnOnce(&mut dyn FnMut(&str, i32) -> bool)) -> Option<C
     let mut ground: Option<(Resolved, i32)> = None;
     let (mut water, mut below) = (0, 0);
     each(&mut |name, y| {
+        // Blocks that cannot be seen (barriers, light blocks, structure voids) are left out, as
+        // the game shows them: a world floored with them reads as the void it looks like.
+        let bare = name.trim_start_matches("minecraft:");
+        let bare = bare.split(['#', '@', '[']).next().unwrap_or(bare);
+        if matches!(bare, "barrier" | "light" | "structure_void" | "air" | "cave_air" | "void_air" | "moving_piston") {
+            return true;
+        }
         let r = resolve(name);
         match top {
             None => {
@@ -295,11 +382,17 @@ fn make_column(each: impl FnOnce(&mut dyn FnMut(&str, i32) -> bool)) -> Option<C
             let rgb = [0, 1, 2].map(|i| (g.rgb[i] as f32 * (1.0 - k) + t.rgb[i] as f32 * k) as u8);
             // A flower does not change the lie of the land; a canopy stands a little above it.
             let relief = if t.kind == Kind::Leaves { gy + 3 } else { gy };
-            Column { rgb, y: relief, water: 0, base: g.id, over: t.id }
+            Column { rgb, y: relief, water: 0, base: g.id, over: t.id, gy, oy: y }
         }
         // Water is always drawn as water (even over kelp), deeper the more of it there is.
-        (Kind::Water, g) => Column { rgb: g.map_or(t.rgb, |(g, _)| g.rgb), y, water, base: intern("water"), over: 0 },
-        _ => Column { rgb: t.rgb, y, water: 0, base: t.id, over: 0 },
+        (Kind::Water, g) => {
+            let gy = g.map_or(y - water, |(_, gy)| gy);
+            // The water block itself (a source, or flowing at some level); kelp and the like
+            // under the surface are drawn as water.
+            let base = if t.liquid { t.id } else { intern("water") };
+            Column { rgb: g.map_or(t.rgb, |(g, _)| g.rgb), y, water, base, over: 0, gy, oy: y }
+        }
+        _ => Column { rgb: t.rgb, y, water: 0, base: t.id, over: 0, gy: y, oy: y },
     })
 }
 
@@ -312,19 +405,82 @@ pub struct Painted {
     /// The block at the bottom of each column, and the plant or leaves over it (0 for none).
     pub base: Vec<u16>,
     pub over: Vec<u16>,
-    /// The unlit colour of each column (RGB), its height for lighting, and its water depth.
+    /// The unlit color of each column (RGB), its height for lighting, and its water depth.
     pub albedo: Vec<u8>,
     pub y: Vec<i16>,
     pub water: Vec<u8>,
+    /// The height of the ground block, of the plant or leaves over it (see [`MapImage`]), and the
+    /// biome the column stands in (see [`biome_name`]; 0 when the save does not say).
+    pub ground: Vec<i16>,
+    pub top: Vec<i16>,
+    pub biome: Vec<u16>,
 }
 
-/// The colour of a column once lit. Ground is lit from the north-west, as on a vanilla map: lighter
+/// Names of the biomes on the map, as for blocks; id 0 is "not known".
+static BIOME_NAMES: std::sync::LazyLock<Mutex<(Vec<String>, std::collections::HashMap<String, u16>)>> =
+    std::sync::LazyLock::new(|| Mutex::new((Vec::new(), std::collections::HashMap::new())));
+
+thread_local! {
+    static BIOME_CACHE: std::cell::RefCell<std::collections::HashMap<String, u16>> = Default::default();
+}
+
+/// The number a biome name is known by on the map.
+fn intern_biome(name: &str) -> u16 {
+    let n = name.trim_start_matches("minecraft:");
+    BIOME_CACHE.with(|c| {
+        if let Some(i) = c.borrow().get(n) {
+            return *i;
+        }
+        let id = {
+            let mut g = BIOME_NAMES.lock().expect("biome names");
+            match g.1.get(n) {
+                Some(i) => *i,
+                None => {
+                    g.0.push(n.to_string());
+                    let id = g.0.len() as u16;
+                    g.1.insert(n.to_string(), id);
+                    id
+                }
+            }
+        };
+        c.borrow_mut().insert(n.to_string(), id);
+        id
+    })
+}
+
+/// The biome name a map number stands for (without "minecraft:").
+pub fn biome_name(id: u16) -> Option<String> {
+    let g = BIOME_NAMES.lock().ok()?;
+    g.0.get((id as usize).checked_sub(1)?).cloned()
+}
+
+/// Biome names by numeric id: Bedrock's own where known, else the legacy (console and pre-1.13
+/// Java) numbering, which Bedrock kept for the older biomes.
+fn numeric_biome(id: i32) -> Option<&'static str> {
+    static TABLE: std::sync::LazyLock<std::collections::HashMap<i32, &'static str>> = std::sync::LazyLock::new(|| {
+        let mut m = std::collections::HashMap::new();
+        for l in mctk_registry::builtin::legacy_biomes_text().lines().filter(|l| !l.starts_with('#')) {
+            if let Some((id, name)) = l.split_once('\t') {
+                if let Ok(id) = id.trim().parse() {
+                    m.insert(id, name.trim());
+                }
+            }
+        }
+        for (name, id) in mctk_registry::builtin::bedrock_biome_ids("1.26.61.1") {
+            m.insert(id, name);
+        }
+        m
+    });
+    TABLE.get(&id).copied()
+}
+
+/// The color of a column once lit. Ground is lit from the north-west, as on a vanilla map: lighter
 /// where it is higher than the columns north and west of it, darker where lower, and a touch
 /// lighter the higher it is. Water goes from clear shallows to deep blue and is not lit by slope.
 /// `soften` (1 for single blocks) weakens the slope when each column stands for several.
 pub fn lit(albedo: [u8; 3], y: i32, water: i32, north: Option<i32>, west: Option<i32>, soften: f32) -> [u8; 3] {
     if water > 0 {
-        // Water of the colour its depth gives over the bottom, which shows more the shallower it is.
+        // Water of the color its depth gives over the bottom, which shows more the shallower it is.
         let t = (water as f32 / 24.0).clamp(0.0, 1.0);
         let (shallow, deep) = ([70.0, 120.0, 225.0], [24.0, 46.0, 128.0]);
         let opaque = 0.4 + 0.55 * (1.0 - (-(water as f32) / 7.0).exp());
@@ -339,10 +495,12 @@ pub fn lit(albedo: [u8; 3], y: i32, water: i32, north: Option<i32>, west: Option
 }
 
 /// The chunk's 16 x 16 columns made into a [`Painted`].
-fn paint(cols: &[Option<Column>; 256]) -> Painted {
+/// `biome_at(x, z, y)` gives the biome number at a column's surface.
+fn paint(cols: &[Option<Column>; 256], biome_at: impl Fn(usize, usize, i32) -> u16) -> Painted {
     let mut px = vec![0u8; 16 * 16 * 4];
     let (mut base, mut over) = (vec![0u16; 256], vec![0u16; 256]);
     let (mut albedo, mut ys, mut water) = (vec![0u8; 768], vec![0i16; 256], vec![0u8; 256]);
+    let (mut ground, mut top, mut biome) = (vec![0i16; 256], vec![0i16; 256], vec![0u16; 256]);
     for z in 0..16 {
         for x in 0..16 {
             let Some(c) = cols[z * 16 + x] else { continue };
@@ -358,11 +516,15 @@ fn paint(cols: &[Option<Column>; 256]) -> Painted {
             albedo[k * 3..k * 3 + 3].copy_from_slice(&c.rgb);
             ys[k] = c.y.clamp(-32768, 32767) as i16;
             water[k] = c.water.clamp(0, 255) as u8;
+            ground[k] = c.gy.clamp(-32768, 32767) as i16;
+            top[k] = c.oy.clamp(-32768, 32767) as i16;
+            // The biome where the column meets the air (the surface of water, the ground of land).
+            biome[k] = biome_at(x, z, if c.water > 0 { c.y } else { c.gy });
         }
     }
-    Painted { px, base, over, albedo, y: ys, water }
+    Painted { px, base, over, albedo, y: ys, water, ground, top, biome }
 }
-/// The average colour of a block's texture in the resource pack, if the pack has one. Worked
+/// The average color of a block's texture in the resource pack, if the pack has one. Worked
 /// out once per name (the decoding is done without holding the shared list).
 fn texture_info(name: &str) -> Option<([u8; 3], f32)> {
     type Averages = std::collections::HashMap<String, Option<([u8; 3], f32)>>;
@@ -423,9 +585,10 @@ pub fn texture_files(base: &str, sided: bool) -> Vec<String> {
     for suffix in ["_stage3", "_up_tip", "_log", "_log_lit", "_planks", "_bottom"] {
         add(format!("{base}{suffix}"));
     }
-    for tail in ["_stairs", "_slab", "_wall", "_fence_gate", "_fence", "_button", "_pressure_plate", "_carpet"] {
+    for tail in ["_stairs", "_slab", "_wall", "_fence_gate", "_fence", "_button", "_pressure_plate", "_carpet", "_pane"] {
         if let Some(m) = base.strip_suffix(tail) {
-            for n in [format!("{m}_top"), m.to_string(), format!("{m}_planks"), format!("{m}s"), format!("{m}_block"), format!("{m}_side")] {
+            // Carpets are their wool.
+            for n in [format!("{m}_top"), m.to_string(), format!("{m}_planks"), format!("{m}s"), format!("{m}_block"), format!("{m}_wool"), format!("{m}_side")] {
                 add(n);
             }
         }
@@ -433,13 +596,13 @@ pub fn texture_files(base: &str, sided: bool) -> Vec<String> {
     f
 }
 
-/// The average colour of a block's texture, if the pack has one.
+/// The average color of a block's texture, if the pack has one.
 fn texture_average(name: &str) -> Option<[u8; 3]> {
     texture_info(name).map(|(c, _)| c)
 }
 
-/// The grass and foliage colours a biome gives (vanilla's, close enough for a map).
-fn biome_colours(biome: &str) -> ([f32; 3], [f32; 3]) {
+/// The grass and foliage colors a biome gives (vanilla's, close enough for a map).
+fn biome_colors(biome: &str) -> ([f32; 3], [f32; 3]) {
     let b = biome.trim_start_matches("minecraft:");
     let c = |g: u32, f: u32| ([(g >> 16) as f32, ((g >> 8) & 255) as f32, (g & 255) as f32], [(f >> 16) as f32, ((f >> 8) & 255) as f32, (f & 255) as f32]);
     if b.contains("dappled") { c(0xFF7D2D, 0xF0641E) }
@@ -463,9 +626,15 @@ fn biome_colours(biome: &str) -> ([f32; 3], [f32; 3]) {
     else { c(0x91BD59, 0x77AB2F) }
 }
 
-/// The colour a block's top is drawn with: its texture's average when the pack has the texture
-/// (tinted green for grass and leaves, which the pack draws grey), else a table's guess.
-pub fn surface_colour(name: &str) -> [u8; 3] {
+/// The color the game tints grass with for a block's map name ("grass_block@plains"): its
+/// biome's, or the plains' when the name gives none.
+pub(crate) fn grass_color(name: &str) -> [f32; 3] {
+    name.split_once('@').map_or([145.0, 189.0, 89.0], |(_, b)| biome_colors(b).0)
+}
+
+/// The color a block's top is drawn with: its texture's average when the pack has the texture
+/// (tinted green for grass and leaves, which the pack draws gray), else a table's guess.
+pub fn surface_color(name: &str) -> [u8; 3] {
     let n = name.trim_start_matches("minecraft:");
     let plain = bare(n);
     let biome = n.split_once('@').map(|(_, b)| b);
@@ -477,9 +646,9 @@ pub fn surface_colour(name: &str) -> [u8; 3] {
         || matches!(plain, "oak_leaves" | "jungle_leaves" | "acacia_leaves" | "dark_oak_leaves" | "mangrove_leaves" | "birch_leaves" | "spruce_leaves" | "leaves");
     if let Some(t) = texture_average(n.split('@').next().unwrap_or(n)) {
         if tinted {
-            // The pack draws these grey; the game multiplies them by the biome's colour.
+            // The pack draws these gray; the game multiplies them by the biome's color.
             let leaves = plain.ends_with("_leaves") || plain == "vine";
-            let (g, f) = biome.map_or(([145.0, 189.0, 89.0], [119.0, 171.0, 47.0]), biome_colours);
+            let (g, f) = biome.map_or(([145.0, 189.0, 89.0], [119.0, 171.0, 47.0]), biome_colors);
             let tint = match plain {
                 "birch_leaves" => [128.0, 167.0, 85.0],
                 "spruce_leaves" => [97.0, 153.0, 97.0],
@@ -490,7 +659,7 @@ pub fn surface_colour(name: &str) -> [u8; 3] {
         }
         return t;
     }
-    // Leaves the pack has no picture of (autumn trees...) go by the colour in their name.
+    // Leaves the pack has no picture of (autumn trees...) go by the color in their name.
     if plain.ends_with("_leaves") {
         for (word, rgb) in [("red", [150, 40, 28]), ("orange", [200, 100, 25]), ("yellow", [200, 165, 40]), ("brown", [120, 80, 40])] {
             if plain.contains(word) {
@@ -498,7 +667,7 @@ pub fn surface_colour(name: &str) -> [u8; 3] {
             }
         }
     }
-    block_colour(plain)
+    block_color(plain)
 }
 /// A rendered map: one pixel per block column, origin at chunk (`min_x`, `min_z`).
 pub struct MapImage {
@@ -511,10 +680,57 @@ pub struct MapImage {
     pub blocks: Vec<u16>,
     /// The plant or leaves drawn over it, 0 for none.
     pub over: Vec<u16>,
-    /// The unlit colour of each column (RGB), its height for lighting, and its water depth.
+    /// The unlit color of each column (RGB), its height for lighting, and its water depth.
     pub albedo: Vec<u8>,
     pub heights: Vec<i16>,
     pub water: Vec<u8>,
+    /// The true height of the ground block and of the plant or leaves over it (for the street
+    /// view), and the biome of each column (0 when not known).
+    pub ground: Vec<i16>,
+    pub top: Vec<i16>,
+    pub biome: Vec<u16>,
+}
+
+impl MapImage {
+    /// An empty picture of the given size.
+    pub fn blank(min_x: i32, min_z: i32, width: usize, height: usize) -> Self {
+        let n = width * height;
+        MapImage {
+            min_x,
+            min_z,
+            width,
+            height,
+            rgba: vec![0; n * 4],
+            blocks: vec![0; n],
+            over: vec![0; n],
+            albedo: vec![0; n * 3],
+            heights: vec![0; n],
+            water: vec![0; n],
+            ground: vec![0; n],
+            top: vec![0; n],
+            biome: vec![0; n],
+        }
+    }
+
+    /// Copies a drawn chunk into the picture.
+    pub fn put(&mut self, cx: i32, cz: i32, p: &Painted) {
+        let w = self.width;
+        let (gx, gz) = ((cx - self.min_x) as usize * 16, (cz - self.min_z) as usize * 16);
+        for row in 0..16 {
+            let dst = ((gz + row) * w + gx) * 4;
+            self.rgba[dst..dst + 64].copy_from_slice(&p.px[row * 64..row * 64 + 64]);
+            let b = (gz + row) * w + gx;
+            let r = row * 16..row * 16 + 16;
+            self.blocks[b..b + 16].copy_from_slice(&p.base[r.clone()]);
+            self.over[b..b + 16].copy_from_slice(&p.over[r.clone()]);
+            self.albedo[b * 3..(b + 16) * 3].copy_from_slice(&p.albedo[row * 48..row * 48 + 48]);
+            self.heights[b..b + 16].copy_from_slice(&p.y[r.clone()]);
+            self.water[b..b + 16].copy_from_slice(&p.water[r.clone()]);
+            self.ground[b..b + 16].copy_from_slice(&p.ground[r.clone()]);
+            self.top[b..b + 16].copy_from_slice(&p.top[r.clone()]);
+            self.biome[b..b + 16].copy_from_slice(&p.biome[r]);
+        }
+    }
 }
 
 /// Largest map rendered at one pixel per block; bigger areas are capped around the
@@ -603,7 +819,7 @@ fn draw_chunks<T: Sync>(
     let (mut xs, mut zs): (Vec<i32>, Vec<i32>) = all.iter().map(|c| (c.0, c.1)).unzip();
     xs.sort_unstable();
     zs.sort_unstable();
-    // Centre on the median chunk and cap the extent.
+    // Center on the median chunk and cap the extent.
     let (mx, mz) = (xs[xs.len() / 2], zs[zs.len() / 2]);
     let half = MAX_CHUNKS_ACROSS / 2;
     let min_x = xs[0].max(mx - half);
@@ -637,26 +853,12 @@ fn draw_chunks<T: Sync>(
     if progress.is_cancelled() {
         return Err("cancelled".into());
     }
-    let mut rgba = vec![0u8; w * h * 4];
-    let mut blocks = vec![0u16; w * h];
-    let mut over = vec![0u16; w * h];
-    let mut albedo = vec![0u8; w * h * 3];
-    let mut heights = vec![0i16; w * h];
-    let mut water = vec![0u8; w * h];
-    for (cx, cz, p) in tiles {
-        let (gx, gz) = ((cx - min_x) as usize * 16, (cz - min_z) as usize * 16);
-        for row in 0..16 {
-            let dst = ((gz + row) * w + gx) * 4;
-            rgba[dst..dst + 64].copy_from_slice(&p.px[row * 64..row * 64 + 64]);
-            let b = (gz + row) * w + gx;
-            blocks[b..b + 16].copy_from_slice(&p.base[row * 16..row * 16 + 16]);
-            over[b..b + 16].copy_from_slice(&p.over[row * 16..row * 16 + 16]);
-            albedo[b * 3..(b + 16) * 3].copy_from_slice(&p.albedo[row * 48..row * 48 + 48]);
-            heights[b..b + 16].copy_from_slice(&p.y[row * 16..row * 16 + 16]);
-            water[b..b + 16].copy_from_slice(&p.water[row * 16..row * 16 + 16]);
-        }
+    let mut img = MapImage::blank(min_x, min_z, w, h);
+    for (cx, cz, p) in &tiles {
+        img.put(*cx, *cz, p);
     }
     // Lit again over the whole picture, so the slopes carry across chunk borders without seams.
+    let MapImage { rgba, blocks, albedo, heights, water, .. } = &mut img;
     for z in 0..h {
         for x in 0..w {
             let i = z * w + x;
@@ -669,18 +871,7 @@ fn draw_chunks<T: Sync>(
             rgba[i * 4..i * 4 + 3].copy_from_slice(&rgb);
         }
     }
-    Ok(MapImage {
-        min_x,
-        min_z,
-        width: w,
-        height: h,
-        rgba,
-        blocks,
-        over,
-        albedo,
-        heights,
-        water,
-    })
+    Ok(img)
 }
 
 /// [`render_map`] on all cores, reporting through `progress` and stopping when it is cancelled.
@@ -726,7 +917,7 @@ pub fn render_map_with(
                         cols[z * 16 + x] = make_column(|visit| java_visit(&chunk, x, z, max_y, min_y, visit));
                     }
                 }
-                Some(paint(&cols))
+                Some(paint(&cols, |x, z, y| java_biome(&chunk, x, z, y)))
             })
         }
         Edition::Bedrock => {
@@ -738,6 +929,7 @@ pub fn render_map_with(
             };
             // Subchunks grouped per chunk, highest first so the first block found is the top.
             let mut by_chunk: BTreeMap<(i32, i32), Vec<(i8, &Vec<u8>)>> = BTreeMap::new();
+            let mut data3d: std::collections::HashMap<(i32, i32), &Vec<u8>> = Default::default();
             for (k, v) in &world.db.entries {
                 if let Key::Chunk(c) = Key::decode(k) {
                     if c.tag == ChunkTag::SubChunkPrefix && c.dimension.id() == dim_id {
@@ -745,6 +937,8 @@ pub fn render_map_with(
                             .entry((c.x, c.z))
                             .or_default()
                             .push((c.subchunk.unwrap_or(0), v));
+                    } else if c.tag == ChunkTag::Data3D && c.dimension.id() == dim_id {
+                        data3d.insert((c.x, c.z), v);
                     }
                 }
             }
@@ -752,28 +946,37 @@ pub fn render_map_with(
                 .into_iter()
                 .map(|((cx, cz), mut subs)| {
                     subs.sort_by_key(|(sy, _)| std::cmp::Reverse(*sy));
-                    (cx, cz, subs)
+                    (cx, cz, (subs, data3d.get(&(cx, cz)).copied()))
                 })
                 .collect();
-            draw_chunks(&all, dimension, progress, |subs| {
-                let parsed: Vec<(i32, SubChunkBody)> = subs
+            // The overworld's biome storages start at y = -64; the other dimensions' at 0.
+            let biome_floor = if dim_id == 0 { -64 } else { 0 };
+            draw_chunks(&all, dimension, progress, |(subs, d3)| {
+                let d3 = d3.and_then(|raw| mctk_bedrock::Data3D::parse(raw).ok());
+                // Each subchunk's blocks with their palette under the Java names (Bedrock spells
+                // many differently: `deadbush`, `tallgrass`...).
+                let parsed: Vec<(i32, Vec<String>, Vec<u16>)> = subs
                     .iter()
-                    .filter_map(|(sy, raw)| Some((*sy as i32, SubChunk::parse(raw).ok()?.body)))
+                    .filter_map(|(sy, raw)| {
+                        let SubChunkBody::Palettized(storages) = SubChunk::parse(raw).ok()?.body else { return None };
+                        let s = storages.into_iter().next()?;
+                        let names = s.palette.iter().map(|p| bedrock_java_state(p).name).collect();
+                        Some((*sy as i32, names, s.indices))
+                    })
                     .collect();
                 let mut cols = [None; 256];
                 for z in 0..16 {
                     for x in 0..16 {
                         cols[z * 16 + x] = make_column(|visit| {
-                            'column: for (sy, body) in &parsed {
-                                let SubChunkBody::Palettized(storages) = body else { continue };
-                                let Some(s) = storages.first() else { continue };
+                            'column: for (sy, names, indices) in &parsed {
                                 for y in (0..16).rev() {
                                     let by = sy * 16 + y as i32;
                                     if by > max_y || by < min_y {
                                         continue;
                                     }
-                                    let name = s.block_name(x, y, z).unwrap_or("minecraft:air");
-                                    if name != "minecraft:air" && !visit(name, by) {
+                                    let k = indices.get(mctk_bedrock::block_index(x, y, z)).copied().unwrap_or(0) as usize;
+                                    let name = names.get(k).map_or("minecraft:air", String::as_str);
+                                    if !matches!(name, "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air") && !visit(name, by) {
                                         break 'column;
                                     }
                                 }
@@ -781,7 +984,7 @@ pub fn render_map_with(
                         });
                     }
                 }
-                Some(paint(&cols))
+                Some(paint(&cols, |x, z, y| d3.as_ref().map_or(0, |d| bedrock_biome(d, biome_floor, x, z, y))))
             })
         }
         Edition::Console => {
@@ -820,30 +1023,163 @@ pub fn render_map_with(
                 else {
                     return None;
                 };
+                // One legacy biome number per column, z-major.
+                let biomes: Option<Vec<u8>> = match chunk.to_nbt().tag.get("Level")?.get("Biomes") {
+                    Some(Tag::ByteArray(b)) => Some(b.iter().map(|v| *v as u8).collect()),
+                    _ => None,
+                };
+                let data = match chunk.to_nbt().tag.get("Level")?.get("Data") {
+                    Some(Tag::ByteArray(d)) => d.clone(),
+                    _ => Vec::new(),
+                };
+                let mut named: std::collections::HashMap<(u8, u8), String> = Default::default();
                 let top_y = chunk.height.min((max_y.max(-1) + 1) as usize);
                 let mut cols = [None; 256];
                 for z in 0..16 {
                     for x in 0..16 {
                         cols[z * 16 + x] = make_column(|visit| {
                             for y in (0..top_y).rev().take_while(|y| *y as i32 >= min_y) {
-                                let id = blocks.get(console_block_index(x, y, z)).map_or(0, |b| *b as u8);
-                                if id != 0 && !visit(legacy_name(id as u16), y as i32) {
+                                let i = console_block_index(x, y, z);
+                                let id = blocks.get(i).map_or(0, |b| *b as u8);
+                                if id == 0 {
+                                    continue;
+                                }
+                                let d = data.get(i / 2).map_or(0, |b| if i % 2 == 0 { *b as u8 & 15 } else { *b as u8 >> 4 });
+                                let name = named.entry((id, d)).or_insert_with(|| java_map_name(&legacy_java_state(id as u16, d), None)).clone();
+                                if !visit(&name, y as i32) {
                                     break;
                                 }
                             }
                         });
                     }
                 }
-                Some(paint(&cols))
+                Some(paint(&cols, |x, z, _| {
+                    biomes.as_ref().and_then(|b| b.get(z * 16 + x)).and_then(|id| numeric_biome(*id as i32)).map_or(0, intern_biome)
+                }))
             })
         }
     }
 }
 
+/// The Java block state for a Bedrock palette entry (`{name, states}`, or `{name, val}` from
+/// older worlds), as the converter maps it; a block with no Java match keeps its Bedrock name.
+pub(crate) fn bedrock_java_state(entry: &mctk_nbt::NamedTag) -> mctk_java::BlockState {
+    let Some(b) = mctk_mapping::BedrockBlock::from_nbt(entry) else { return mctk_java::BlockState::air() };
+    match mctk_mapping::mappings().bedrock_to_java(&b.name, &b.states) {
+        Some(j) => j.clone(),
+        // A Bedrock-only block (item frames are blocks there): its states kept as properties,
+        // numbers marked with their type, so it is written back as it was.
+        None => {
+            let mut s = mctk_java::BlockState::new(&b.name);
+            for (k, v) in &b.states {
+                let text = match v {
+                    mctk_nbt::Tag::Byte(n) => format!("b:{n}"),
+                    mctk_nbt::Tag::Short(n) => format!("s:{n}"),
+                    mctk_nbt::Tag::Int(n) => format!("i:{n}"),
+                    mctk_nbt::Tag::String(t) => t.clone(),
+                    _ => continue,
+                };
+                s.properties.insert(k.clone(), text);
+            }
+            s
+        }
+    }
+}
+
+/// The Bedrock palette entry for a Java block state; a Bedrock-only block (see
+/// [`bedrock_java_state`]) as it was. `None` where Bedrock has no such block.
+pub(crate) fn java_bedrock_state(state: &mctk_java::BlockState) -> Option<mctk_nbt::NamedTag> {
+    let m = mctk_mapping::mappings();
+    if let Some(b) = m.java_to_bedrock(state) {
+        return Some(b.to_nbt());
+    }
+    if m.is_known_java(&mctk_java::BlockState::new(state.name.clone())) {
+        return None;
+    }
+    let mut states = mctk_nbt::Compound::new();
+    for (k, v) in &state.properties {
+        let tag = match v.split_once(':') {
+            Some(("b", n)) => n.parse().ok().map(mctk_nbt::Tag::Byte),
+            Some(("s", n)) => n.parse().ok().map(mctk_nbt::Tag::Short),
+            Some(("i", n)) => n.parse().ok().map(mctk_nbt::Tag::Int),
+            _ => Some(mctk_nbt::Tag::String(v.clone())),
+        };
+        if let Some(t) = tag {
+            states.insert(k.clone(), t);
+        }
+    }
+    Some(mctk_mapping::BedrockBlock { name: state.name.clone(), states }.to_nbt())
+}
+
+/// The Java block state for a numeric id and data value (console worlds and Java chunks from
+/// before 1.13), from the game's own upgrade tables; the rough name table when it has no entry.
+pub(crate) fn legacy_java_state(id: u16, data: u8) -> mctk_java::BlockState {
+    match mctk_mapping::legacy::legacy().block(id, data) {
+        Some(s) => s.clone(),
+        None => mctk_java::BlockState::new(legacy_name(id)),
+    }
+}
+
 /// Whether a block name is water or grows in it, so the map shows water over it.
-fn is_water(name: &str) -> bool {
+pub(crate) fn is_water(name: &str) -> bool {
     let n = name.trim_start_matches("minecraft:");
-    n == "water" || n == "bubble_column" || n.contains("kelp") || n.contains("seagrass")
+    n == "water" || n == "flowing_water" || n == "bubble_column" || n.contains("kelp") || n.contains("seagrass")
+}
+
+/// The map's name for a Java block: its id, with the states the map draws by ("oak_log#x" for a
+/// log lying along x, "water#3" for flowing liquid; falling liquid is 8 and up) and, for grass
+/// and leaves, the biome whose color they take ("grass_block@plains").
+pub(crate) fn java_map_name(b: &mctk_java::BlockState, biome: Option<&str>) -> String {
+    // Logs and pillars lying on their side look different.
+    if let Some(a) = b.properties.get("axis").map(String::as_str).filter(|a| *a != "y") {
+        return format!("{}#{a}", b.name);
+    }
+    if matches!(b.name.as_str(), "minecraft:water" | "minecraft:lava") {
+        if let Some(level) = b.properties.get("level").filter(|l| *l != "0") {
+            return format!("{}#{level}", b.name);
+        }
+    }
+    let n = b.name.trim_start_matches("minecraft:");
+    let tinted = matches!(n, "grass_block" | "short_grass" | "tall_grass" | "fern" | "large_fern" | "vine" | "sugar_cane")
+        || matches!(n, "oak_leaves" | "jungle_leaves" | "acacia_leaves" | "dark_oak_leaves" | "mangrove_leaves");
+    match biome.filter(|_| tinted) {
+        Some(bm) => format!("{n}@{}", bm.trim_start_matches("minecraft:")),
+        None => b.name.clone(),
+    }
+}
+
+/// The biome of a Java chunk at a column and height (1.18 and later keep one per 4 x 4 x 4 cell).
+fn java_biome(chunk: &Chunk, x: usize, z: usize, y: i32) -> u16 {
+    let sy = y.div_euclid(16);
+    let Some(bm) = chunk.sections.iter().find(|s| s.y as i32 == sy).and_then(|s| s.biomes.as_ref()) else {
+        return 0;
+    };
+    let ly = y.rem_euclid(16) as usize;
+    intern_biome(bm.get((ly / 4) * 16 + (z / 4) * 4 + x / 4))
+}
+
+/// The biome of a Bedrock chunk at a column and height, from its `Data3D` record.
+fn bedrock_biome(d: &mctk_bedrock::Data3D, floor: i32, x: usize, z: usize, y: i32) -> u16 {
+    bedrock_biome_name(d, floor, x, z, y).map_or(0, intern_biome)
+}
+
+/// The name of the biome of a Bedrock chunk at a column and height (see [`bedrock_biome`]).
+pub(crate) fn bedrock_biome_name(d: &mctk_bedrock::Data3D, floor: i32, x: usize, z: usize, y: i32) -> Option<&'static str> {
+    use mctk_bedrock::BiomeStorage;
+    if d.biomes.is_empty() {
+        return None;
+    }
+    let section = ((y - floor).div_euclid(16)).clamp(0, d.biomes.len() as i32 - 1) as usize;
+    // A "same as below" storage repeats the nearest one beneath it.
+    let found = (0..=section).rev().find_map(|i| match &d.biomes[i] {
+        BiomeStorage::Palettized { palette, indices, .. } => Some((palette, indices)),
+        BiomeStorage::CopyPrevious => None,
+    });
+    let (palette, indices) = found?;
+    let i = mctk_bedrock::block_index(x, y.rem_euclid(16) as usize, z);
+    // Under its Java name (Bedrock's `roofed_forest` is Java's `dark_forest`).
+    let id = *indices.get(i).and_then(|k| palette.get(*k as usize))?;
+    mctk_mapping::mappings().bedrock_biome_to_java(id).or_else(|| numeric_biome(id))
 }
 
 /// Reports a Java chunk column's blocks from the top down (see `make_column`).
@@ -867,46 +1203,60 @@ fn java_visit(chunk: &Chunk, x: usize, z: usize, max_y: i32, min_y: i32, visit: 
                     if b.is_air() {
                         continue;
                     }
-                    let biome = || s.biomes.as_ref().map(|bm| bm.get((y / 4) * 16 + (z / 4) * 4 + x / 4).as_str());
-                    // Logs and pillars lying on their side look different from above.
-                    let axis = b.properties.get("axis").map(String::as_str).filter(|a| *a != "y");
-                    let sided;
-                    let name: &str = match axis {
-                        Some(a) => {
-                            sided = format!("{}#{a}", b.name);
-                            &sided
-                        }
-                        None => {
-                            // Grass and leaves take the colour of the biome they stand in.
-                            let n = b.name.trim_start_matches("minecraft:");
-                            let tinted = matches!(n, "grass_block" | "short_grass" | "tall_grass" | "fern" | "large_fern" | "vine" | "sugar_cane")
-                                || matches!(n, "oak_leaves" | "jungle_leaves" | "acacia_leaves" | "dark_oak_leaves" | "mangrove_leaves");
-                            match biome().filter(|_| tinted) {
-                                Some(bm) => {
-                                    sided = format!("{n}@{}", bm.trim_start_matches("minecraft:"));
-                                    &sided
-                                }
-                                None => &b.name,
-                            }
-                        }
-                    };
-                    if !visit(name, s.y as i32 * 16 + y as i32) {
+                    let biome = s.biomes.as_ref().map(|bm| bm.get((y / 4) * 16 + (z / 4) * 4 + x / 4).as_str());
+                    let name = java_map_name(b, biome);
+                    if !visit(&name, s.y as i32 * 16 + y as i32) {
                         return;
                     }
                 }
             }
-            Some(BlockStorage::Legacy { ids, .. }) => {
+            Some(BlockStorage::Legacy { ids, data }) => {
                 for y in (0..16)
                     .rev()
                     .filter(|y| (min_y..=max_y).contains(&(s.y as i32 * 16 + *y as i32)))
                 {
-                    let id = ids[mctk_java::block_index(x, y, z)];
-                    if id != 0 && !visit(legacy_name(id), s.y as i32 * 16 + y as i32) {
+                    let i = mctk_java::block_index(x, y, z);
+                    let id = ids[i];
+                    if id == 0 {
+                        continue;
+                    }
+                    let name = java_map_name(&legacy_java_state(id, data.get(i).copied().unwrap_or(0)), None);
+                    if !visit(&name, s.y as i32 * 16 + y as i32) {
                         return;
                     }
                 }
             }
             None => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod edition_names {
+    use super::*;
+    use mctk_nbt::{Compound, NamedTag, Tag};
+
+    fn entry(name: &str, states: &[(&str, Tag)]) -> NamedTag {
+        let mut s = Compound::new();
+        for (k, v) in states {
+            s.insert((*k).into(), v.clone());
+        }
+        let mut c = Compound::new();
+        c.insert("name".into(), Tag::String(name.into()));
+        c.insert("states".into(), Tag::Compound(s));
+        NamedTag { name: String::new(), tag: Tag::Compound(c) }
+    }
+
+    #[test]
+    fn bedrock_and_legacy_blocks_get_java_names() {
+        assert_eq!(bedrock_java_state(&entry("minecraft:deadbush", &[])).name, "minecraft:dead_bush");
+        let log = bedrock_java_state(&entry("minecraft:oak_log", &[("pillar_axis", Tag::String("x".into()))]));
+        assert_eq!((log.name.as_str(), log.properties.get("axis").map(String::as_str)), ("minecraft:oak_log", Some("x")));
+        // Console / pre-1.13 numeric ids keep their data value.
+        assert_eq!(legacy_java_state(32, 0).name, "minecraft:dead_bush");
+        assert_eq!(legacy_java_state(31, 1).name, "minecraft:short_grass");
+        assert_eq!(legacy_java_state(35, 14).name, "minecraft:red_wool");
+        let stairs = legacy_java_state(53, 6);
+        assert_eq!(stairs.properties.get("half").map(String::as_str), Some("top"));
     }
 }

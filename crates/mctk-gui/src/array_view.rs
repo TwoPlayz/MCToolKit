@@ -1,9 +1,9 @@
 //! How the NBT editor shows byte, int and long arrays: a paged grid (or hex dump) instead of
 //! one row per value, range tools (fill, zero, resize, edit as text, copy, import, export),
-//! and pictures for arrays whose name and size say what they hold (map colours, light
+//! and pictures for arrays whose name and size say what they hold (map colors, light
 //! levels, heightmaps and other 16 x 16 planes).
 
-// Arrays open in the hex editor (hex_editor); its View switch shows the pictures here (map colours with
+// Arrays open in the hex editor (hex_editor); its View switch shows the pictures here (map colors with
 // picture import, light layers, 16 x 16 planes). The old inline hex, grid and tools views are not used.
 #![allow(dead_code)]
 
@@ -67,7 +67,7 @@ const CELL_H: f32 = 18.0;
 enum View {
     Grid,
     Hex,
-    /// 128 x 128 map colour ids drawn as the map.
+    /// 128 x 128 map color ids drawn as the map.
     Map,
     /// Two 4-bit light levels per byte, shown one 16 x 16 layer at a time.
     Nibbles,
@@ -235,7 +235,7 @@ fn default_view(avail: &[View], name: &str) -> View {
 /// A picture of an array's contents, offered beside the hex editor.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Picture {
-    /// 128 x 128 map colour ids drawn as the map, with picture import.
+    /// 128 x 128 map color ids drawn as the map, with picture import.
     Map,
     /// Two 4-bit light levels per byte, one 16 x 16 layer at a time.
     Light,
@@ -273,7 +273,7 @@ pub fn show_picture<E: Elem>(ui: &mut Ui, p: &Panel, values: &mut Vec<E>, pictur
     let mut out = Outcome::default();
     ui.spacing_mut().item_spacing = vec2(6.0, 4.0);
     if values.is_empty() {
-        ui.label(egui::RichText::new("Empty array").color(theme::TEXT_DIM));
+        ui.label(egui::RichText::new("Empty array").color(theme::text_dim()));
     } else {
         match picture {
             Picture::Map => map(ui, p, &mut st, values, &mut out),
@@ -281,7 +281,7 @@ pub fn show_picture<E: Elem>(ui: &mut Ui, p: &Panel, values: &mut Vec<E>, pictur
                 ui.horizontal(|ui| {
                     ui.label("Layer (Y)");
                     ui.add(egui::Slider::new(&mut st.layer, 0..=15));
-                    ui.label(egui::RichText::new("columns are X, rows are Z").color(theme::TEXT_DIM));
+                    ui.label(egui::RichText::new("columns are X, rows are Z").color(theme::text_dim()));
                 });
                 let base = st.layer.min(15) * 256;
                 plane(ui, p, values, Packing::Nibble, base, 15, &mut out);
@@ -289,7 +289,7 @@ pub fn show_picture<E: Elem>(ui: &mut Ui, p: &Panel, values: &mut Vec<E>, pictur
             Picture::Plane => {
                 let pk = if E::WIDTH == 8 { Packing::Height9 } else { Packing::Direct };
                 let max = if E::WIDTH == 8 { 511 } else { E::HI };
-                ui.label(egui::RichText::new("columns are X, rows are Z").color(theme::TEXT_DIM));
+                ui.label(egui::RichText::new("columns are X, rows are Z").color(theme::text_dim()));
                 plane(ui, p, values, pk, 0, max, &mut out);
             }
         }
@@ -348,7 +348,7 @@ fn body<E: Elem>(
         tools(ui, p, st, values, out);
     }
     if values.is_empty() {
-        ui.label(egui::RichText::new("Empty array").color(theme::TEXT_DIM));
+        ui.label(egui::RichText::new("Empty array").color(theme::text_dim()));
         return;
     }
     match view {
@@ -361,7 +361,7 @@ fn body<E: Elem>(
             ui.horizontal(|ui| {
                 ui.label("Layer (Y)");
                 ui.add(egui::Slider::new(&mut st.layer, 0..=15));
-                ui.label(egui::RichText::new("columns are X, rows are Z").color(theme::TEXT_DIM));
+                ui.label(egui::RichText::new("columns are X, rows are Z").color(theme::text_dim()));
             });
             let base = st.layer.min(15) * 256;
             plane(ui, p, values, Packing::Nibble, base, 15, out);
@@ -371,7 +371,7 @@ fn body<E: Elem>(
             let max = if E::WIDTH == 8 { 511 } else { E::HI };
             ui.label(
                 egui::RichText::new("columns are X, rows are Z")
-                    .color(theme::TEXT_DIM),
+                    .color(theme::text_dim()),
             );
             plane(ui, p, values, pk, 0, max, out);
         }
@@ -405,8 +405,8 @@ fn flat(ui: &mut Ui) {
     s.spacing.item_spacing = vec2(3.0, 2.0);
     s.spacing.interact_size.y = CELL_H;
     s.spacing.button_padding = vec2(4.0, 0.0);
-    s.visuals.widgets.inactive.weak_bg_fill = theme::FIELD;
-    s.visuals.widgets.inactive.bg_fill = theme::FIELD;
+    s.visuals.widgets.inactive.weak_bg_fill = theme::field();
+    s.visuals.widgets.inactive.bg_fill = theme::field();
     s.override_font_id = Some(theme::regular(13.0));
 }
 
@@ -439,7 +439,7 @@ fn grid<E: Elem>(ui: &mut Ui, p: &Panel, st: &State, values: &mut [E], hex: bool
             ui.add_sized(
                 [label, CELL_H],
                 egui::Label::new(
-                    egui::RichText::new(i.to_string()).monospace().color(theme::TEXT_MUTED),
+                    egui::RichText::new(i.to_string()).monospace().color(theme::text_muted()),
                 ),
             );
             for v in &mut values[i..row_end] {
@@ -460,14 +460,14 @@ fn grid<E: Elem>(ui: &mut Ui, p: &Panel, st: &State, values: &mut [E], hex: bool
                         _ => '.',
                     })
                     .collect();
-                ui.label(egui::RichText::new(text).monospace().color(theme::TEXT_DIM));
+                ui.label(egui::RichText::new(text).monospace().color(theme::text_dim()));
             }
         });
         i = row_end;
     }
 }
 
-/// Map colour ids are `base * 4 + shade`; the bases are the game's block colours.
+/// Map color ids are `base * 4 + shade`; the bases are the game's block colors.
 const MAP_BASES: [[u8; 3]; 62] = [
     [0, 0, 0],
     [127, 178, 56],
@@ -533,7 +533,7 @@ const MAP_BASES: [[u8; 3]; 62] = [
     [127, 167, 150],
 ];
 
-/// The colour a map id is drawn with; ids 0 to 3 are transparent, unknown bases are magenta.
+/// The color a map id is drawn with; ids 0 to 3 are transparent, unknown bases are magenta.
 fn map_rgba(id: u8) -> [u8; 4] {
     let (base, shade) = ((id >> 2) as usize, id & 3);
     if base == 0 {
@@ -593,7 +593,7 @@ fn map<E: Elem>(ui: &mut Ui, p: &Panel, st: &mut State, values: &mut [E], out: &
         navigate(ui, &resp, rect, scale, d);
         refresh(ui.ctx(), p, d);
     }
-    // The picture being imported takes the place of the array's own colours while it is open.
+    // The picture being imported takes the place of the array's own colors while it is open.
     let previewed = draft.as_ref().and_then(|d| d.result.as_ref());
     let tex = match previewed {
         Some((_, _, t)) => t.clone(),
@@ -657,7 +657,7 @@ fn map<E: Elem>(ui: &mut Ui, p: &Panel, st: &mut State, values: &mut [E], out: &
         if let Some(i) = resp.hover_pos().and_then(at) {
             let id = values[i].get() as u8;
             resp.clone().on_hover_text(format!(
-                "x {}, z {}: id {id} (colour {}, shade {})",
+                "x {}, z {}: id {id} (color {}, shade {})",
                 i % 128,
                 i / 128,
                 id >> 2,
@@ -682,7 +682,7 @@ fn map<E: Elem>(ui: &mut Ui, p: &Panel, st: &mut State, values: &mut [E], out: &
             for (v, id) in values.iter_mut().zip(ids.iter()) {
                 *v = E::make(*id as i8 as i64);
             }
-            out.note = Some("Picture imported as map colours".into());
+            out.note = Some("Picture imported as map colors".into());
         }
         draft = None;
     } else if cancel {
@@ -702,7 +702,7 @@ pub fn map_bar(ui: &mut Ui, p: &Panel, blank: bool) {
     let mut st: State = ui.data(|d| d.get_temp(id)).unwrap_or_default();
     if st.draft.is_none() {
         if crate::widgets::compact_button(ui, "Import image\u{2026}", !p.read_only)
-            .on_hover_text("Turn a PNG or JPEG into map colours, previewed right here")
+            .on_hover_text("Turn a PNG or JPEG into map colors, previewed right here")
             .clicked()
         {
             st.import = true;
@@ -719,7 +719,7 @@ pub fn map_bar(ui: &mut Ui, p: &Panel, blank: bool) {
 
 /// The options for a picture being imported.
 fn draft_controls(ui: &mut Ui, d: &mut Draft, apply: &mut bool, cancel: &mut bool, other: &mut bool) {
-    ui.label(egui::RichText::new(&d.name).color(theme::TEXT_MUTED));
+    ui.label(egui::RichText::new(&d.name).color(theme::text_muted()));
     let a = &mut d.adjust;
     let fit = a.fit;
     egui::Grid::new("array-import-options")
@@ -755,7 +755,7 @@ fn draft_controls(ui: &mut Ui, d: &mut Draft, apply: &mut bool, cancel: &mut boo
             }
             ui.label("");
             ui.checkbox(&mut a.dither, "Dither")
-                .on_hover_text("Blend neighbouring colours to approximate shades the map lacks");
+                .on_hover_text("Blend neighboring colors to approximate shades the map lacks");
             ui.end_row();
             ui.label("");
             ui.checkbox(&mut a.smooth, "Smoothing")
@@ -763,7 +763,7 @@ fn draft_controls(ui: &mut Ui, d: &mut Draft, apply: &mut bool, cancel: &mut boo
             ui.end_row();
         });
     if a.fit != fit {
-        // A new fit places the picture afresh: its own proportions, centred, not zoomed.
+        // A new fit places the picture afresh: its own proportions, centerd, not zoomed.
         a.wx = 1.0;
         a.wy = 1.0;
         a.zoom = 1.0;
@@ -776,7 +776,7 @@ fn draft_controls(ui: &mut Ui, d: &mut Draft, apply: &mut bool, cancel: &mut boo
         *other = ui.button("Choose another\u{2026}").clicked();
         if ui
             .button("Reset")
-            .on_hover_text("Zoom, shape, position and colour adjustments")
+            .on_hover_text("Zoom, shape, position and color adjustments")
             .clicked()
         {
             *a = Adjust { fit: a.fit, dither: a.dither, smooth: a.smooth, ..Adjust::default() };
@@ -785,7 +785,7 @@ fn draft_controls(ui: &mut Ui, d: &mut Draft, apply: &mut bool, cancel: &mut boo
     ui.label(
         egui::RichText::new("Drag to move \u{b7} drag an edge to stretch \u{b7} scroll to zoom")
             .small()
-            .color(theme::TEXT_DIM),
+            .color(theme::text_dim()),
     );
 }
 
@@ -813,8 +813,8 @@ fn extent(img: &image::DynamicImage, a: &Adjust) -> (f32, f32) {
 /// Where the picture is on screen.
 fn picture_rect(d: &Draft, rect: egui::Rect, scale: f32) -> egui::Rect {
     let (w, h) = extent(&d.source, &d.adjust);
-    let centre = rect.center() + vec2(d.adjust.ox, d.adjust.oy) * scale;
-    egui::Rect::from_center_size(centre, vec2(w, h) * scale)
+    let center = rect.center() + vec2(d.adjust.ox, d.adjust.oy) * scale;
+    egui::Rect::from_center_size(center, vec2(w, h) * scale)
 }
 
 /// Which edges of the picture a point is on: -1 left or top, 1 right or bottom, 0 neither.
@@ -925,7 +925,7 @@ fn navigate(ui: &mut Ui, resp: &egui::Response, rect: egui::Rect, scale: f32, d:
     });
 }
 
-/// How the picture is placed and adjusted before it is turned into map colours.
+/// How the picture is placed and adjusted before it is turned into map colors.
 #[derive(Clone, Copy, PartialEq)]
 struct Adjust {
     fit: Fit,
@@ -984,7 +984,7 @@ impl Adjust {
         h.finish()
     }
 
-    fn colours(&self, rgba: &mut [u8]) {
+    fn colors(&self, rgba: &mut [u8]) {
         if self.brightness == 0.0 && self.contrast == 0.0 && self.saturation == 0.0 {
             return;
         }
@@ -1037,7 +1037,7 @@ impl Fit {
     }
 }
 
-/// Every id a map can draw (colours 1 up, four shades each) with its colour.
+/// Every id a map can draw (colors 1 up, four shades each) with its color.
 fn map_palette() -> Vec<(u8, [f32; 3])> {
     (4u8..(MAP_BASES.len() as u8 * 4))
         .map(|id| {
@@ -1047,7 +1047,7 @@ fn map_palette() -> Vec<(u8, [f32; 3])> {
         .collect()
 }
 
-/// The map id closest to a colour (green counts most, as the eye is most sensitive to it).
+/// The map id closest to a color (green counts most, as the eye is most sensitive to it).
 fn nearest(palette: &[(u8, [f32; 3])], c: [f32; 3]) -> (u8, [f32; 3]) {
     let mut best = (0u8, [0.0; 3]);
     let mut best_d = f32::MAX;
@@ -1062,7 +1062,7 @@ fn nearest(palette: &[(u8, [f32; 3])], c: [f32; 3]) -> (u8, [f32; 3]) {
 }
 
 /// Map ids for a 128 x 128 RGBA picture; mostly transparent pixels become id 0. With `dither`
-/// the colour error of each pixel is passed to its neighbours (Floyd-Steinberg).
+/// the color error of each pixel is passed to its neighbors (Floyd-Steinberg).
 fn quantize(rgba: &[u8], dither: bool) -> Vec<u8> {
     const N: usize = 128;
     let palette = map_palette();
@@ -1102,7 +1102,7 @@ fn quantize(rgba: &[u8], dither: bool) -> Vec<u8> {
 }
 
 /// The picture placed on a 128 x 128 transparent canvas as RGBA bytes: sized by the fit mode and
-/// zoom, centred, then moved by the offset. Anything off the canvas is cut away.
+/// zoom, centerd, then moved by the offset. Anything off the canvas is cut away.
 fn place(img: &image::DynamicImage, a: &Adjust) -> Vec<u8> {
     use image::imageops::FilterType::{CatmullRom, Nearest};
     const N: f32 = 128.0;
@@ -1151,7 +1151,7 @@ fn refresh(ctx: &egui::Context, p: &Panel, d: &mut Draft) {
         return;
     }
     let mut rgba = place(&d.source, &d.adjust);
-    d.adjust.colours(&mut rgba);
+    d.adjust.colors(&mut rgba);
     let ids = quantize(&rgba, d.adjust.dither);
     let mut px = Vec::with_capacity(ids.len() * 4);
     for id in &ids {
@@ -1272,7 +1272,7 @@ fn tools<E: Elem>(ui: &mut Ui, p: &Panel, st: &mut State, values: &mut Vec<E>, o
     let mut to = st.to.unwrap_or(len).min(len);
     let editable = !p.read_only;
     egui::Frame::new()
-        .fill(theme::FIELD)
+        .fill(theme::field())
         .corner_radius(theme::radius(4))
         .inner_margin(egui::Margin::same(6))
         .show(ui, |ui| {
@@ -1421,7 +1421,7 @@ fn text_window<E: Elem>(
                 egui::RichText::new(format!(
                     "Values {from} to {to}. Numbers separated by spaces, commas or new lines; 0x for hex."
                 ))
-                .color(theme::TEXT_MUTED),
+                .color(theme::text_muted()),
             );
             egui::ScrollArea::vertical().max_height(340.0).show(ui, |ui| {
                 ui.add(
@@ -1502,7 +1502,7 @@ mod tests {
     }
 
     #[test]
-    fn map_ids_split_into_colour_and_shade() {
+    fn map_ids_split_into_color_and_shade() {
         assert_eq!(map_rgba(0), [0, 0, 0, 0]);
         // Grass, brightest shade.
         assert_eq!(map_rgba(4 + 2), [127, 178, 56, 255]);

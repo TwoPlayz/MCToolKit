@@ -78,6 +78,34 @@ impl Section {
     }
 }
 
+#[cfg(test)]
+mod edit_tests {
+    use super::*;
+
+    fn modern() -> Chunk {
+        let sec = Section::new(0, Some(BlockStorage::Palette(PalettedContainer::filled(BlockState::new("minecraft:stone"), SECTION_BLOCKS))), Some(PalettedContainer::filled("minecraft:plains".to_string(), SECTION_BIOMES)));
+        let mut fields = Compound::new();
+        fields.insert("Heightmaps".into(), Tag::Compound(Compound::new()));
+        Chunk::new_modern(0, 0, 3953, PaletteStyle::NameProperties, fields, vec![sec])
+    }
+
+    #[test]
+    fn blocks_set_round_trip_and_new_sections_get_biomes() {
+        let mut c = modern();
+        assert!(c.set_block(1, 2, 3, &BlockState::air()));
+        assert!(c.set_block(0, 40, 0, &BlockState::new("minecraft:gold_block")));
+        c.finish_edit();
+        let back = Chunk::from_nbt(c.to_nbt()).unwrap();
+        assert!(back.block(1, 2, 3).unwrap().is_air());
+        assert_eq!(back.block(0, 40, 0).unwrap().name, "minecraft:gold_block");
+        assert!(back.block(0, 41, 0).unwrap().is_air());
+        assert!(back.section(2).unwrap().biomes.is_some(), "the new section has biomes");
+        let top = back.to_nbt();
+        assert_eq!(top.tag.get("isLightOn"), Some(&Tag::Byte(0)));
+        assert!(top.tag.get("Heightmaps").is_none());
+    }
+}
+
 /// Index of a block within a section: YZX order.
 pub fn block_index(x: usize, y: usize, z: usize) -> usize {
     (y * 16 + z) * 16 + x
@@ -242,6 +270,124 @@ impl Chunk {
             BlockStorage::Palette(p) => Some(p.get(block_index(x, y.rem_euclid(16) as usize, z))),
             BlockStorage::Legacy { .. } => None,
         }
+    }
+
+    /// The compound the chunk's data lives in: the root from 1.18, `Level` before (block
+    /// entities, heightmaps, light flags...).
+    pub fn body_mut(&mut self) -> &mut Compound {
+        let top = self.root.tag.as_compound_mut().expect("validated on read");
+        if self.era == ChunkEra::Modern {
+            return top;
+        }
+        top.get_mut("Level").and_then(Tag::as_compound_mut).expect("validated on read")
+    }
+
+    /// The section at `y`, made (all air) when the chunk has none there, its biomes copied from
+    /// the nearest section (1.18 and later keep biomes per section).
+    fn section_for(&mut self, y: i8) -> &mut Section {
+        if let Some(i) = self.sections.iter().position(|s| s.y == y) {
+            return &mut self.sections[i];
+        }
+        let biomes = self.sections.iter().min_by_key(|s| (s.y as i32 - y as i32).abs()).and_then(|s| s.biomes.clone());
+        let blocks = match self.era {
+            ChunkEra::Legacy => BlockStorage::Legacy { ids: vec![0; SECTION_BLOCKS], data: vec![0; SECTION_BLOCKS] },
+            _ => BlockStorage::Palette(PalettedContainer::filled(BlockState::air(), SECTION_BLOCKS)),
+        };
+        let biomes = if self.era == ChunkEra::Modern { biomes } else { None };
+        self.sections.push(Section::new(y, Some(blocks), biomes));
+        self.sections.sort_by_key(|s| s.y);
+        let i = self.sections.iter().position(|s| s.y == y).expect("just added");
+        &mut self.sections[i]
+    }
+
+    /// Sets a block at chunk-local x/z and absolute y in a chunk with palettes (1.13 on); the
+    /// section's stored light is dropped, for the game to light it again. False for a chunk
+    /// with numeric ids (see [`Chunk::set_legacy_block`]).
+    pub fn set_block(&mut self, x: usize, y: i32, z: usize, state: &BlockState) -> bool {
+        if self.era == ChunkEra::Legacy {
+            return false;
+        }
+        let sy = y.div_euclid(16) as i8;
+        if state.is_air() && self.section(sy).is_none_or(|s| s.blocks.is_none()) {
+            return true;
+        }
+        let s = self.section_for(sy);
+        if s.blocks.is_none() {
+            s.blocks = Some(BlockStorage::Palette(PalettedContainer::filled(BlockState::air(), SECTION_BLOCKS)));
+        }
+        let Some(BlockStorage::Palette(p)) = &mut s.blocks else { return false };
+        p.set(block_index(x, y.rem_euclid(16) as usize, z), state.clone());
+        s.remove_keys(&["SkyLight", "BlockLight"]);
+        true
+    }
+
+    /// Sets a block by numeric id and data value, in a chunk from before 1.13.
+    pub fn set_legacy_block(&mut self, x: usize, y: i32, z: usize, id: u16, data: u8) -> bool {
+        if self.era != ChunkEra::Legacy {
+            return false;
+        }
+        let sy = y.div_euclid(16) as i8;
+        if id == 0 && self.section(sy).is_none() {
+            return true;
+        }
+        let s = self.section_for(sy);
+        let Some(BlockStorage::Legacy { ids, data: d }) = &mut s.blocks else { return false };
+        let i = block_index(x, y.rem_euclid(16) as usize, z);
+        ids[i] = id;
+        d[i] = data & 0x0f;
+        s.remove_keys(&["SkyLight", "BlockLight"]);
+        true
+    }
+
+    /// The numeric id and data value at a position, in a chunk from before 1.13.
+    pub fn legacy_block(&self, x: usize, y: i32, z: usize) -> Option<(u16, u8)> {
+        match self.section(y.div_euclid(16) as i8)?.blocks.as_ref()? {
+            BlockStorage::Legacy { ids, data } => {
+                let i = block_index(x, y.rem_euclid(16) as usize, z);
+                Some((ids[i], data[i]))
+            }
+            BlockStorage::Palette(_) => None,
+        }
+    }
+
+    /// After setting blocks: palettes without the entries no block uses, and the chunk marked
+    /// for the game to light again and work out its heightmaps (`isLightOn` off from 1.14,
+    /// `LightPopulated` off before; the heightmaps dropped from 1.13, which the game remakes, and
+    /// worked out here before, where it does not).
+    pub fn finish_edit(&mut self) {
+        for s in &mut self.sections {
+            if let Some(BlockStorage::Palette(p)) = &mut s.blocks {
+                p.compact();
+            }
+        }
+        let legacy = self.era == ChunkEra::Legacy;
+        let heights = if legacy { Some(self.legacy_heights()) } else { None };
+        let body = self.body_mut();
+        if legacy {
+            body.insert("LightPopulated".into(), Tag::Byte(0));
+            if let Some(h) = heights {
+                body.insert("HeightMap".into(), Tag::IntArray(h));
+            }
+        } else {
+            body.insert("isLightOn".into(), Tag::Byte(0));
+            body.shift_remove("Heightmaps");
+        }
+    }
+
+    /// Per column (x + z * 16), one above its highest block, for chunks from before 1.13.
+    fn legacy_heights(&self) -> Vec<i32> {
+        let mut out = vec![0i32; 256];
+        for (col, h) in out.iter_mut().enumerate() {
+            let (x, z) = (col % 16, col / 16);
+            for s in self.sections.iter().rev() {
+                let Some(BlockStorage::Legacy { ids, .. }) = &s.blocks else { continue };
+                if let Some(y) = (0..16).rev().find(|&y| ids[block_index(x, y, z)] != 0) {
+                    *h = s.y as i32 * 16 + y as i32 + 1;
+                    break;
+                }
+            }
+        }
+        out
     }
 
     /// The complete chunk NBT, with every section's blocks and biomes re-encoded.

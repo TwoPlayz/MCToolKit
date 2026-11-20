@@ -126,7 +126,7 @@ fn draw_picture(p: &egui::Painter, rect: Rect, e: &Entry) {
     if !e.icon.as_deref().is_some_and(|i| icons::file_image(p, rect, i))
         && !icons::pack_file("pack.png").is_some_and(|i| icons::file_image(p, rect, &i))
     {
-        p.rect_filled(rect, theme::radius(3), theme::CHIP);
+        p.rect_filled(rect, theme::radius(3), theme::chip());
     }
 }
 
@@ -463,7 +463,7 @@ impl WorldPicker {
         if selected {
             p.rect_filled(rect, 0.0, Color32::from_rgb(0x26, 0x3A, 0x55));
         } else if resp.hovered() {
-            p.rect_filled(rect, 0.0, theme::BUTTON);
+            p.rect_filled(rect, 0.0, theme::button());
         }
         let icon = Rect::from_min_size(rect.min + vec2(8.0, 6.0), Vec2::splat(height - 12.0));
         if !e
@@ -473,12 +473,12 @@ impl WorldPicker {
             // Minecraft's pack.png for worlds without an image.
             && !icons::pack_file("pack.png").is_some_and(|i| icons::file_image(p, icon, &i))
         {
-            p.rect_filled(icon, theme::radius(3), theme::CHIP);
+            p.rect_filled(icon, theme::radius(3), theme::chip());
         }
         let x = icon.right() + 14.0;
-        let name = p.layout_no_wrap(e.name.clone(), theme::bold(15.0), theme::TEXT);
+        let name = p.layout_no_wrap(e.name.clone(), theme::bold(15.0), theme::text());
         let name_width = name.size().x;
-        p.galley(pos2(x, rect.center().y - 9.0 - name.size().y / 2.0), name, theme::TEXT);
+        p.galley(pos2(x, rect.center().y - 9.0 - name.size().y / 2.0), name, theme::text());
         // The folder, after the name, when it is not the name itself (Bedrock folders never are).
         if !e.folder.is_empty() && e.folder != e.name {
             p.text(
@@ -486,7 +486,7 @@ impl WorldPicker {
                 Align2::LEFT_CENTER,
                 format!("- {}", e.folder),
                 theme::regular(14.0),
-                theme::TEXT_DIM,
+                theme::text_dim(),
             );
         }
         let when = last_played_text(e.last_played);
@@ -496,7 +496,7 @@ impl WorldPicker {
                 Align2::RIGHT_CENTER,
                 when,
                 theme::regular(12.5),
-                theme::TEXT_MUTED,
+                theme::text_muted(),
             );
         }
         // Java and Bedrock worlds show their game mode and difficulty; a console save has only a
@@ -507,7 +507,7 @@ impl WorldPicker {
                 Align2::LEFT_CENTER,
                 &e.detail,
                 theme::regular(14.0),
-                theme::TEXT_MUTED,
+                theme::text_muted(),
             );
             return resp;
         }
@@ -530,7 +530,7 @@ impl WorldPicker {
             Align2::LEFT_CENTER,
             short,
             theme::regular(12.5),
-            theme::TEXT_MUTED,
+            theme::text_muted(),
         );
         resp
     }
@@ -544,7 +544,7 @@ impl WorldPicker {
             .on_hover_text("Show in the file explorer");
         let p = ui.painter();
         if resp.hovered() {
-            p.rect_filled(rect, 0.0, theme::BUTTON);
+            p.rect_filled(rect, 0.0, theme::button());
         }
         let icon = Rect::from_min_size(rect.min + vec2(8.0, 6.0), Vec2::splat(height - 12.0));
         draw_picture(p, icon, e);
@@ -554,14 +554,14 @@ impl WorldPicker {
             Align2::LEFT_CENTER,
             &e.name,
             theme::bold(15.0),
-            theme::TEXT,
+            theme::text(),
         );
         p.text(
             pos2(x, rect.center().y + 11.0),
             Align2::LEFT_CENTER,
             short_path(&e.path),
             theme::regular(12.5),
-            theme::TEXT_MUTED,
+            theme::text_muted(),
         );
         if resp.clicked() {
             show_in_explorer(&e.path);
@@ -573,8 +573,8 @@ impl WorldPicker {
         let size = vec2(520.0, 650.0f32.min(ctx.screen_rect().height() - 40.0));
         let modal = egui::Modal::new(egui::Id::new("world-picker")).frame(
             egui::Frame::new()
-                .fill(theme::CARD)
-                .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                .fill(theme::card())
+                .stroke(Stroke::new(1.0_f32, theme::border()))
                 .corner_radius(theme::radius(6)),
         );
         let response = modal.show(ctx, |ui| {
@@ -588,7 +588,7 @@ impl WorldPicker {
                 Align2::LEFT_CENTER,
                 format!("Open a {} World", self.edition.label()),
                 theme::regular(16.0),
-                theme::TEXT,
+                theme::text(),
             );
             // The small X of the tabs and the messages: it lights up under the pointer.
             let close = Rect::from_center_size(bar.right_center() - vec2(22.0, 0.0), Vec2::splat(28.0));
@@ -599,7 +599,7 @@ impl WorldPicker {
             // Sort / folder / refresh row.
             ui.horizontal(|ui| {
                 ui.add_space(30.0);
-                ui.label(egui::RichText::new("Sort by:").color(theme::TEXT));
+                ui.label(egui::RichText::new("Sort by:").color(theme::text()));
                 let mut sort = self.by_name as usize;
                 if widgets::segmented(ui, &mut sort, &["Last Played", "Name"], 0.0, true) {
                     self.by_name = sort == 1;
@@ -647,8 +647,8 @@ impl WorldPicker {
             ui.add_space(6.0);
             let list_h = size.y - 38.0 - 44.0 - 108.0 - 86.0;
             egui::Frame::new()
-                .fill(theme::BG)
-                .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                .fill(theme::bg())
+                .stroke(Stroke::new(1.0_f32, theme::border()))
                 .inner_margin(egui::Margin::same(1))
                 .show(ui, |ui| {
                     ui.set_height(list_h);
@@ -669,7 +669,7 @@ impl WorldPicker {
                                         }
                                         _ => "No worlds found in the configured folder.",
                                     };
-                                    ui.label(egui::RichText::new(text).color(theme::TEXT_DIM));
+                                    ui.label(egui::RichText::new(text).color(theme::text_dim()));
                                 });
                             }
                             for i in 0..self.entries.len() {
@@ -799,7 +799,7 @@ impl WorldPicker {
             );
             ui.painter().line_segment(
                 [footer.left_top(), footer.right_top()],
-                Stroke::new(1.0_f32, theme::BORDER),
+                Stroke::new(1.0_f32, theme::border()),
             );
             let chosen = self
                 .browsed
@@ -825,7 +825,7 @@ impl WorldPicker {
             ui.painter().rect_stroke(
                 ui.max_rect(),
                 theme::radius(6),
-                Stroke::new(1.0_f32, theme::BORDER),
+                Stroke::new(1.0_f32, theme::border()),
                 StrokeKind::Inside,
             );
         });

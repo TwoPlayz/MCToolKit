@@ -1751,3 +1751,5 @@ D minecraft:wooden_door|door_hinge_bit=b:0,minecraft:cardinal_direction=s:south,
 D minecraft:oak_fence|minecraft:connection_east=b:1,minecraft:connection_north=b:1,minecraft:connection_south=b:1,minecraft:connection_west=b:1	minecraft:oak_fence|
 D minecraft:tall_grass|upper_block_bit=b:0	minecraft:double_plant|double_plant_type=s:grass,upper_block_bit=b:0
 D minecraft:large_fern|upper_block_bit=b:0	minecraft:double_plant|double_plant_type=s:fern,upper_block_bit=b:0
+B minecraft:end_gateway		
+B minecraft:moving_block		

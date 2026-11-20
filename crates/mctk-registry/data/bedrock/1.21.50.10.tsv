@@ -1847,3 +1847,5 @@ D minecraft:wooden_door|door_hinge_bit=b:0,minecraft:cardinal_direction=s:east,o
 D minecraft:wooden_door|door_hinge_bit=b:1,minecraft:cardinal_direction=s:south,open_bit=b:0,upper_block_bit=b:0	minecraft:wooden_door|direction=i:0,door_hinge_bit=b:1,open_bit=b:0,upper_block_bit=b:0
 D minecraft:wooden_door|door_hinge_bit=b:0,minecraft:cardinal_direction=s:south,open_bit=b:1,upper_block_bit=b:0	minecraft:wooden_door|direction=i:0,door_hinge_bit=b:0,open_bit=b:1,upper_block_bit=b:0
 D minecraft:wooden_door|door_hinge_bit=b:0,minecraft:cardinal_direction=s:south,open_bit=b:0,upper_block_bit=b:1	minecraft:wooden_door|direction=i:0,door_hinge_bit=b:0,open_bit=b:0,upper_block_bit=b:1
+B minecraft:end_gateway		
+B minecraft:moving_block		

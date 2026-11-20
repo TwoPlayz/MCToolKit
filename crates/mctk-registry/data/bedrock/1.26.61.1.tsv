@@ -1485,3 +1485,5 @@ M minecraft:taiga_mutated
 M minecraft:the_end
 M minecraft:warm_ocean
 M minecraft:warped_forest
+B minecraft:end_gateway		
+B minecraft:moving_block		

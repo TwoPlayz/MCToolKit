@@ -1,6 +1,6 @@
 //! The notes the NBT editor adds beside tags: what a game mode number means, how long a tick
 //! count is, what a position or rotation points at, which version a `DataVersion` is, and a
-//! picture for the player. They are worked out from the tags themselves and shown in grey after
+//! picture for the player. They are worked out from the tags themselves and shown in gray after
 //! the value.
 
 use std::collections::HashMap;
@@ -14,7 +14,7 @@ use crate::nbt_view::{Seg, TagPath};
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TagStyle {
     pub label: Option<String>,
-    /// A colour name ("lime", "gold", ...) or `#rrggbb`.
+    /// A color name ("lime", "gold", ...) or `#rrggbb`.
     pub color: Option<String>,
     /// A small picture drawn before the label.
     pub icon: Option<NoteIcon>,
@@ -54,7 +54,7 @@ pub mod edition {
     pub const CONSOLE: i64 = 2;
 }
 
-const GREY: &str = "#bfbfbf";
+const GRAY: &str = "#bfbfbf";
 const DIM: &str = "#56616f";
 
 /// The notes for a whole document.
@@ -357,7 +357,7 @@ impl Styler {
                             _ => {}
                         }
                     }
-                    self.put(key(at, "LastDeathLocation"), text, Some(GREY));
+                    self.put(key(at, "LastDeathLocation"), text, Some(GRAY));
                 }
             }
         }
@@ -421,7 +421,7 @@ impl Styler {
                         _ => "",
                     };
                     if !text.is_empty() {
-                        self.put(index(&key(at, "Attributes"), i), text, Some(GREY));
+                        self.put(index(&key(at, "Attributes"), i), text, Some(GRAY));
                     }
                 }
             }
@@ -454,7 +454,7 @@ impl Styler {
         if !custom.is_empty() {
             text += &format!(" \"{custom}\"");
         }
-        self.put(at.clone(), text, Some(GREY));
+        self.put(at.clone(), text, Some(GRAY));
         self.icon(at.clone(), NoteIcon::Own(Icon::User));
 
         let bedrock = self.edition == edition::BEDROCK;
@@ -463,7 +463,7 @@ impl Styler {
             if v.len() == 3 {
                 let r = |x: f64| (x + 0.5).floor() as i64;
                 let p = key(at, "Pos");
-                self.put(p.clone(), format!("X:{}, Y:{}, Z:{}", r(v[0]), r(v[1]), r(v[2])), Some(GREY));
+                self.put(p.clone(), format!("X:{}, Y:{}, Z:{}", r(v[0]), r(v[1]), r(v[2])), Some(GRAY));
                 self.icon(p.clone(), NoteIcon::Image("POS"));
                 for (i, axis) in ["X", "Y", "Z"].into_iter().enumerate() {
                     self.put(index(&p, i), axis, None);
@@ -481,7 +481,7 @@ impl Styler {
                 let p = key(at, "Rotation");
                 self.put(index(&p, 0), format!("Yaw: {yaw}"), None);
                 self.put(index(&p, 1), format!("Pitch: {pitch}"), None);
-                self.put(p.clone(), format!("{yaw} and {pitch}"), Some(GREY));
+                self.put(p.clone(), format!("{yaw} and {pitch}"), Some(GRAY));
                 self.icon(p, NoteIcon::Image("ROT"));
             }
         }

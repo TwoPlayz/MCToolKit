@@ -31,6 +31,9 @@ pub struct EditorPage {
     pub status: String,
     /// The messages showing in the top-right corner, oldest first.
     toasts: crate::toasts::Toasts,
+    /// The World Explorer's Prune tools (the Pruner's shapes, with no world of their own: they
+    /// work on the open one).
+    prune: crate::pruner::PruneTools,
 }
 
 /// A row of buttons in the middle of the dialog; the index of the one clicked.
@@ -51,10 +54,10 @@ fn centered_buttons(ui: &mut Ui, buttons: &[(Option<Icon>, &str)]) -> Option<usi
     picked
 }
 
-/// A dialog with a centred title, message lines (`true` = dimmed) and a centred row of buttons.
+/// A dialog with a centerd title, message lines (`true` = dimmed) and a centerd row of buttons.
 /// `Some(Some(i))` when button `i` was picked (Enter picks the first when `enter_first`),
 /// `Some(None)` when it was dismissed (Esc or a click outside), `None` while it is still up.
-fn dialog(
+pub(crate) fn dialog(
     ctx: &egui::Context,
     id: &str,
     title: &str,
@@ -66,11 +69,11 @@ fn dialog(
     let shown = egui::Modal::new(egui::Id::new(id)).show(ctx, |ui| {
         ui.set_width(340.0);
         ui.vertical_centered(|ui| {
-            ui.label(egui::RichText::new(title).size(18.0).color(Color32::WHITE));
+            ui.label(egui::RichText::new(title).size(18.0).color(theme::strong()));
             ui.add_space(4.0);
             for (text, dim) in lines {
                 let text = egui::RichText::new(text);
-                ui.label(if *dim { text.color(theme::TEXT_MUTED) } else { text });
+                ui.label(if *dim { text.color(theme::text_muted()) } else { text });
             }
             ui.add_space(10.0);
             picked = centered_buttons(ui, buttons);
@@ -115,7 +118,7 @@ pub enum EditorRequest {
     PickWorld(UiEdition),
 }
 
-/// The centred "Select a World to …" card with the five edition tiles. Returns the
+/// The centerd "Select a World to …" card with the five edition tiles. Returns the
 /// edition clicked; `more` draws the optional "More ⌄" menu (NBT Editor only).
 pub fn edition_chooser(
     ui: &mut Ui,
@@ -129,7 +132,7 @@ pub fn edition_chooser(
         widgets::card(ui, 19, |ui| {
             ui.set_width(card.x - 40.0);
             ui.vertical_centered(|ui| {
-                ui.label(egui::RichText::new(title).size(20.0).color(Color32::WHITE));
+                ui.label(egui::RichText::new(title).size(20.0).color(theme::strong()));
             });
             if let Some(more) = more {
                 let r = Rect::from_min_size(
@@ -174,6 +177,70 @@ impl EditorPage {
             "Already open".into(),
             format!("{what} is already open in the NBT editor, so it was not opened again."),
         ));
+    }
+
+    /// For development: shows the open world's World Explorer, with the map placed by `preset`
+    /// (see `MapView::dev_preset`).
+    pub fn dev_show_explorer(&mut self, preset: Option<&str>) {
+        if let Some(ws) = self.workspaces.get_mut(self.current) {
+            ws.show_explorer = true;
+            if let Some(p) = preset {
+                ws.map.dev_preset(p);
+            }
+            // MCTK_DEV_FOLD=0|1|2: a control on the view folded out (search, view, dimension).
+            if let Some(n) = std::env::var("MCTK_DEV_FOLD").ok().and_then(|s| s.parse().ok()) {
+                ws.map.dev_fold(n);
+            }
+            // MCTK_DEV_FIND=<name>: Search finds it. MCTK_DEV_PRUNE=x,z,w,h: a Prune box drawn.
+            if let Ok(q) = std::env::var("MCTK_DEV_FIND") {
+                ws.map.dev_find(&q);
+            }
+            if let Ok(spec) = std::env::var("MCTK_DEV_PRUNE") {
+                let v: Vec<f64> = spec.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+                if let [x, z, w, h] = v[..] {
+                    self.prune.dev_box(x, z, w, h);
+                }
+            }
+            // MCTK_DEV_EDIT=x0,y0,z0,x1,y1,z1;blocks|entities: selects a box and runs a tool on it
+            // (for checking the edit tools in the real app).
+            if let Ok(spec) = std::env::var("MCTK_DEV_EDIT") {
+                let (coords, tool) = spec.split_once(';').unwrap_or((&spec, "blocks"));
+                let v: Vec<i32> = coords.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+                if tool == "chunks" {
+                    ws.map.selected = v.chunks_exact(2).map(|c| (c[0], c[1])).collect();
+                    let r = ws.run_edit(crate::workspace::EditTool::DeleteChunks);
+                    eprintln!("dev edit: {r:?}");
+                } else if v.len() == 6 {
+                    ws.map.sel_box = Some(([v[0], v[1], v[2]], [v[3], v[4], v[5]]));
+                    // `brush`: painting gold, a ball of 3 (shown where the pointer is).
+                    if tool == "brush" {
+                        ws.map.block = crate::edit::states::default_state("minecraft:gold_block");
+                        ws.map.brush = Some(crate::map_view::BrushMode { radius: 3, ..Default::default() });
+                        ws.map.sel_box = None;
+                        return;
+                    }
+                    // `box`: just selected, in Box Select (its handles showing).
+                    if tool == "box" {
+                        ws.map.box_mode = true;
+                        return;
+                    }
+                    // `copy`: copied, and placing it (the copy follows the pointer).
+                    if tool == "copy" {
+                        let r = ws.copy_box(false);
+                        ws.map.paste = Some(crate::map_view::PasteMode { at: Some([v[0] + 18, v[1], v[2]]), ..Default::default() });
+                        eprintln!("dev edit: {r:?}");
+                        return;
+                    }
+                    let tool = match tool.strip_prefix("fill:") {
+                        Some(block) => crate::workspace::EditTool::Fill(crate::edit::states::default_state(block)),
+                        None if tool == "entities" => crate::workspace::EditTool::DeleteEntities,
+                        None => crate::workspace::EditTool::DeleteBlocks,
+                    };
+                    let r = ws.run_edit(tool);
+                    eprintln!("dev edit: {r:?}");
+                }
+            }
+        }
     }
 
     pub fn open_world(&mut self, path: &Path, edition: UiEdition, settings: &Settings) {
@@ -256,12 +323,12 @@ impl EditorPage {
         }
     }
 
-    /// A message with an OK button, in the colour of its icon.
+    /// A message with an OK button, in the color of its icon.
     fn show_notice(&mut self, ctx: &egui::Context) {
         let Some((icon, title, body)) = self.notice.clone() else {
             return;
         };
-        let colour = match icon {
+        let color = match icon {
             Icon::Check => Color32::from_rgb(0x4C, 0xAF, 0x50),
             Icon::Close => Color32::from_rgb(0xE5, 0x57, 0x57),
             _ => theme::BLUE,
@@ -271,12 +338,12 @@ impl EditorPage {
             ui.set_width(300.0);
             ui.vertical_centered(|ui| {
                 let (r, _) = ui.allocate_exact_size(Vec2::splat(48.0), Sense::hover());
-                ui.painter().circle_filled(r.center(), 24.0, colour.gamma_multiply(0.18));
-                icons::paint(ui.painter(), r.shrink(12.0), icon, colour);
+                ui.painter().circle_filled(r.center(), 24.0, color.gamma_multiply(0.18));
+                icons::paint(ui.painter(), r.shrink(12.0), icon, color);
                 ui.add_space(6.0);
-                ui.label(egui::RichText::new(&title).size(18.0).color(Color32::WHITE));
+                ui.label(egui::RichText::new(&title).size(18.0).color(theme::strong()));
                 ui.add_space(2.0);
-                ui.label(egui::RichText::new(&body).color(theme::TEXT_MUTED));
+                ui.label(egui::RichText::new(&body).color(theme::text_muted()));
                 ui.add_space(10.0);
                 if centered_buttons(ui, &[(None, "OK")]).is_some()
                     || ui.input(|i| i.key_pressed(egui::Key::Enter))
@@ -315,9 +382,9 @@ impl EditorPage {
                 let (area, r) = ui.allocate_exact_size(vec2(60.0, 22.0), Sense::click());
                 let r = r.on_hover_cursor(egui::CursorIcon::PointingHand);
                 let color = if more_open || r.hovered() {
-                    Color32::WHITE
+                    theme::strong()
                 } else {
-                    theme::TEXT_MUTED
+                    theme::text_muted()
                 };
                 ui.painter().text(
                     area.left_center(),
@@ -348,7 +415,7 @@ impl EditorPage {
                         .order(egui::Order::Foreground)
                         .show(ui.ctx(), |ui| {
                             egui::Frame::new()
-                                .fill(theme::DEEP)
+                                .fill(theme::deep())
                                 .corner_radius(theme::radius(4))
                                 .inner_margin(egui::Margin::same(6))
                                 .show(ui, |ui| {
@@ -414,14 +481,15 @@ impl EditorPage {
         }
         self.left_panel(ui, settings);
         let full = ui.max_rect();
-        let area = Rect::from_min_max(pos2(full.left() + LEFT_PANEL, full.top()), full.max);
+        // (Never inside out, in a window narrower than the panel.)
+        let area = Rect::from_min_max(pos2((full.left() + LEFT_PANEL).min(full.right()), full.top()), full.max);
         let full_precision = settings.full_precision;
         let Some(ws) = self.workspaces.get_mut(self.current) else {
             return request;
         };
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(area));
-        if ws.show_locator {
-            locator(&mut child, ws, &mut self.status);
+        if ws.show_explorer {
+            crate::explorer_ui::show(&mut child, ws, &mut self.status, &mut self.prune);
         } else {
             tabs(&mut child, ws, full_precision, settings, &mut self.status);
         }
@@ -431,11 +499,11 @@ impl EditorPage {
     fn left_panel(&mut self, ui: &mut Ui, settings: &mut Settings) {
         let full = ui.max_rect();
         let panel = Rect::from_min_size(full.min, vec2(LEFT_PANEL, full.height()));
-        ui.painter().rect_filled(panel, 0.0, theme::BG);
+        ui.painter().rect_filled(panel, 0.0, theme::bg());
         // Inside the panel's last pixel column, so the page beside it does not cover half of it.
         ui.painter().line_segment(
             [panel.right_top() - vec2(0.5, 0.0), panel.right_bottom() - vec2(0.5, 0.0)],
-            Stroke::new(1.0_f32, theme::SEPARATOR),
+            Stroke::new(1.0_f32, theme::separator()),
         );
         let mut child =
             ui.new_child(egui::UiBuilder::new().max_rect(panel.shrink2(vec2(6.0, 6.0))));
@@ -456,9 +524,9 @@ impl EditorPage {
                 rect,
                 widgets::dropdown_corners(open),
                 if resp.hovered() {
-                    theme::BUTTON_HOVER
+                    theme::button_hover()
                 } else {
-                    theme::BUTTON
+                    theme::button()
                 },
             );
             if let Some((name, icon)) = names.get(self.current) {
@@ -466,7 +534,7 @@ impl EditorPage {
                     ui.painter(),
                     Rect::from_center_size(rect.left_center() + vec2(14.0, 0.0), Vec2::splat(16.0)),
                     *icon,
-                    theme::TEXT_MUTED,
+                    theme::text_muted(),
                 );
                 let font = theme::regular(14.0);
                 let name = widgets::elide(ui, name, &font, rect.width() - 52.0);
@@ -475,14 +543,14 @@ impl EditorPage {
                     Align2::LEFT_CENTER,
                     name,
                     theme::regular(14.0),
-                    theme::TEXT,
+                    theme::text(),
                 );
             }
             icons::paint(
                 ui.painter(),
                 Rect::from_center_size(rect.right_center() - vec2(12.0, 0.0), Vec2::splat(10.0)),
                 if open { Icon::ChevronUp } else { Icon::ChevronDown },
-                theme::TEXT_MUTED,
+                theme::text_muted(),
             );
             if resp.clicked() {
                 ui.memory_mut(|m| m.toggle_popup(popup));
@@ -494,16 +562,16 @@ impl EditorPage {
                 ui,
                 popup,
                 &resp,
-                theme::BUTTON,
+                theme::button(),
                 None,
                 |ui, inner| {
                     for (i, (name, icon)) in names.iter().enumerate() {
                         let (row, resp) =
                             ui.allocate_exact_size(vec2(inner, 28.0), Sense::click());
                         if resp.hovered() {
-                            ui.painter().rect_filled(row, 0.0, theme::BUTTON_HOVER);
+                            ui.painter().rect_filled(row, 0.0, theme::button_hover());
                         } else if i == current {
-                            ui.painter().rect_filled(row, 0.0, Color32::from_white_alpha(14));
+                            ui.painter().rect_filled(row, 0.0, theme::wash(14));
                         }
                         icons::paint(
                             ui.painter(),
@@ -512,7 +580,7 @@ impl EditorPage {
                                 Vec2::splat(16.0),
                             ),
                             *icon,
-                            theme::TEXT_MUTED,
+                            theme::text_muted(),
                         );
                         let font = theme::regular(14.0);
                         let name = widgets::elide(ui, name, &font, row.width() - 40.0);
@@ -521,7 +589,7 @@ impl EditorPage {
                             Align2::LEFT_CENTER,
                             name,
                             font,
-                            theme::TEXT,
+                            theme::text(),
                         );
                         if resp.clicked() {
                             switch_to = Some(i);
@@ -535,20 +603,20 @@ impl EditorPage {
                     if resp.hovered() {
                         // The last row follows the list's rounded bottom corners.
                         let corners = egui::CornerRadius { nw: 0, ne: 0, sw: 4, se: 4 };
-                        ui.painter().rect_filled(row, corners, theme::BUTTON_HOVER);
+                        ui.painter().rect_filled(row, corners, theme::button_hover());
                     }
                     icons::paint(
                         ui.painter(),
                         Rect::from_center_size(row.left_center() + vec2(14.0, 0.0), Vec2::splat(14.0)),
                         Icon::Plus,
-                        theme::TEXT_MUTED,
+                        theme::text_muted(),
                     );
                     ui.painter().text(
                         row.left_center() + vec2(28.0, 0.0),
                         Align2::LEFT_CENTER,
                         "Open another world",
                         theme::regular(14.0),
-                        theme::TEXT,
+                        theme::text(),
                     );
                     if resp.clicked() {
                         open_other = true;
@@ -574,7 +642,7 @@ impl EditorPage {
                     self.close_current();
                 }
             }
-            // Greyed out until there is something to write.
+            // Grayed out until there is something to write.
             if widgets::button(ui, Some(Icon::Save), "Save", half, dirty).clicked() {
                 self.confirm_save = true;
             }
@@ -607,12 +675,16 @@ impl EditorPage {
             }
         });
         // Ctrl+Z and Ctrl+Y (Ctrl+Shift+Z) for the open tab, as the buttons above.
-        let typing = self
-            .workspaces
-            .get(self.current)
-            .filter(|w| !w.show_locator)
-            .and_then(|w| w.active.and_then(|i| w.docs.get(i)))
-            .is_none_or(|d| d.tree.is_typing());
+        // In the World Explorer, for its tools (unless a box is being typed in).
+        let in_explorer = self.workspaces.get(self.current).is_some_and(|w| w.show_explorer);
+        let typing = if in_explorer {
+            ui.ctx().wants_keyboard_input()
+        } else {
+            self.workspaces
+                .get(self.current)
+                .and_then(|w| w.active.and_then(|i| w.docs.get(i)))
+                .is_none_or(|d| d.tree.is_typing())
+        };
         let (mut undo, mut redo) = (false, false);
         let idle = !typing && !self.confirm_save && !self.confirm_close && self.notice.is_none();
         if idle {
@@ -692,7 +764,7 @@ impl EditorPage {
                 pos2(panel.left(), ui.cursor().top()),
                 pos2(panel.right(), ui.cursor().top()),
             ],
-            Stroke::new(1.0_f32, theme::BORDER),
+            Stroke::new(1.0_f32, theme::border()),
         );
         ui.add_space(6.0);
         if ws.is_single_file() {
@@ -705,9 +777,9 @@ impl EditorPage {
                 rect,
                 theme::radius(4),
                 if resp.hovered() {
-                    theme::BUTTON_HOVER
+                    theme::button_hover()
                 } else {
-                    Color32::from_rgb(0x26, 0x2B, 0x33)
+                    theme::tile()
                 },
             );
             if active {
@@ -722,21 +794,77 @@ impl EditorPage {
                 ui.painter(),
                 Rect::from_center_size(rect.left_center() + vec2(52.0, 0.0), Vec2::splat(22.0)),
                 icon,
-                theme::TEXT,
+                theme::text(),
             );
             ui.painter().text(
                 rect.left_center() + vec2(84.0, 0.0),
                 Align2::LEFT_CENTER,
                 text,
                 theme::regular(16.0),
-                theme::TEXT,
+                theme::text(),
             );
             resp.clicked()
         };
-        if big(ui, Icon::ChunkGrid, "Chunk Locator", ws.show_locator) {
-            ws.show_locator = true;
+        if big(ui, Icon::ChunkGrid, "World Explorer", ws.show_explorer) {
+            ws.show_explorer = true;
         }
         ui.add_space(6.0);
+        // In the World Explorer the Pruner's tools take the files' place: shapes drawn on the
+        // map pick chunks, and Prune deletes them (one step to undo, written on Save).
+        if ws.show_explorer {
+            let bedrock = ws.edition == UiEdition::Bedrock;
+            self.prune.read_chunks(ui.ctx(), ws);
+            // Only on the flat map (zoomed out past Top-down): zoomed in, the clicks are the
+            // block tools', so the Prune tools are grayed out.
+            // Bedrock only: the database written again, compacted, when the world is saved.
+            if bedrock {
+                ui.checkbox(&mut ws.optimize_on_save, "Optimize on Save").on_hover_text(
+                    "When the world is saved, write its database again compacted, giving back the space the game leaves behind when it deletes things (can take a while for a big world)",
+                );
+                ui.add_space(4.0);
+            }
+            let flat = !ws.map.shows_blocks();
+            if !flat {
+                self.prune.drop_tool();
+                ui.label(egui::RichText::new("Zoom out to the map to prune chunks").size(12.5).color(theme::text_muted()));
+                ui.add_space(4.0);
+            }
+            let pressed = ui
+                .scope(|ui| {
+                    if !flat {
+                        ui.disable();
+                        ui.multiply_opacity(0.4);
+                    }
+                    self.prune.tool_panel(ui, panel, bedrock)
+                })
+                .inner;
+            if pressed && flat {
+                match self.prune.picked_chunks(bedrock) {
+                    None => self.status = "Still reading the world's chunks; try again in a moment".into(),
+                    Some(v) if v.is_empty() => self.status = "Draw a shape over the chunks to delete first".into(),
+                    Some(v) => {
+                        let n = v.len();
+                        let picked = std::mem::replace(&mut ws.map.selected, v);
+                        match ws.run_edit(crate::workspace::EditTool::DeleteChunks) {
+                            Ok(_) => {
+                                self.status = format!("Pruned {n} chunk{} (Ctrl+Z undoes it; Save writes it)", if n == 1 { "" } else { "s" });
+                                self.prune.clear_layers();
+                                ws.map.selected.clear();
+                            }
+                            Err(e) => {
+                                ws.map.selected = picked;
+                                self.status = e;
+                            }
+                        }
+                    }
+                }
+            }
+            let note = self.prune.take_status();
+            if !note.is_empty() {
+                self.status = note;
+            }
+            return;
+        }
         // The rows drawn last frame are what a range or drag selection works from.
         ws.file_rows_prev = std::mem::take(&mut ws.file_rows);
         ws.entry_rows_prev = std::mem::take(&mut ws.entry_rows);
@@ -919,7 +1047,7 @@ fn file_row_img(
 ) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
     if resp.hovered() {
-        ui.painter().rect_filled(rect, 0.0, theme::CARD);
+        ui.painter().rect_filled(rect, 0.0, theme::card());
     }
     let x = rect.left() + 8.0 + depth as f32 * 14.0;
     if let Some(o) = open {
@@ -931,13 +1059,13 @@ fn file_row_img(
             } else {
                 Icon::ChevronRight
             },
-            theme::TEXT_MUTED,
+            theme::text_muted(),
         );
     }
     let color = if icon == Icon::Folder {
         theme::YELLOW
     } else {
-        theme::TEXT
+        theme::text()
     };
     let ir = Rect::from_center_size(pos2(x + 16.0, rect.center().y), Vec2::splat(16.0));
     if !image.is_some_and(|p| icons::file_image(ui.painter(), ir, p)) {
@@ -951,7 +1079,7 @@ fn file_row_img(
         Align2::LEFT_CENTER,
         shown,
         theme::regular(14.0),
-        theme::TEXT,
+        theme::text(),
     );
     // A name that did not fit is shown whole while the pointer is on it.
     if cut {
@@ -1265,7 +1393,10 @@ fn file_ctx(ui: &mut Ui, ws: &mut Workspace, resp: &egui::Response, path: &Path,
         vec![path.to_path_buf()]
     };
     let (can_undo, can_redo) = (ws.file_can_undo(path), ws.file_can_redo(path));
-    resp.context_menu(|ui| {
+    if resp.secondary_clicked() {
+        ws.peeked = None;
+    }
+    ctx_menu::context(ui, resp, |ui, cx| {
         if can_undo && crate::nbt_view::white_item(ui, Icon::Undo, "Undo") {
             let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
             ws.file_note = match ws.file_undo(path) {
@@ -1281,6 +1412,13 @@ fn file_ctx(ui: &mut Ui, ws: &mut Workspace, resp: &egui::Response, path: &Path,
             };
         }
         let name = path.file_name().unwrap_or_default().to_string_lossy();
+        // A player's data: straight to their inventory.
+        if is_player_file(&name) {
+            if ctx_menu::painted(ui, "Edit Inventory", "", true, ctx_menu::item_icon("chest")) {
+                open_player_inventory(ws, DocSource::File(path.to_path_buf()));
+            }
+            player_effects_menu(ui, cx, ws, &DocSource::File(path.to_path_buf()));
+        }
         if name.starts_with("map_") && name.ends_with(".dat") && ctx_menu::item(ui, Icon::File, "Open Map Editor", "", true) {
             match ws.open_doc(DocSource::File(path.to_path_buf())) {
                 Ok(()) => {
@@ -1305,11 +1443,30 @@ fn file_ctx(ui: &mut Ui, ws: &mut Workspace, resp: &egui::Response, path: &Path,
         if targets.len() == 1 && ctx_menu::item(ui, Icon::Rename, "Rename", "Double-click", true) {
             start_rename(ws, path);
         }
-        ui.separator();
+        ctx_menu::separator(ui);
         if ctx_menu::item(ui, Icon::Trash, "Delete", "Del", true) {
             ws.pending_delete = targets.iter().cloned().map(DocSource::File).collect();
         }
     });
+}
+
+/// `Status Effects ▸` for a player's file or record: the effects on them now, read from it, and
+/// a change made opens it and is made there (so it can be undone and saved).
+fn player_effects_menu(ui: &mut Ui, cx: &mut ctx_menu::Cx, ws: &mut Workspace, source: &DocSource) {
+    let Some(c) = ws.peek_root(source) else { return };
+    let version = c.get("DataVersion").and_then(mctk_nbt::Tag::as_i64);
+    let effects = crate::mob_edit::effects(&c);
+    let choices = crate::effects::choices(&c, crate::effects::Holder::Mob, version);
+    let Some(e) = crate::effects::menu(ui, cx, &format!("{source:?}"), "Status Effects", &effects, &choices) else { return };
+    ws.peeked = None;
+    match ws.open_doc(source.clone()) {
+        Ok(()) => {
+            if let Some(d) = ws.active.and_then(|i| ws.docs.get_mut(i)) {
+                d.tree.edit_root(crate::mob_edit::MobEdit::Effect(e));
+            }
+        }
+        Err(e) => ws.file_note = e,
+    }
 }
 
 /// Drag-select over the side panel's rows, as in a file manager.
@@ -1434,6 +1591,19 @@ fn file_rename_dialog(ui: &Ui, ws: &mut Workspace) {
 }
 /// Selection, highlight and right-click menu of a row that is not a file on disk (a Bedrock
 /// database record or a console archive entry); those can only be deleted.
+/// Opens a player's file or record and, in it, their inventory screen.
+fn open_player_inventory(ws: &mut Workspace, source: DocSource) {
+    match ws.open_doc(source) {
+        Ok(()) => {
+            let opened = ws.active.and_then(|i| ws.docs.get_mut(i)).is_some_and(|d| d.tree.open_player_inventory());
+            if !opened {
+                ws.file_note = "That player has no inventory saved".into();
+            }
+        }
+        Err(e) => ws.file_note = e,
+    }
+}
+
 fn entry_ctx(ui: &mut Ui, ws: &mut Workspace, resp: &egui::Response, source: &DocSource) {
     ws.entry_rows.push((source.clone(), resp.rect));
     if resp.clicked() || resp.secondary_clicked() {
@@ -1481,7 +1651,23 @@ fn entry_ctx(ui: &mut Ui, ws: &mut Workspace, resp: &egui::Response, source: &Do
         DocSource::BedrockKey(k) => k.starts_with(b"map_"),
         _ => false,
     };
-    resp.context_menu(|ui| {
+    let is_player = match source {
+        DocSource::ConsoleEntry(n) => n.starts_with("players/"),
+        DocSource::BedrockKey(k) => k.as_slice() == b"~local_player" || k.starts_with(b"player_"),
+        _ => false,
+    };
+    if resp.secondary_clicked() {
+        ws.peeked = None;
+    }
+    ctx_menu::context(ui, resp, |ui, cx| {
+        // A player's record: straight to their inventory; their status effects.
+        if is_player {
+            if ctx_menu::painted(ui, "Edit Inventory", "", true, ctx_menu::item_icon("chest")) {
+                open_player_inventory(ws, source.clone());
+            }
+            player_effects_menu(ui, cx, ws, source);
+            ctx_menu::separator(ui);
+        }
         if is_map && ctx_menu::item(ui, Icon::File, "Open Map Editor", "", true) {
             match ws.open_doc(source.clone()) {
                 Ok(()) => {
@@ -1494,7 +1680,7 @@ fn entry_ctx(ui: &mut Ui, ws: &mut Workspace, resp: &egui::Response, source: &Do
             }
         }
         if is_map {
-            ui.separator();
+            ctx_menu::separator(ui);
         }
         if ctx_menu::item(ui, Icon::Trash, "Delete", "Del", true) {
             ws.pending_delete = if ws.selected_entries.contains(source) {
@@ -1676,13 +1862,13 @@ pub fn close_button(ui: &mut Ui, rect: Rect, id: egui::Id) -> egui::Response {
     let resp = ui.interact(rect, id, Sense::click());
     if resp.hovered() {
         ui.painter()
-            .rect_filled(rect, theme::radius(4), Color32::from_white_alpha(28));
+            .rect_filled(rect, theme::radius(4), theme::wash(28));
     }
     icons::paint(
         ui.painter(),
         rect.shrink(rect.width() * 0.25),
         Icon::Close,
-        if resp.hovered() { Color32::WHITE } else { theme::TEXT_MUTED },
+        if resp.hovered() { theme::strong() } else { theme::text_muted() },
     );
     resp
 }
@@ -1697,7 +1883,7 @@ fn tabs(
     refresh_styles(ui, ws);
     let full = ui.max_rect();
     let strip = Rect::from_min_size(full.min, vec2(full.width(), 40.0));
-    ui.painter().rect_filled(strip, 0.0, theme::CARD);
+    ui.painter().rect_filled(strip, 0.0, theme::card());
     let ctx = ui.ctx().clone();
     let mut close = None;
     // The tab being dragged (its uid) and where inside it the pointer took hold; kept in egui's
@@ -1827,11 +2013,11 @@ fn tabs(
                 se: 0,
             },
             if active {
-                theme::BG
+                theme::bg()
             } else if resp.hovered() {
-                theme::BUTTON
+                theme::button()
             } else {
-                theme::CARD
+                theme::card()
             },
         );
         if active {
@@ -1851,7 +2037,7 @@ fn tabs(
                 tui.painter(),
                 ir,
                 icon,
-                if active { Color32::WHITE } else { theme::TEXT_MUTED },
+                if active { theme::strong() } else { theme::text_muted() },
             );
         }
         tui.painter().text(
@@ -1860,9 +2046,9 @@ fn tabs(
             title,
             theme::bold(14.0),
             if active {
-                Color32::WHITE
+                theme::strong()
             } else {
-                theme::TEXT_MUTED
+                theme::text_muted()
             },
         );
         if close_resp.clicked() {
@@ -1879,14 +2065,14 @@ fn tabs(
             );
             let resp = ui.interact(r, ui.id().with(("tab-arrow", n)), Sense::click());
             if resp.hovered() {
-                ui.painter().rect_filled(r, 0.0, theme::BUTTON);
+                ui.painter().rect_filled(r, 0.0, theme::button());
             }
             ui.painter().text(
                 r.center(),
                 Align2::CENTER_CENTER,
                 glyph,
                 theme::bold(18.0),
-                theme::TEXT,
+                theme::text(),
             );
             if resp.clicked() {
                 ws.tab_scroll = (ws.tab_scroll + step).clamp(0.0, max_scroll);
@@ -1944,7 +2130,7 @@ fn tabs(
                 Align2::CENTER_CENTER,
                 "Open level.dat, a player, a map or any file on the left.",
                 theme::regular(14.0),
-                theme::TEXT_DIM,
+                theme::text_dim(),
             );
         }
     }
@@ -1966,41 +2152,13 @@ fn tabs(
     }
 }
 
-fn locator(ui: &mut Ui, ws: &mut Workspace, status: &mut String) {
-    let full = ui.max_rect();
-    let bar = Rect::from_min_size(full.min, vec2(full.width(), 38.0));
-    ui.painter().rect_filled(bar, 0.0, theme::BG);
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(bar.shrink2(vec2(6.0, 4.0))));
-    child.horizontal_centered(|ui| {
-        let sel = ws.map.selected.clone();
-        if widgets::green_button(ui, None, "Open Selected Chunks", 0.0, !sel.is_empty()).clicked() {
-            open_chunks(ws, &sel, status);
-        }
-        let text = match sel.as_slice() {
-            [] => "No Chunk Selected".to_string(),
-            [(x, z)] => format!("Chunk {x}, {z}"),
-            many => format!("{} Chunks Selected", many.len()),
-        };
-        ui.label(egui::RichText::new(text).italics().color(theme::TEXT_MUTED));
-    });
-    let cr = Rect::from_center_size(bar.right_center() - vec2(20.0, 0.0), Vec2::splat(28.0));
-    let id = ui.id().with("loc-close");
-    if close_button(ui, cr, id).clicked() {
-        ws.show_locator = false;
-    }
-    let body = Rect::from_min_max(pos2(full.left(), bar.bottom()), full.max);
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(body));
-    ws.map.selectable = true;
-    let frame = ws.map.show_map(&mut child, true);
-    if frame.response.double_clicked() && !child.input(|i| i.modifiers.command) {
-        let sel = ws.map.selected.clone();
-        open_chunks(ws, &sel, status);
-    }
-    ws.map.show_chrome(&mut child, &frame);
+#[cfg(test)]
+fn explorer(ui: &mut Ui, ws: &mut Workspace, status: &mut String) {
+    crate::explorer_ui::show(ui, ws, status, &mut crate::pruner::PruneTools::default());
 }
 
 /// Opens each of the chunks in its own tab; the last one is left showing.
-fn open_chunks(ws: &mut Workspace, chunks: &[(i32, i32)], status: &mut String) {
+pub(crate) fn open_chunks(ws: &mut Workspace, chunks: &[(i32, i32)], status: &mut String) {
     let mut missing = 0;
     for &(x, z) in chunks {
         match ws.chunk_source(x, z) {
@@ -2018,5 +2176,170 @@ fn open_chunks(ws: &mut Workspace, chunks: &[(i32, i32)], status: &mut String) {
         } else {
             format!("{missing} of the chunks are not stored")
         };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The World Explorer drawn in a window shrunk to nothing (as when it is minimized) and tiny,
+    /// in each of its views and with each tool's card showing: no panic.
+    #[test]
+    fn the_explorer_survives_a_window_of_no_size() {
+        let Ok(world) = std::env::var("MCTK_SNAPSHOT_WORLD") else { return };
+        let mut ws = Workspace::open(std::path::Path::new(&world), UiEdition::Java, &crate::settings::Settings::default(), false, false).expect("opens");
+        ws.show_explorer = true;
+        ws.map.sel_box = Some(([20, 63, 2], [27, 70, 9]));
+        ws.map.box_mode = true;
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut status = String::new();
+        for (k, preset) in ["x=24;z=8;zoom=2;tilt=0;yaw=0;pitch=0;dolly=1", "x=24;z=8;zoom=8;tilt=0;yaw=0;pitch=0;dolly=1", "x=24;z=8;zoom=16;tilt=1;yaw=0.5;pitch=0;dolly=0.7"].into_iter().enumerate() {
+            ws.map.dev_preset(preset);
+            // The controls on the view folded out.
+            ws.map.dev_fold(k as u8);
+            // (Narrow and short too: the toolbar wraps onto more rows than the window is tall.)
+            let sizes = [(1200.0, 700.0), (0.0, 0.0), (1.0, 1.0), (40.0, 20.0), (300.0, 120.0), (160.0, 90.0), (240.0, 200.0), (120.0, 400.0), (500.0, 60.0), (0.0, 0.0), (1200.0, 700.0)];
+            for (w, h) in sizes {
+                for _ in 0..3 {
+                    let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(w, h))), ..Default::default() };
+                    let _ = ctx.run(input, |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| explorer(ui, &mut ws, &mut status));
+                    });
+                }
+            }
+            ws.map.brush = Some(Default::default());
+            ws.map.clipboard = Some(Default::default());
+            ws.map.paste = Some(Default::default());
+        }
+    }
+
+    /// The World Explorer's block chooser opens a list tall enough to see many blocks (at the
+    /// smallest window too).
+    #[test]
+    fn the_block_list_shows_many_blocks() {
+        let Ok(world) = std::env::var("MCTK_SNAPSHOT_WORLD") else { return };
+        let mut ws = Workspace::open(std::path::Path::new(&world), UiEdition::Java, &crate::settings::Settings::default(), false, false).expect("opens");
+        ws.show_explorer = true;
+        ws.map.dev_preset("x=24;z=8;zoom=8;tilt=0;yaw=0;pitch=0;dolly=1");
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut status = String::new();
+        // The smallest window at 150% display scaling (in points).
+        let size = vec2(800.0 / 1.5, 490.0 / 1.5);
+        let mut frame = |events: Vec<egui::Event>| {
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, size)), events, ..Default::default() };
+            let _ = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| explorer(ui, &mut ws, &mut status));
+            });
+            ws.map.shows_blocks()
+        };
+        // (Until the map is read and the view shows blocks, with the block tools.)
+        let mut blocks = false;
+        for _ in 0..300 {
+            if frame(vec![]) {
+                blocks = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(blocks, "the view shows blocks");
+        let menu = || ctx.memory(|m| m.area_rect(egui::Id::new("mctk-ctx-menu").with("area")));
+        let click = |p: egui::Pos2| {
+            let b = |pressed| egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+            vec![egui::Event::PointerMoved(p), b(true), b(false)]
+        };
+        let mut found = None;
+        'probe: for y in (40..140).step_by(4) {
+            let p = egui::pos2(30.0, y as f32);
+            frame(vec![egui::Event::PointerMoved(p)]);
+            frame(click(p));
+            for _ in 0..3 {
+                frame(vec![egui::Event::PointerMoved(p)]);
+            }
+            if let Some(r) = menu() {
+                found = Some((y, r));
+                break 'probe;
+            }
+        }
+        let (y, r) = found.expect("the block chooser opens a list");
+        eprintln!("block chooser at y={y}: list {r:?}");
+        assert!(r.height() > 250.0 && r.bottom() <= size.y + 1.0, "the list is tall enough for many blocks, and on screen ({r:?})");
+    }
+
+    /// A Java chunk opens with its entities (kept in `entities/` since 1.17) among its tags, as
+    /// `Entities`, in the one tab; on saving they go back to their own file and the chunk's
+    /// file holds none.
+    #[test]
+    fn a_chunk_shows_its_entities_and_saves_them_back_apart() {
+        let Ok(world) = std::env::var("MCTK_SNAPSHOT_WORLD") else { return };
+        // A copy of the world, to save into.
+        let tmp = std::env::temp_dir().join(format!("mctk-chunk-entities-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let copy = |from: &std::path::Path, to: &std::path::Path| {
+            std::fs::create_dir_all(to).unwrap();
+            for d in ["region", "entities"] {
+                std::fs::create_dir_all(to.join(d)).unwrap();
+                for f in std::fs::read_dir(from.join(d)).unwrap().flatten() {
+                    std::fs::copy(f.path(), to.join(d).join(f.file_name())).unwrap();
+                }
+            }
+            std::fs::copy(from.join("level.dat"), to.join("level.dat")).unwrap();
+        };
+        copy(std::path::Path::new(&world), &tmp);
+        let mut ws = Workspace::open(&tmp, UiEdition::Java, &crate::settings::Settings::default(), false, false).expect("opens");
+        let mut status = String::new();
+        open_chunks(&mut ws, &[(2, 0)], &mut status);
+        assert_eq!(ws.docs.len(), 1, "one tab");
+        let count = |ws: &Workspace| ws.docs[0].tree.root.tag.get("Entities").and_then(mctk_nbt::Tag::as_list).map_or(0, |l| l.len());
+        let n = count(&ws);
+        assert!(n >= 40, "the zoo's mobs among the chunk's tags ({n})");
+        // Saved: the chunk's own file has no `Entities`, the entities file has them all.
+        ws.docs[0].tree.dirty = true;
+        ws.save().expect("saves");
+        let r = mctk_anvil::Region::open(tmp.join("region").join("r.0.0.mca")).unwrap();
+        assert!(r.read_chunk(2, 0).unwrap().unwrap().tag.get("Entities").is_none(), "not in the chunk's file");
+        let e = mctk_anvil::Region::open(tmp.join("entities").join("r.0.0.mca")).unwrap();
+        let back = e.read_chunk(2, 0).unwrap().unwrap().tag.get("Entities").and_then(mctk_nbt::Tag::as_list).map_or(0, |l| l.len());
+        assert_eq!(back, n, "all in the entities file");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A Bedrock chunk opens editable (its block entities, pending ticks and entities in one
+    /// tree), its large chest known as one, and saving puts each part back where it came from.
+    #[test]
+    fn a_bedrock_chunk_edits_and_saves_back() {
+        let Ok(world) = std::env::var("MCTK_SNAPSHOT_WORLD") else { return };
+        let tmp = std::env::temp_dir().join(format!("mctk-bedrock-chunk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        mctk_convert::java_to_bedrock(std::path::Path::new(&world), &tmp).expect("to Bedrock");
+        let settings = crate::settings::Settings::default();
+        let open = |status: &mut String| {
+            let mut ws = Workspace::open(&tmp, UiEdition::Bedrock, &settings, false, false).expect("opens");
+            open_chunks(&mut ws, &[(1, 0)], status);
+            ws
+        };
+        let mut status = String::new();
+        let mut ws = open(&mut status);
+        assert_eq!(ws.docs.len(), 1, "{status}");
+        assert!(!ws.docs[0].tree.read_only, "editable, so its menus (Edit Inventory) are offered");
+        let count = |ws: &Workspace, k: &str| ws.docs[0].tree.root.tag.get(k).and_then(mctk_nbt::Tag::as_list).map_or(0, |l| l.len());
+        let (blocks, mobs) = (count(&ws, "BlockEntities"), count(&ws, "Entities"));
+        // (Bedrock keeps item frames as block entities; armor stands and the painting are entities.)
+        assert!(blocks >= 4 && mobs >= 2, "chests, banner, pot, frames; stands, painting ({blocks}, {mobs})");
+        assert_eq!(ws.docs[0].tree.find_large_chests().len(), 2, "the large chest's two halves");
+        // One entity taken away, and saved: it stays gone, the rest stay.
+        if let Some(mctk_nbt::Tag::List(l)) = ws.docs[0].tree.root.tag.as_compound_mut().and_then(|c| c.get_mut("Entities")) {
+            let mut kept: Vec<mctk_nbt::Tag> = l.iter().cloned().collect();
+            kept.remove(0);
+            *l = mctk_nbt::List::from_tags(mctk_nbt::TagType::Compound, kept).unwrap();
+        }
+        ws.docs[0].tree.dirty = true;
+        ws.save().expect("saves");
+        drop(ws);
+        let ws = open(&mut status);
+        assert_eq!((count(&ws, "BlockEntities"), count(&ws, "Entities")), (blocks, mobs - 1), "saved back");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

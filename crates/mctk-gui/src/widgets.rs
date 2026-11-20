@@ -11,8 +11,8 @@ use crate::theme;
 /// A rounded panel (`#232830` with a hairline border).
 pub fn card<R>(ui: &mut Ui, margin: i8, add: impl FnOnce(&mut Ui) -> R) -> R {
     egui::Frame::new()
-        .fill(theme::CARD)
-        .stroke(Stroke::new(1.0_f32, theme::BORDER))
+        .fill(theme::card())
+        .stroke(Stroke::new(1.0_f32, theme::border()))
         .corner_radius(theme::radius(6))
         .inner_margin(egui::Margin::same(margin))
         .show(ui, add)
@@ -54,14 +54,15 @@ pub fn open_discord(ui: &Ui) {
     ui.ctx().open_url(egui::OpenUrl::new_tab(DISCORD_URL));
 }
 
-/// Grey button with an optional icon; `width` 0 sizes it to its content.
+/// Gray button with an optional icon; `width` 0 sizes it to its content.
 pub fn button(ui: &mut Ui, icon: Option<Icon>, text: &str, width: f32, enabled: bool) -> Response {
-    button_coloured(ui, icon, text, width, enabled, false)
+    button_colored(ui, icon, text, width, enabled, false)
 }
 
 /// The same button, green while it is usable: the next thing to do.
+#[allow(dead_code)]
 pub fn green_button(ui: &mut Ui, icon: Option<Icon>, text: &str, width: f32, enabled: bool) -> Response {
-    button_coloured(ui, icon, text, width, enabled, true)
+    button_colored(ui, icon, text, width, enabled, true)
 }
 
 /// A button as tall as the other controls in a toolbar (28 px rather than 32).
@@ -69,7 +70,7 @@ pub fn compact_button(ui: &mut Ui, text: &str, enabled: bool) -> Response {
     button_sized(ui, None, text, 0.0, enabled, false, 28.0)
 }
 
-fn button_coloured(
+fn button_colored(
     ui: &mut Ui,
     icon: Option<Icon>,
     text: &str,
@@ -102,21 +103,21 @@ fn button_sized(
         },
     );
     let fill = if !enabled {
-        theme::TILE
+        theme::tile()
     } else if green {
         if resp.hovered() { theme::accent_hover() } else { theme::accent() }
     } else if resp.hovered() {
-        theme::BUTTON_HOVER
+        theme::button_hover()
     } else {
-        theme::BUTTON
+        theme::button()
     };
     ui.painter().rect_filled(rect, theme::radius(4), fill);
     let color = if enabled && green {
         Color32::WHITE
     } else if enabled {
-        theme::TEXT
+        theme::text()
     } else {
-        theme::TEXT_DIM
+        theme::text_dim()
     };
     let start = rect.center().x - content / 2.0;
     if let Some(i) = icon {
@@ -154,7 +155,7 @@ pub fn primary(ui: &mut Ui, text: &str, size: Vec2, enabled: bool) -> Response {
         },
     );
     let fill = if !enabled {
-        theme::BUTTON
+        theme::button()
     } else if resp.hovered() {
         theme::accent_hover()
     } else {
@@ -164,7 +165,7 @@ pub fn primary(ui: &mut Ui, text: &str, size: Vec2, enabled: bool) -> Response {
     let color = if enabled {
         Color32::WHITE
     } else {
-        theme::TEXT_DIM
+        theme::text_dim()
     };
     ui.painter().text(
         rect.center(),
@@ -176,19 +177,19 @@ pub fn primary(ui: &mut Ui, text: &str, size: Vec2, enabled: bool) -> Response {
     resp
 }
 
-/// Large grey button with big text (Start Over, Stop Conversion).
+/// Large gray button with big text (Start Over, Stop Conversion).
 pub fn big_button(ui: &mut Ui, text: &str, size: Vec2) -> Response {
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     let fill = if resp.hovered() {
-        theme::BUTTON_HOVER
+        theme::button_hover()
     } else {
-        theme::BUTTON
+        theme::button()
     };
     ui.painter().rect_filled(rect, theme::radius(5), fill);
     ui.painter().rect_stroke(
         rect,
         theme::radius(5),
-        Stroke::new(1.0_f32, theme::CHIP),
+        Stroke::new(1.0_f32, theme::chip()),
         StrokeKind::Inside,
     );
     ui.painter().text(
@@ -196,7 +197,7 @@ pub fn big_button(ui: &mut Ui, text: &str, size: Vec2) -> Response {
         Align2::CENTER_CENTER,
         text,
         theme::regular(18.0),
-        theme::TEXT,
+        theme::text(),
     );
     resp
 }
@@ -234,13 +235,13 @@ fn toggle_with(
     let track = Rect::from_min_size(rect.min + vec2(0.0, 2.0), vec2(40.0, 18.0));
     let t = ui.ctx().animate_bool(resp.id, *on);
     let fill = if !enabled {
-        theme::CHIP
+        theme::chip()
     } else {
-        let on = theme::accent();
+        let (on, off) = (theme::accent(), theme::chip());
         Color32::from_rgb(
-            (0x3A as f32 + (on.r() as f32 - 0x3A as f32) * t) as u8,
-            (0x40 as f32 + (on.g() as f32 - 0x40 as f32) * t) as u8,
-            (0x49 as f32 + (on.b() as f32 - 0x49 as f32) * t) as u8,
+            (off.r() as f32 + (on.r() as f32 - off.r() as f32) * t) as u8,
+            (off.g() as f32 + (on.g() as f32 - off.g() as f32) * t) as u8,
+            (off.b() as f32 + (on.b() as f32 - off.b() as f32) * t) as u8,
         )
     };
     ui.painter().rect_filled(track, theme::radius(9), fill);
@@ -251,13 +252,13 @@ fn toggle_with(
         if enabled {
             Color32::WHITE
         } else {
-            theme::TEXT_DIM
+            theme::text_dim()
         },
     );
     let color = if enabled {
-        theme::TEXT
+        theme::text()
     } else {
-        theme::TEXT_DIM
+        theme::text_dim()
     };
     ui.painter().text(
         egui::pos2(track.right() + 10.0, rect.center().y),
@@ -291,7 +292,7 @@ pub fn segmented(
     let total: f32 = widths.iter().sum();
     let (rect, _) = ui.allocate_exact_size(vec2(total, 30.0 * k), Sense::hover());
     ui.painter()
-        .rect_filled(rect, theme::radius(4), theme::DEEP);
+        .rect_filled(rect, theme::radius(4), theme::deep());
     let mut x = rect.left();
     let mut changed = false;
     for (i, (opt, w)) in options.iter().zip(&widths).enumerate() {
@@ -313,7 +314,7 @@ pub fn segmented(
         let sel = *selected == i;
         if sel {
             ui.painter()
-                .rect_filled(r.shrink(1.0), theme::radius(4), theme::CARD);
+                .rect_filled(r.shrink(1.0), theme::radius(4), theme::card());
             ui.painter().rect_stroke(
                 r.shrink(1.0),
                 theme::radius(4),
@@ -322,12 +323,12 @@ pub fn segmented(
             );
         } else if resp.hovered() && enabled {
             ui.painter()
-                .rect_filled(r.shrink(1.0), theme::radius(4), theme::TILE);
+                .rect_filled(r.shrink(1.0), theme::radius(4), theme::tile());
         }
         let color = match (sel, enabled) {
-            (true, true) => Color32::WHITE,
-            (_, false) => theme::TEXT_DIM,
-            _ => theme::TEXT_MUTED,
+            (true, true) => theme::strong(),
+            (_, false) => theme::text_dim(),
+            _ => theme::text_muted(),
         };
         let f = if sel { theme::bold(13.5 * k) } else { font.clone() };
         ui.painter()
@@ -369,7 +370,7 @@ pub fn page_transform(ctx: &egui::Context) -> Option<egui::emath::TSTransform> {
     ctx.data(|d| d.get_temp(Id::new("page-transform")))
 }
 
-/// The list of a drop-down, hung straight under `anchor` with a flat top, the same colour and
+/// The list of a drop-down, hung straight under `anchor` with a flat top, the same color and
 /// width, so it joins the button. A click anywhere but on the button closes it.
 pub fn dropdown(
     ui: &mut Ui,
@@ -470,27 +471,27 @@ pub fn choice(ui: &mut Ui, id_salt: &str, current: usize, labels: &[&str]) -> Op
     ui.painter().rect_filled(
         r,
         dropdown_corners(open),
-        if resp.hovered() { theme::BUTTON_HOVER } else { theme::BUTTON },
+        if resp.hovered() { theme::button_hover() } else { theme::button() },
     );
     ui.painter().text(
         r.left_center() + vec2(10.0, 0.0),
         Align2::LEFT_CENTER,
         labels.get(current).copied().unwrap_or(""),
         font,
-        theme::TEXT,
+        theme::text(),
     );
     icons::paint(
         ui.painter(),
         Rect::from_center_size(r.right_center() - vec2(12.0, 0.0), Vec2::splat(10.0)),
         if open { Icon::ChevronUp } else { Icon::ChevronDown },
-        theme::TEXT_MUTED,
+        theme::text_muted(),
     );
     if resp.clicked() {
         ui.memory_mut(|m| m.toggle_popup(id));
     }
     let mut picked = None;
-    let tints = (theme::BUTTON_HOVER, Color32::from_white_alpha(14));
-    dropdown(ui, id, &resp, theme::BUTTON, None, |ui, _| {
+    let tints = (theme::button_hover(), theme::wash(14));
+    dropdown(ui, id, &resp, theme::button(), None, |ui, _| {
         for (i, l) in labels.iter().enumerate() {
             if dropdown_item(ui, i == current, i + 1 == labels.len(), tints, l).clicked() {
                 picked = Some(i);
@@ -500,21 +501,21 @@ pub fn choice(ui: &mut Ui, id_salt: &str, current: usize, labels: &[&str]) -> Op
     picked
 }
 
-/// The three dimension buttons of the Chunk Locator (Overworld, Nether, The End) in their dark
+/// The three dimension buttons of the World Explorer (Overworld, Nether, The End) in their dark
 /// panel; `current` is the one lit. Gives the one clicked.
 pub fn dimension_buttons(ui: &mut Ui, current: usize, enabled: bool) -> Option<usize> {
     let (rect, _) = ui.allocate_exact_size(vec2(150.0, 44.0), Sense::hover());
-    ui.painter().rect_filled(rect, theme::radius(5), theme::DEEP);
+    ui.painter().rect_filled(rect, theme::radius(5), theme::deep());
     let mut picked = None;
     for (i, label) in ["Overworld", "Nether", "The End"].into_iter().enumerate() {
         let r = Rect::from_min_size(rect.min + vec2(4.0 + i as f32 * 48.0, 4.0), vec2(46.0, 36.0));
         let resp = ui.interact(r, ui.id().with(("dim-button", i)), Sense::click()).on_hover_text(label);
         let selected = current == i;
         if resp.hovered() && !selected && enabled {
-            ui.painter().rect_filled(r, theme::radius(4), theme::BUTTON_HOVER);
+            ui.painter().rect_filled(r, theme::radius(4), theme::button_hover());
         }
         if selected {
-            ui.painter().rect_filled(r, theme::radius(4), theme::CARD);
+            ui.painter().rect_filled(r, theme::radius(4), theme::card());
             ui.painter().rect_stroke(
                 r,
                 theme::radius(4),
@@ -543,9 +544,9 @@ pub fn dropdown_item(
     // The last row follows the list's rounded bottom corners.
     let corners = egui::CornerRadius { nw: 0, ne: 0, sw: if last { 4 } else { 0 }, se: if last { 4 } else { 0 } };
     if resp.hovered() && selected {
-        // The current choice keeps its colour and only lightens.
+        // The current choice keeps its color and only lightens.
         ui.painter().rect_filled(row, corners, current);
-        ui.painter().rect_filled(row, corners, Color32::from_white_alpha(18));
+        ui.painter().rect_filled(row, corners, theme::wash(18));
     } else if resp.hovered() {
         ui.painter().rect_filled(row, corners, hover);
     } else if selected {
@@ -556,7 +557,7 @@ pub fn dropdown_item(
         Align2::LEFT_CENTER,
         text,
         theme::regular(13.0),
-        theme::TEXT,
+        theme::text(),
     );
     resp
 }
@@ -582,9 +583,9 @@ pub fn tile(
     let fill = if selected {
         theme::accent()
     } else if resp.hovered() && enabled {
-        theme::BUTTON_HOVER
+        theme::button_hover()
     } else {
-        theme::TILE
+        theme::tile()
     };
     let corners = if attached {
         egui::CornerRadius { nw: 5, ne: 5, sw: 0, se: 0 }
@@ -595,14 +596,14 @@ pub fn tile(
     ui.painter().rect_stroke(
         rect,
         corners,
-        Stroke::new(1.0_f32, theme::BORDER),
+        Stroke::new(1.0_f32, theme::border()),
         StrokeKind::Inside,
     );
     let color = match (selected, enabled, resp.hovered()) {
-        (true, _, _) => Color32::WHITE,
-        (_, false, _) => theme::TEXT_DIM,
-        (_, _, true) => Color32::WHITE,
-        _ => Color32::from_rgb(0xC8, 0xCD, 0xD4),
+        (true, _, _) => theme::strong(),
+        (_, false, _) => theme::text_dim(),
+        (_, _, true) => theme::strong(),
+        _ => theme::text(),
     };
     let icon_size = (size.y * 0.32).min(42.0);
     let ir = Rect::from_center_size(
@@ -629,7 +630,7 @@ pub fn tile(
     }
 }
 
-/// Grey label chip followed by a number field (`X [  0]`).
+/// Gray label chip followed by a number field (`X [  0]`).
 pub fn labeled_number(
     ui: &mut Ui,
     label: &str,
@@ -657,19 +658,19 @@ fn labeled_number_row(
     ui.painter().rect_filled(
         cell,
         egui::CornerRadius { nw: 5, sw: 5, ne: 0, se: 0 },
-        Color32::from_rgb(43, 48, 59),
+        theme::cell(),
     );
     ui.painter().rect_filled(
         egui::Rect::from_min_max(egui::pos2(cell.right(), row.top()), row.max),
         egui::CornerRadius { nw: 0, sw: 0, ne: 5, se: 5 },
-        Color32::from_rgb(12, 14, 18),
+        theme::well(),
     );
     ui.painter().text(
         cell.center(),
         Align2::CENTER_CENTER,
         label,
         theme::regular(14.0),
-        Color32::WHITE,
+        theme::strong(),
     );
     let field = egui::Rect::from_min_max(
         egui::pos2(cell.right() + 4.0, row.top()),
@@ -709,13 +710,13 @@ pub fn square_icon_button(ui: &mut Ui, icon: Icon, tooltip: &str) -> Response {
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(24.0 * k), Sense::click());
     if resp.hovered() {
         ui.painter()
-            .rect_filled(rect, theme::radius(4), Color32::from_white_alpha(28));
+            .rect_filled(rect, theme::radius(4), theme::wash(28));
     }
     icons::paint(
         ui.painter(),
         rect.shrink(6.0 * k),
         icon,
-        if resp.hovered() { Color32::WHITE } else { theme::TEXT_MUTED },
+        if resp.hovered() { theme::strong() } else { theme::text_muted() },
     );
     resp.on_hover_text(tooltip)
 }
@@ -735,12 +736,12 @@ pub fn section_header(ui: &mut Ui, label: &str, open: bool) -> Response {
             Vec2::splat(10.0),
         ),
         icon,
-        theme::TEXT_MUTED,
+        theme::text_muted(),
     );
     let color = if resp.hovered() {
-        theme::TEXT
+        theme::text()
     } else {
-        Color32::from_rgb(0x8C, 0x96, 0xA3)
+        theme::text_muted()
     };
     ui.painter().text(
         egui::pos2(rect.left() + 22.0, rect.center().y),
@@ -774,7 +775,7 @@ pub fn stepper(ui: &mut Ui, labels: &[&str], current: usize, reachable: usize, k
         let b = egui::pos2(x0 + (i + 1) as f32 * spacing, y);
         p.line_segment(
             [a, b],
-            Stroke::new(5.0_f32 * k, if done { theme::accent() } else { theme::CHIP }),
+            Stroke::new(5.0_f32 * k, if done { theme::accent() } else { theme::chip() }),
         );
     }
     let mut clicked = None;
@@ -798,7 +799,7 @@ pub fn stepper(ui: &mut Ui, labels: &[&str], current: usize, reachable: usize, k
             // The step's own hexagon, a little larger.
             ui.painter().add(Shape::convex_polygon(
                 icons::hexagon(c, 26.0 * k),
-                Color32::from_white_alpha(28),
+                theme::wash(28),
                 Stroke::NONE,
             ));
         }
@@ -828,22 +829,22 @@ pub fn stepper(ui: &mut Ui, labels: &[&str], current: usize, reachable: usize, k
                 let at = |x: f32, y: f32| egui::pos2(c.x - 8.0 * k + x * 16.0 * k, c.y - 8.0 * k + y * 16.0 * k);
                 p.add(Shape::line(
                     vec![at(0.2, 0.52), at(0.42, 0.72), at(0.8, 0.3)],
-                    Stroke::new(2.5_f32 * k, theme::CARD),
+                    Stroke::new(2.5_f32 * k, theme::card()),
                 ));
             }
             StepState::Current => {
                 p.add(Shape::convex_polygon(
                     hex,
-                    theme::CARD,
+                    theme::card(),
                     Stroke::new(2.5_f32 * k, theme::accent()),
                 ));
             }
             StepState::Pending => {
-                p.add(Shape::convex_polygon(hex, theme::CHIP, Stroke::NONE));
+                p.add(Shape::convex_polygon(hex, theme::chip(), Stroke::NONE));
             }
         }
         let color = if state == StepState::Pending {
-            theme::TEXT_DIM
+            theme::text_dim()
         } else {
             theme::accent()
         };
@@ -862,7 +863,7 @@ pub fn stepper(ui: &mut Ui, labels: &[&str], current: usize, reachable: usize, k
 pub fn progress_bar(ui: &mut Ui, fraction: f32, width: f32) {
     let (rect, _) = ui.allocate_exact_size(vec2(width, 12.0), Sense::hover());
     ui.painter()
-        .rect_filled(rect, theme::radius(6), theme::CHIP);
+        .rect_filled(rect, theme::radius(6), theme::chip());
     if fraction > 0.0 {
         let r = Rect::from_min_size(
             rect.min,
@@ -877,7 +878,7 @@ pub fn text_field(ui: &mut Ui, value: &mut String, width: f32) -> Response {
     ui.add_sized(
         vec2(width, 30.0),
         egui::TextEdit::singleline(value)
-            .background_color(theme::DEEP)
+            .background_color(theme::deep())
             .margin(egui::Margin::symmetric(8, 6)),
     )
 }

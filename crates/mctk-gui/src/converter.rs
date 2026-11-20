@@ -19,9 +19,9 @@ use crate::widgets;
 use crate::workspace::copy_dir;
 use crate::world_picker::UiEdition;
 
-/// A card of `size` centred in the page, never starting above it. The card is as tall as its
+/// A card of `size` centerd in the page, never starting above it. The card is as tall as its
 /// content turned out to be last time (`ConverterPage::ui` measures it), if that is more than
-/// `size`, so a card taller than expected is still centred and not pushed off the bottom.
+/// `size`, so a card taller than expected is still centerd and not pushed off the bottom.
 fn centered(ui: &Ui, size: Vec2) -> Rect {
     let area = ui.max_rect();
     let real: f32 = ui.ctx().data(|d| d.get_temp(egui::Id::new("converter-real-height"))).unwrap_or(0.0);
@@ -29,12 +29,22 @@ fn centered(ui: &Ui, size: Vec2) -> Rect {
     if r.top() < area.top() {
         r = r.translate(vec2(0.0, area.top() - r.top()));
     }
+    // Where the card starts, so its own height is measured (not the room above it as well,
+    // which made every card count as tall as the page, and drawn at its top).
+    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("converter-card-top"), r.top()));
     r
 }
 
 const STEPS: [&str; 5] = ["INPUT", "OUTPUT", "OPTIONS", "CONVERT", "SAVE"];
 /// Java to Java adds a step where the user reviews what the target version cannot hold.
 const STEPS_JAVA: [&str; 6] = ["INPUT", "OUTPUT", "OPTIONS", "REPLACE", "CONVERT", "SAVE"];
+
+/// A dimension's chunks, for the conversion's picture: being read, read, or not readable.
+enum Footprint {
+    Reading(Job<Vec<(i32, i32)>>),
+    Ready(Arc<Vec<(i32, i32)>>),
+    Failed,
+}
 
 /// What the REPLACE step scanned: the plan and the registry its block search runs on.
 struct Scanned {
@@ -79,6 +89,23 @@ pub struct ConverterPage {
     /// Room each step needed last time beyond its nominal card (see `ui`), so a step whose
     /// content grew (a long list of notes) is scaled to fit.
     real_height: [f32; 6],
+    /// How wide the step cards are (wider in a wide window, so their text can be bigger without
+    /// making them taller), and the height a step has before it scrolls.
+    card_w: f32,
+    room_h: f32,
+    /// The height the REPLACE step's list was given last time (the rest of its card is what the
+    /// card measured beyond it).
+    replace_list_h: Option<f32>,
+    replace_card_h: f32,
+    /// The same for the Convert step's list of what was left out.
+    notes_h: Option<f32>,
+    convert_card_h: f32,
+    /// The world's chunks by dimension, for the conversion's picture (see ootprint).
+    footprints: std::collections::HashMap<String, Footprint>,
+    /// For development: start the conversion as soon as the Convert step shows.
+    dev_start: bool,
+    /// The conversion's picture, as a texture (see chunk_preview::image).
+    preview_tex: Option<egui::TextureHandle>,
     /// What the finished conversion was made from and for (see `choice_key`).
     converted_for: Option<String>,
     pub status: String,
@@ -124,6 +151,15 @@ impl ConverterPage {
             out_dir: None,
             result: None,
             real_height: [0.0; 6],
+            card_w: 680.0,
+            room_h: 470.0,
+            replace_list_h: None,
+            replace_card_h: 0.0,
+            notes_h: None,
+            convert_card_h: 0.0,
+            footprints: Default::default(),
+            dev_start: false,
+            preview_tex: None,
             converted_for: None,
             status: String::new(),
         }
@@ -138,6 +174,29 @@ impl ConverterPage {
             self.java_version,
             BEDROCK_INDEX.load(std::sync::atomic::Ordering::Relaxed)
         )
+    }
+
+    /// For development: a Java world to convert to an older Java version, at its REPLACE step.
+    pub fn dev_replace(&mut self, path: PathBuf, version: &str, step: usize) {
+        self.input = Some((path, UiEdition::Java));
+        self.output = Some(UiEdition::Java);
+        self.java_version = Self::java_versions().iter().position(|v| *v == version).unwrap_or(0);
+        self.step = step;
+        // 6: the Convert step, started at once (a real conversion, to watch its picture).
+        if step == 6 {
+            self.step = 4;
+            self.dev_start = true;
+            return;
+        }
+        // The Save step: a finished conversion with a list of what was left out (a sample).
+        if step >= 5 {
+            let mut text = "4830".to_string();
+            for (n, what) in [(3613, "partially generated chunks"), (73, "entities: minecraft:item"), (66, "entities: minecraft:falling_block"), (49, "block entities: minecraft:potent_sulfur"), (6, "block entities: minecraft:creaking_heart"), (4, "entities: minecraft:marker"), (2, "block entities: minecraft:test_block")] {
+                text.push_str(&format!("\n{n}\u{d7} left out: {what}"));
+            }
+            self.result = Some(Ok(text));
+            self.converted_for = Some(self.choice_key());
+        }
     }
 
     /// Lets go of the world: back to choosing one. Not while it is being converted.
@@ -328,10 +387,10 @@ impl ConverterPage {
         let k = (full.height() / 640.0).clamp(0.6, 1.0);
         // Stepper band.
         let band = Rect::from_min_size(full.min, vec2(full.width(), 112.0 * k));
-        ui.painter().rect_filled(band, 0.0, theme::CARD);
+        ui.painter().rect_filled(band, 0.0, theme::card());
         ui.painter().line_segment(
             [band.left_bottom(), band.right_bottom()],
-            egui::Stroke::new(1.0_f32, theme::BORDER),
+            egui::Stroke::new(1.0_f32, theme::border()),
         );
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(band.shrink2(vec2(0.0, 8.0 * k))));
         let reachable = match (&self.input, &self.output) {
@@ -357,16 +416,16 @@ impl ConverterPage {
             let resp = ui.interact(r, ui.id().with(id), Sense::click());
             if resp.hovered() {
                 ui.painter()
-                    .rect_filled(r, theme::radius(4), Color32::from_white_alpha(28));
+                    .rect_filled(r, theme::radius(4), theme::wash(28));
             }
             icons::paint(
                 ui.painter(),
                 r.shrink(6.0 * k),
                 icon,
                 if resp.hovered() {
-                    Color32::WHITE
+                    theme::strong()
                 } else {
-                    theme::TEXT_MUTED
+                    theme::text_muted()
                 },
             );
             resp.clicked()
@@ -395,7 +454,7 @@ impl ConverterPage {
         let invite = vec2(150.0, 26.0) * k;
         let margin = 16.0 * k;
         // The banner spans the page between equal margins; the text wraps inside it and the
-        // button always sits centred underneath, so nothing jumps while the window resizes.
+        // button always sits centerd underneath, so nothing jumps while the window resizes.
         let width = (full.width() - 2.0 * margin).max(200.0);
         let galley = ui
             .painter()
@@ -413,8 +472,9 @@ impl ConverterPage {
         let need: f32 = match self.step {
             0 => 0.0,
             1 => 300.0,
-            2 => 318.0,
-            3 if self.has_replace_step() => 470.0,
+            2 => 372.0,
+            // (Its list gives up height to fit: at the least, the list's shortest.)
+            3 if self.has_replace_step() => 470.0 - 262.0 + 60.0,
             _ if self.job.is_some() || self.result.is_some() => 420.0,
             _ => 278.0,
         };
@@ -426,7 +486,7 @@ impl ConverterPage {
         let need = if need > 0.0 { need.max(real) } else { need };
         ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("converter-real-height"), real));
         let scale = if need > 0.0 {
-            (body.height() / need).min(body.width() / 720.0).clamp(0.55, 1.0)
+            (body.height() / need).min(body.width() / 720.0).clamp(0.7, 1.0)
         } else {
             1.0
         };
@@ -436,6 +496,8 @@ impl ConverterPage {
         ctx.set_transform_layer(layer, transform);
         widgets::set_page_transform(&ctx, Some(transform));
         let inner = Rect::from_min_size(egui::Pos2::ZERO, body.size() / scale);
+        self.card_w = (inner.width() - 48.0).clamp(680.0, 980.0);
+        self.room_h = inner.height();
         let mut measured: Option<(usize, f32)> = None;
         egui::Area::new(egui::Id::new("converter-step"))
             .order(egui::Order::Middle)
@@ -468,14 +530,18 @@ impl ConverterPage {
                             3 if self.has_replace_step() => self.replace_step(&mut page),
                             _ => self.convert_step(&mut page, settings),
                         }
-                        measured = Some((step, page.min_rect().height()));
+                        // The card's own height: from where it starts (see `centered`) down.
+                        let top: Option<f32> = page.ctx().data(|d| d.get_temp(egui::Id::new("converter-card-top")));
+                        let from = top.unwrap_or(page.min_rect().top()).max(page.min_rect().top());
+                        measured = Some((step, page.min_rect().bottom() - from));
+                        page.ctx().data_mut(|d| d.remove::<f32>(egui::Id::new("converter-card-top")));
                     });
             });
         widgets::set_page_transform(&ctx, None);
         if let Some((step, height)) = measured {
             self.real_height[step.min(5)] = height;
         }
-        ui.painter().rect_filled(banner, 6.0, theme::CARD);
+        ui.painter().rect_filled(banner, 6.0, theme::card());
         ui.painter().rect_stroke(
             banner,
             6.0,
@@ -498,14 +564,14 @@ impl ConverterPage {
         ui.painter().rect_filled(
             button,
             theme::radius(4),
-            if resp.hovered() { theme::BUTTON_HOVER } else { theme::BUTTON },
+            if resp.hovered() { theme::button_hover() } else { theme::button() },
         );
         ui.painter().text(
             button.center(),
             Align2::CENTER_CENTER,
             "Report on Discord",
             theme::regular(13.0 * k),
-            theme::TEXT,
+            theme::text(),
         );
         if resp.clicked() {
             widgets::open_discord(ui);
@@ -607,7 +673,7 @@ impl ConverterPage {
     /// The REPLACE step: every block the output version cannot hold, each with a suggested
     /// replacement the user can change.
     fn replace_step(&mut self, ui: &mut Ui) {
-        let card = vec2(680.0, 470.0);
+        let card = vec2(self.card_w, 470.0);
         let rect = centered(ui, card);
         let version: String = if self.output == Some(UiEdition::Bedrock) {
             format!("Bedrock {}", Self::bedrock_version())
@@ -621,11 +687,11 @@ impl ConverterPage {
         let ctx = ui.ctx().clone();
         let mut scanned = self.scanned.take();
         let (mut next, mut retry) = (false, false);
-        ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+        let drawn = ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
             widgets::card(ui, 19, |ui| {
                 ui.set_width(card.x - 40.0);
                 ui.vertical_centered(|ui| {
-                    ui.label(RichText::new("Blocks to Replace").size(20.0).color(Color32::WHITE))
+                    ui.label(RichText::new("Blocks to Replace").size(20.0).color(theme::strong()))
                 });
                 ui.add_space(8.0);
                 match (&mut scanned, &self.scan_error) {
@@ -639,7 +705,7 @@ impl ConverterPage {
                             ui.spinner();
                             ui.label(
                                 RichText::new(format!("Scanning the world for blocks {version} cannot hold\u{2026}"))
-                                    .color(theme::TEXT_MUTED),
+                                    .color(theme::text_muted()),
                             );
                         });
                         ctx.request_repaint_after(std::time::Duration::from_millis(150));
@@ -650,9 +716,9 @@ impl ConverterPage {
                             ui.label(
                                 RichText::new(format!("Every block in this world exists in {version}."))
                                     .size(15.0)
-                                    .color(theme::TEXT),
+                                    .color(theme::text()),
                             );
-                            ui.label(RichText::new("Nothing needs to be replaced.").color(theme::TEXT_MUTED));
+                            ui.label(RichText::new("Nothing needs to be replaced.").color(theme::text_muted()));
                             ui.add_space(40.0);
                             next = widgets::primary(ui, "Next", vec2(160.0, 50.0), true).clicked();
                         });
@@ -666,28 +732,40 @@ impl ConverterPage {
                                 s.plan.groups.len(),
                                 fmt_int(total as usize)
                             ))
-                            .size(13.0)
-                            .color(theme::TEXT_MUTED),
+                            .size(14.5)
+                            .color(theme::text_muted()),
                         );
                         ui.add_space(8.0);
                         let Scanned { plan, registry } = s;
-                        egui::ScrollArea::vertical().max_height(262.0).auto_shrink([false, false]).show(ui, |ui| {
+                        // The list takes exactly the height the rest of the card leaves in the
+                        // window (as the card came out last time; it scrolls), so the card fits.
+                        let rest = match self.replace_list_h {
+                            Some(last) if self.replace_card_h > last => self.replace_card_h - last,
+                            _ => 470.0 - 262.0,
+                        };
+                        let list_h = (self.room_h - rest - 12.0).clamp(60.0, 520.0).floor();
+                        self.replace_list_h = Some(list_h);
+                        let extra = (card.x - 680.0).max(0.0);
+                        egui::ScrollArea::vertical()
+                            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+                            .min_scrolled_height(list_h)
+                            .max_height(list_h).auto_shrink([false, false]).show(ui, |ui| {
                             for i in 0..plan.groups.len() {
                                 ui.horizontal(|ui| {
                                     let g = &plan.groups[i];
                                     let name = g.name.trim_start_matches("minecraft:").to_string();
                                     let count = fmt_int(g.total() as usize);
-                                    let font = theme::regular(13.5);
-                                    let shown = widgets::elide(ui, &name, &font, 215.0);
+                                    let font = theme::regular(15.0);
+                                    let shown = widgets::elide(ui, &name, &font, 215.0 + extra * 0.5);
                                     ui.add_sized(
-                                        [70.0, 26.0],
-                                        egui::Label::new(RichText::new(count).font(font.clone()).color(theme::TEXT_MUTED)),
+                                        [80.0, 28.0],
+                                        egui::Label::new(RichText::new(count).font(font.clone()).color(theme::text_muted())),
                                     );
                                     ui.add_sized(
-                                        [220.0, 26.0],
-                                        egui::Label::new(RichText::new(shown).font(font).color(theme::TEXT)),
+                                        [220.0 + extra * 0.5, 28.0],
+                                        egui::Label::new(RichText::new(shown).font(font).color(theme::text())),
                                     );
-                                    ui.label(RichText::new("\u{2192}").color(theme::TEXT_DIM));
+                                    ui.label(RichText::new("\u{2192}").color(theme::text_dim()));
                                     let label = match &g.choice {
                                         Choice::Suggested => format!("Suggested: {}", g.suggestion_text().trim_start_matches("minecraft:")),
                                         Choice::Air => "Remove".into(),
@@ -695,8 +773,8 @@ impl ConverterPage {
                                         Choice::Block(b) => b.trim_start_matches("minecraft:").to_string(),
                                     };
                                     let suggested_text = g.suggestion_text().trim_start_matches("minecraft:").to_string();
-                                    let label = widgets::elide(ui, &label, &theme::regular(14.0), 190.0);
-                                    let resp = widgets::button(ui, None, &label, 230.0, true);
+                                    let label = widgets::elide(ui, &label, &theme::regular(14.0), 190.0 + extra * 0.45);
+                                    let resp = widgets::button(ui, None, &label, 230.0 + extra * 0.45, true);
                                     let popup = ui.id().with(("replace-choice", i));
                                     if resp.clicked() {
                                         self.search.clear();
@@ -734,7 +812,7 @@ impl ConverterPage {
                                                 chosen = Some(Choice::Keep);
                                             }
                                             ui.separator();
-                                            ui.label(RichText::new("Use another block").size(12.0).color(theme::TEXT_MUTED));
+                                            ui.label(RichText::new("Use another block").size(12.0).color(theme::text_muted()));
                                             ui.add(
                                                 egui::TextEdit::singleline(&mut self.search)
                                                     .hint_text("search blocks")
@@ -763,7 +841,7 @@ impl ConverterPage {
                         } else {
                             "No blocks will be removed.".to_string()
                         };
-                        ui.label(RichText::new(line).size(12.5).color(theme::TEXT_MUTED));
+                        ui.label(RichText::new(line).size(14.0).color(theme::text_muted()));
                         ui.add_space(6.0);
                         ui.horizontal(|ui| {
                             if widgets::button(ui, None, "Accept All Suggestions", 0.0, plan.changed() > 0).clicked() {
@@ -804,6 +882,8 @@ impl ConverterPage {
                 }
             });
         });
+        // How tall the card came out (its list's height is fitted to the window from it).
+        self.replace_card_h = drawn.response.rect.height();
         self.scanned = scanned;
         if retry {
             self.scan_for = None;
@@ -814,7 +894,7 @@ impl ConverterPage {
     }
 
     fn output_step(&mut self, ui: &mut Ui) {
-        let card = vec2(680.0, 300.0);
+        let card = vec2(self.card_w, 300.0);
         let rect = centered(ui, card);
         ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
             widgets::card(ui, 19, |ui| {
@@ -823,11 +903,17 @@ impl ConverterPage {
                     ui.label(
                         RichText::new("Select an Output Version")
                             .size(20.0)
-                            .color(Color32::WHITE),
+                            .color(theme::strong()),
                     )
                 });
                 ui.add_space(12.0);
+                // The tiles share the card's width (wider in a wide window), centered.
+                let inner = card.x - 40.0;
+                let n = UiEdition::ALL.len() as f32;
+                let tile_w = ((inner - 10.0 * (n - 1.0)) / n).clamp(120.0, 170.0).floor();
+                let row_w = tile_w * n + 10.0 * (n - 1.0);
                 ui.horizontal(|ui| {
+                    ui.add_space(((inner - row_w) / 2.0).max(0.0));
                     ui.spacing_mut().item_spacing.x = 10.0;
                     for e in UiEdition::ALL {
                         let ok = self.supported(e);
@@ -837,7 +923,7 @@ impl ConverterPage {
                                 ui,
                                 e.icon(),
                                 e.label(),
-                                vec2(120.0, 120.0),
+                                vec2(tile_w, 120.0),
                                 self.output == Some(e),
                                 ok,
                                 true,
@@ -854,25 +940,25 @@ impl ConverterPage {
                             // The strip under a tile picks the output version: clicking it chooses
                             // the edition too and lists the versions it can be written as.
                             let (r, vresp) = ui.allocate_exact_size(
-                                vec2(120.0, 30.0),
+                                vec2(tile_w, 30.0),
                                 if ok { Sense::click() } else { Sense::hover() },
                             );
                             let popup = ui.id().with(("version-popup", e as u8));
                             let open = ok && widgets::dropdown_open(ui, popup);
-                            // The strip takes the colour of its tile: green once the edition is chosen.
+                            // The strip takes the color of its tile: green once the edition is chosen.
                             let chosen = self.output == Some(e);
                             let (base, lit, tint) = if chosen {
                                 // A shade darker than the tile, so the strip is told apart from it.
                                 let strip = theme::accent_dark();
-                                (strip, theme::accent_hover(), (theme::BUTTON_HOVER, strip))
+                                (strip, theme::accent_hover(), (theme::button_hover(), strip))
                             } else {
                                 (
-                                    theme::TILE,
-                                    theme::BUTTON_HOVER,
-                                    (theme::BUTTON_HOVER, Color32::from_white_alpha(14)),
+                                    theme::tile(),
+                                    theme::button_hover(),
+                                    (theme::button_hover(), theme::wash(14)),
                                 )
                             };
-                            let edge = egui::Stroke::new(1.0_f32, theme::BORDER);
+                            let edge = egui::Stroke::new(1.0_f32, theme::border());
                             ui.painter().rect_filled(
                                 r,
                                 egui::CornerRadius {
@@ -915,14 +1001,14 @@ impl ConverterPage {
                                     base,
                                 );
                             }
-                            let font = theme::regular(13.0);
+                            let font = theme::regular(14.5);
                             let version = widgets::elide(ui, &version, &font, r.width() - 34.0);
                             ui.painter().text(
                                 r.left_center() + vec2(7.0, 0.0),
                                 Align2::LEFT_CENTER,
                                 version,
                                 font,
-                                if ok { theme::TEXT } else { theme::TEXT_DIM },
+                                if ok { theme::text() } else { theme::text_dim() },
                             );
                             icons::paint(
                                 ui.painter(),
@@ -931,7 +1017,7 @@ impl ConverterPage {
                                     Vec2::splat(9.0),
                                 ),
                                 if open { Icon::ChevronUp } else { Icon::ChevronDown },
-                                if chosen { Color32::WHITE } else { theme::TEXT_MUTED },
+                                if chosen { theme::strong() } else { theme::text_muted() },
                             );
                             if ok {
                                 if vresp.clicked() {
@@ -942,7 +1028,7 @@ impl ConverterPage {
                                     ui,
                                     popup,
                                     &vresp,
-                                    theme::TILE,
+                                    theme::tile(),
                                     Some(edge),
                                     |ui, _| {
                                         match e {
@@ -987,7 +1073,7 @@ impl ConverterPage {
     }
 
     fn options_step(&mut self, ui: &mut Ui) {
-        let card = vec2(680.0, 372.0);
+        let card = vec2(self.card_w, 372.0);
         let rect = centered(ui, card);
         ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
             widgets::card(ui, 19, |ui| {
@@ -996,13 +1082,17 @@ impl ConverterPage {
                     ui.label(
                         RichText::new("Conversion Options")
                             .size(20.0)
-                            .color(Color32::WHITE),
+                            .color(theme::strong()),
                     )
                 });
                 ui.add_space(14.0);
+                // Two columns that share the card's width (wider in a wide window), centered.
+                let inner = card.x - 40.0;
+                let col = ((inner - 26.0) / 2.0).clamp(310.0, 430.0).floor();
                 ui.horizontal_top(|ui| {
+                    ui.add_space(((inner - (2.0 * col + 26.0)) / 2.0).max(0.0));
                     ui.vertical(|ui| {
-                        ui.set_width(322.0);
+                        ui.set_width(col);
                         ui.horizontal(|ui| {
                             widgets::toggle(ui, &mut self.dims[0], "Overworld", true);
                             widgets::toggle(ui, &mut self.dims[1], "Nether", true);
@@ -1020,27 +1110,27 @@ impl ConverterPage {
                         ui.add_space(10.0);
                         ui.label(
                             RichText::new("Game Mode")
-                                .size(13.5)
-                                .color(theme::TEXT_MUTED),
+                                .size(15.0)
+                                .color(theme::text_muted()),
                         );
                         widgets::segmented(
                             ui,
                             &mut self.game_mode,
                             &["No Change", "Survival", "Creative", "Adventure"],
-                            322.0,
+                            col,
                             true,
                         );
                         ui.add_space(8.0);
                         ui.label(
                             RichText::new("Difficulty")
-                                .size(13.5)
-                                .color(theme::TEXT_MUTED),
+                                .size(15.0)
+                                .color(theme::text_muted()),
                         );
                         widgets::segmented(
                             ui,
                             &mut self.difficulty,
                             &["No Change", "Peaceful", "Easy", "Normal", "Hard"],
-                            322.0,
+                            col,
                             true,
                         );
                     });
@@ -1050,10 +1140,11 @@ impl ConverterPage {
                             pos2(x + 2.0, ui.cursor().top()),
                             pos2(x + 2.0, ui.cursor().top() + 160.0),
                         ],
-                        egui::Stroke::new(1.0_f32, theme::BORDER),
+                        egui::Stroke::new(1.0_f32, theme::border()),
                     );
                     ui.add_space(12.0);
                     ui.vertical(|ui| {
+                        ui.set_width(col);
                         widgets::toggle(
                             ui,
                             &mut self.skip_partial,
@@ -1065,14 +1156,14 @@ impl ConverterPage {
                         widgets::toggle(ui, &mut self.older_chunks, "Allow Older Chunk Versions", true)
                             .on_hover_text("Off leaves out chunks saved by a version older than the world's own (Java sources)");
                         ui.add_space(10.0);
-                        ui.label(RichText::new("Depth Fixer").size(13.5).color(theme::TEXT_MUTED))
+                        ui.label(RichText::new("Depth Fixer").size(15.0).color(theme::text_muted()))
                             .on_hover_text("For targets whose world starts at y 0 (Java before 1.18, Bedrock before 1.18, consoles): what to do with the overworld below it");
-                        widgets::segmented(ui, &mut self.depth, &["Clip + Bedrock", "Clip", "Raise"], 290.0, true);
+                        widgets::segmented(ui, &mut self.depth, &["Clip + Bedrock", "Clip", "Raise"], col - 20.0, true);
                         ui.add_space(8.0);
                         ui.label(
                             RichText::new("New World Center")
-                                .size(13.5)
-                                .color(theme::TEXT_MUTED),
+                                .size(15.0)
+                                .color(theme::text_muted()),
                         )
                         .on_hover_text(
                             "Moves the output so this point becomes 0, 0 (snapped to chunks)",
@@ -1105,6 +1196,10 @@ impl ConverterPage {
     }
 
     fn convert_step(&mut self, ui: &mut Ui, settings: &mut Settings) {
+        if std::mem::take(&mut self.dev_start) && self.job.is_none() {
+            let ctx = ui.ctx().clone();
+            self.start(&ctx, settings);
+        }
         let running = self.job.is_some();
         let done = matches!(self.result, Some(Ok(_)));
         let tall = running || self.result.is_some();
@@ -1112,10 +1207,10 @@ impl ConverterPage {
         // which offers Save World and Start Over.
         let save_idx = self.convert_idx() + 1;
         let save_step = self.step >= save_idx;
-        let card = vec2(680.0, if tall { 420.0 } else { 278.0 });
+        let card = vec2(self.card_w, if tall { 420.0 } else { 278.0 });
         let rect = centered(ui, card);
         let ctx = ui.ctx().clone();
-        ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+        let drawn = ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
             widgets::card(ui, 19, |ui| {
                 ui.set_width(card.x - 40.0);
                 // Source -> target.
@@ -1128,41 +1223,41 @@ impl ConverterPage {
                         p,
                         Rect::from_center_size(c - vec2(80.0, 20.0), Vec2::splat(40.0)),
                         s.icon(),
-                        Color32::from_rgb(0xC8, 0xCD, 0xD4),
+                        theme::text(),
                     );
                     p.text(
                         c - vec2(80.0, -16.0),
                         Align2::CENTER_CENTER,
                         s.label(),
                         theme::regular(14.0),
-                        theme::TEXT,
+                        theme::text(),
                     );
                     icons::paint(
                         p,
                         Rect::from_center_size(c - vec2(0.0, 20.0), Vec2::splat(64.0)),
                         Icon::ArrowRight,
-                        Color32::from_rgb(0xC8, 0xCD, 0xD4),
+                        theme::text(),
                     );
                     icons::paint(
                         p,
                         Rect::from_center_size(c + vec2(80.0, -20.0), Vec2::splat(40.0)),
                         d.icon(),
-                        Color32::from_rgb(0xC8, 0xCD, 0xD4),
+                        theme::text(),
                     );
                     p.text(
                         c + vec2(80.0, 16.0),
                         Align2::CENTER_CENTER,
                         d.label(),
                         theme::regular(14.0),
-                        theme::TEXT,
+                        theme::text(),
                     );
                     let v = self.version_label(d);
                     p.text(
                         c + vec2(80.0, 33.0),
                         Align2::CENTER_CENTER,
                         v,
-                        theme::regular(11.5),
-                        theme::TEXT_DIM,
+                        theme::regular(13.0),
+                        theme::text_dim(),
                     );
                 }
                 let prog = self.progress.clone();
@@ -1188,11 +1283,34 @@ impl ConverterPage {
                     _ => Vec::new(),
                 };
                 ui.vertical_centered(|ui| {
-                    ui.label(RichText::new(headline).size(14.0).color(theme::TEXT));
-                    for line in &notes {
-                        ui.label(RichText::new(line).size(12.0).color(theme::TEXT_MUTED));
-                    }
+                    ui.label(RichText::new(headline).size(15.5).color(theme::text()));
                 });
+                // What was left out: a list in the height the rest of the card leaves in the
+                // window (as the card came out last time), scrolling when longer.
+                if !notes.is_empty() {
+                    let rest = match self.notes_h {
+                        Some(last) if self.convert_card_h > last => self.convert_card_h - last,
+                        _ => 420.0,
+                    };
+                    let want = notes.len() as f32 * 20.0;
+                    let notes_h = (self.room_h - rest - 12.0).clamp(40.0, want.max(40.0)).floor();
+                    self.notes_h = Some(notes_h);
+                    egui::ScrollArea::vertical()
+                        .id_salt("convert-notes")
+                        .max_height(notes_h)
+                        .min_scrolled_height(notes_h.min(want))
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            ui.vertical_centered(|ui| {
+                                ui.spacing_mut().item_spacing.y = 2.0;
+                                for line in &notes {
+                                    ui.label(RichText::new(line).size(13.5).color(theme::text_muted()));
+                                }
+                            });
+                        });
+                } else {
+                    self.notes_h = None;
+                }
                 ui.add_space(6.0);
                 let frac = if done {
                     1.0
@@ -1203,7 +1321,9 @@ impl ConverterPage {
                 };
                 widgets::progress_bar(ui, frac, card.x - 40.0);
                 ui.add_space(14.0);
-                if tall {
+                // (Once done, in a short window, the stats give way so the buttons fit.)
+                let short = self.room_h < 470.0;
+                if tall && !(done && short) {
                     self.stats(ui, card.x - 40.0, running);
                     ui.add_space(20.0);
                 }
@@ -1240,36 +1360,94 @@ impl ConverterPage {
                 });
             });
         });
+        // How tall the card came out (its list of what was left out is fitted from it).
+        self.convert_card_h = drawn.response.rect.height();
     }
 
-    fn stats(&self, ui: &mut Ui, width: f32, running: bool) {
-        let (r, _) = ui.allocate_exact_size(vec2(width, 122.0), Sense::hover());
+    /// Every chunk of the world's dimension `dim` the conversion will go through, read in the
+    /// background the first time it is asked for (`None` until then, and when the output is
+    /// moved to a new center, where the converted chunks are not where they were).
+    fn footprint(&mut self, ctx: &egui::Context, dim: &str) -> Option<Arc<Vec<(i32, i32)>>> {
+        if self.center_spawn || self.center != (0.0, 0.0) || dim.is_empty() {
+            return None;
+        }
+        let (path, edition) = self.input.clone()?;
+        let key = format!("{}|{dim}", path.display());
+        if let Some(Footprint::Reading(job)) = self.footprints.get(&key) {
+            if let Some(r) = job.take() {
+                let done = match r {
+                    Ok(v) => Footprint::Ready(Arc::new(v)),
+                    Err(_) => Footprint::Failed,
+                };
+                self.footprints.insert(key.clone(), done);
+            }
+        }
+        match self.footprints.get(&key) {
+            Some(Footprint::Ready(v)) => return Some(v.clone()),
+            Some(_) => return None,
+            None => {}
+        }
+        let java_dim = match dim {
+            "minecraft:the_nether" => -1,
+            "minecraft:the_end" => 1,
+            _ => 0,
+        };
+        let job = Job::spawn("Reading the world's chunks", ctx, move || {
+            let chunks = match edition {
+                UiEdition::Java => mctk_prune::chunk_times_java(&path, java_dim, false),
+                UiEdition::Bedrock => mctk_prune::chunk_times_bedrock(&path, if java_dim == 0 { 0 } else if java_dim == -1 { 1 } else { 2 }),
+                _ => mctk_prune::chunk_times_console(&path, java_dim, false),
+            }
+            .map_err(|e| e.to_string())?;
+            Ok(chunks.into_keys().collect())
+        });
+        self.footprints.insert(key, Footprint::Reading(job));
+        None
+    }
+
+    fn stats(&mut self, ui: &mut Ui, width: f32, running: bool) {
+        // With room, a bigger picture of the conversion.
+        let side = if self.room_h >= 560.0 { 160.0 } else { 96.0 };
+        let (r, _) = ui.allocate_exact_size(vec2(width, side + 26.0), Sense::hover());
+        let dim_now = self.progress.as_ref().map(|p| p.dimension.lock().expect("progress lock").clone()).unwrap_or_default();
+        let all = self.footprint(ui.ctx(), &dim_now);
         let p = ui.painter();
-        p.rect_filled(r, theme::radius(4), theme::BG);
-        // Coverage preview of the chunks converted so far in the dimension being converted.
-        let pv = Rect::from_min_size(r.min + vec2(16.0, 13.0), Vec2::splat(96.0));
-        let Some(prog) = &self.progress else {
-            p.rect_filled(pv, theme::radius(3), Color32::from_rgb(0x0F, 0x11, 0x16));
+        p.rect_filled(r, theme::radius(4), theme::bg());
+        // The world being converted (the dimension now), filling in as its chunks are done.
+        let pv = Rect::from_min_size(r.min + vec2(16.0, 13.0), Vec2::splat(side));
+        let frame = Color32::from_rgb(0x0F, 0x11, 0x16);
+        p.rect_filled(pv, theme::radius(3), frame);
+        let Some(prog) = self.progress.clone() else {
             return;
         };
         {
             let pts = prog.converted.lock().expect("progress lock");
             let start = prog.dimension_start.load(Ordering::Relaxed).min(pts.len());
             let colors = crate::chunk_preview::Colors {
-                frame: Color32::from_rgb(0x0F, 0x11, 0x16),
+                frame,
                 chunk: theme::accent(),
                 fresh: Color32::from_rgb(0xE6, 0x9A, 0x2E),
+                todo: Color32::from_rgb(0x30, 0x35, 0x3F),
             };
-            let shapes = crate::chunk_preview::cells(&pts[start..], pv.width(), running, &colors);
-            // The frame has rounded corners; what is inside is clipped to it.
-            if let Some((frame, c)) = shapes.first() {
-                p.rect_filled(frame.translate(pv.min.to_vec2()), theme::radius(3), *c);
-            }
-            let clipped = p.with_clip_rect(pv);
-            for (rect, c) in shapes.iter().skip(1) {
-                clipped.rect_filled(rect.translate(pv.min.to_vec2()), 0.0, *c);
-            }
-        }        let elapsed = if running {
+            // A picture, a pixel a chunk, scaled up with sharp edges (so it stays whole however
+            // the page is scaled).
+            let img = crate::chunk_preview::image(&pts[start..], all.as_deref().map(|v| v.as_slice()), running, &colors, 256);
+            drop(pts);
+            let tex = match &mut self.preview_tex {
+                Some(t) => {
+                    t.set(img, egui::TextureOptions::NEAREST);
+                    t.clone()
+                }
+                None => {
+                    let t = ui.ctx().load_texture("conversion-picture", img, egui::TextureOptions::NEAREST);
+                    self.preview_tex = Some(t.clone());
+                    t
+                }
+            };
+            let inner = pv.shrink(3.0);
+            ui.painter().image(tex.id(), inner, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        }
+        let p = ui.painter();        let elapsed = if running {
             self.started.map_or(0.0, |s| s.elapsed().as_secs_f64())
         } else {
             self.elapsed
@@ -1325,7 +1503,16 @@ impl ConverterPage {
             [
                 ("Core count:", cores.to_string()),
                 ("Dimension:", title_case(&dim)),
-                ("Relighting:", "No".into()),
+                // Java and Bedrock worlds are lit by the game as they load (Java's chunks are
+                // marked for it); a console save's light is worked out in the conversion.
+                (
+                    "Lighting:",
+                    match self.output {
+                        Some(UiEdition::Java | UiEdition::Bedrock) => "By the game".into(),
+                        Some(_) => "Worked out".into(),
+                        None => String::new(),
+                    },
+                ),
             ],
         ];
         for (ci, col) in cols.iter().enumerate() {
@@ -1334,15 +1521,15 @@ impl ConverterPage {
                     r.left() + 132.0 + ci as f32 * 166.0,
                     r.top() + 27.0 + ri as f32 * 34.0,
                 );
-                let kg = p.layout_no_wrap(k.to_string(), theme::regular(13.0), theme::TEXT_MUTED);
+                let kg = p.layout_no_wrap(k.to_string(), theme::regular(14.0), theme::text_muted());
                 let w = kg.size().x;
-                p.galley(pos - vec2(0.0, 8.0), kg, theme::TEXT_MUTED);
+                p.galley(pos - vec2(0.0, 8.0), kg, theme::text_muted());
                 p.text(
                     pos + vec2(w + 4.0, 0.0),
                     Align2::LEFT_CENTER,
                     v,
                     theme::bold(13.0),
-                    Color32::WHITE,
+                    theme::strong(),
                 );
             }
         }
@@ -1602,7 +1789,7 @@ fn bedrock_to_java_job(
         lines.push((*n, format!("{n}\u{00D7} no Java equivalent, left as air: {what}")));
     }
     for (what, n) in &report.skipped {
-        lines.push((*n, format!("{n}\u{00D7} left out: {what}")));
+        lines.push((*n, skipped_line(*n, what)));
     }
     lines.sort_by(|a, b| b.0.cmp(&a.0));
     for (_, line) in lines.iter().take(6) {
@@ -1637,7 +1824,7 @@ fn java_to_bedrock_job(
         lines.push((*n, format!("{n}\u{00D7} no Bedrock equivalent, left as air: {what}")));
     }
     for (what, n) in &report.skipped {
-        lines.push((*n, format!("{n}\u{00D7} left out: {what}")));
+        lines.push((*n, skipped_line(*n, what)));
     }
     lines.sort_by(|a, b| b.0.cmp(&a.0));
     for (_, line) in lines.iter().take(6) {
@@ -1667,6 +1854,16 @@ fn clock(secs: f64) -> String {
         format!("{}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60)
     } else {
         format!("{}:{:02}", s / 60, s % 60)
+    }
+}
+
+/// A line of the report for something not carried over, saying why where it is on purpose:
+/// unfinished chunks at the edge of what was explored are skipped (the option), and the game
+/// makes them again; the rest is what the target has no form for.
+fn skipped_line(n: usize, what: &str) -> String {
+    match what {
+        "partially generated chunks" => format!("{n} unfinished chunks at the explored edge skipped (the game generates them again)"),
+        _ => format!("{n}\u{00D7} left out: {what}"),
     }
 }
 

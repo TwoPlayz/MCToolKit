@@ -1,17 +1,15 @@
-//! The Pruner page: draw layers on the map, preview the chunks that will be removed
-//! (red hatching), then hold Prune for five seconds.
-
-use std::path::Path;
+//! The World Explorer's Prune tools (once the Pruner page): draw layers on the flat map, see
+//! the chunks that would be removed (red hatching), then Prune deletes them as an edit (one
+//! step to undo, written on Save).
 
 use eframe::egui::{self, Align2, Color32, Pos2, Rect, Sense, Shape, Stroke, Ui, Vec2, pos2, vec2};
 use mctk_anvil::ChunkPos;
 use mctk_prune::{Comparison, Layer, Selection};
 
-use crate::editor::{LEFT_PANEL, edition_chooser};
+use crate::editor::LEFT_PANEL;
 use crate::icons::{self, Icon};
 use crate::jobs::Job;
 use crate::map_view::MapFrame;
-use crate::settings::Settings;
 use crate::theme;
 use crate::widgets;
 use crate::workspace::Workspace;
@@ -67,7 +65,7 @@ fn hatch_where(p: &egui::Painter, r: Rect, s: f32, stroke: Stroke, inside: &dyn 
 /// outline, the split's line with its arrow, with the part that gets removed shaded and hatched
 /// as on the map. Inverted removes everything around the shape instead.
 fn draw_thumb(p: &egui::Painter, rect: Rect, layer: &PLayer, inverted: bool) {
-    p.rect_filled(rect, theme::radius(3), theme::DEEP);
+    p.rect_filled(rect, theme::radius(3), theme::deep());
     if let PLayer::Time { .. } = layer {
         if !icons::image(p, rect, "THUMB_TIME", Color32::WHITE) {
             icons::paint(p, rect.shrink(9.0), layer.icon(), theme::RED);
@@ -240,14 +238,14 @@ impl PLayer {
             }
             PLayer::Polygon { points } => {
                 let mut v = points.clone();
-                v.extend(self.bounds_centre());
+                v.extend(self.bounds_center());
                 v
             }
             PLayer::Time { .. } => Vec::new(),
         }
     }
-    /// For a box, the middles of the chunks around its centre: one chunk, two or four, depending
-    /// on whether the centre is on a chunk edge or corner. The move dot stretches over them.
+    /// For a box, the middles of the chunks around its center: one chunk, two or four, depending
+    /// on whether the center is on a chunk edge or corner. The move dot stretches over them.
     fn move_span(&self) -> Option<((f64, f64), (f64, f64))> {
         let PLayer::Box { x, z, w, h } = self else { return None };
         let span = |lo: f64, size: f64| {
@@ -263,7 +261,7 @@ impl PLayer {
         match self {
             PLayer::Box { x, z, w, h } => (x + w / 2.0, z + h / 2.0),
             PLayer::Circle { x, z, .. } | PLayer::Split { x, z, .. } => (*x, *z),
-            PLayer::Polygon { .. } => self.bounds_centre().unwrap_or((0.0, 0.0)),
+            PLayer::Polygon { .. } => self.bounds_center().unwrap_or((0.0, 0.0)),
             PLayer::Time { .. } => (0.0, 0.0),
         }
     }
@@ -315,7 +313,7 @@ impl PLayer {
         }
     }
     /// The middle of a polygon's bounding box.
-    fn bounds_centre(&self) -> Option<(f64, f64)> {
+    fn bounds_center(&self) -> Option<(f64, f64)> {
         let PLayer::Polygon { points } = self else { return None };
         let first = points.first()?;
         let (mut lo, mut hi) = (*first, *first);
@@ -413,7 +411,7 @@ impl PLayer {
                     2 => (*x + 0.5, *z + 0.5),
                     _ => (*x + *w - 0.5, *z + 0.5),
                 };
-                let (tx, tz) = centre(to);
+                let (tx, tz) = center(to);
                 *x = ax.min(tx) - 0.5;
                 *z = az.min(tz) - 0.5;
                 *w = (ax - tx).abs() + 1.0;
@@ -421,19 +419,19 @@ impl PLayer {
             }
             PLayer::Circle { x, z, r, a } => {
                 if i == 0 {
-                    (*x, *z) = centre(to);
+                    (*x, *z) = center(to);
                 } else {
                     // The handle sits on the middle of a chunk and can go all the way round.
-                    let at = centre(to);
+                    let at = center(to);
                     *r = circle_radius((*x, *z), at);
                     *a = (at.1 - *z).atan2(at.0 - *x);
                 }
             }
             PLayer::Split { x, z, angle, len } => {
                 if i == 0 {
-                    (*x, *z) = centre(to);
+                    (*x, *z) = center(to);
                 } else {
-                    let at = centre(to);
+                    let at = center(to);
                     *len = circle_radius((*x, *z), at);
                     *angle = ((at.1 - *z).atan2(at.0 - *x).to_degrees() - 90.0).rem_euclid(360.0);
                 }
@@ -447,7 +445,7 @@ impl PLayer {
                         }
                     }
                 } else if let Some(p) = points.get_mut(i) {
-                    *p = centre(to);
+                    *p = center(to);
                 }
             }
             PLayer::Time { .. } => {}
@@ -457,15 +455,15 @@ impl PLayer {
 
 /// The middle of the bounding box of some points.
 fn self_bounds(points: &[(f64, f64)]) -> Option<(f64, f64)> {
-    PLayer::Polygon { points: points.to_vec() }.bounds_centre()
+    PLayer::Polygon { points: points.to_vec() }.bounds_center()
 }
 
 /// The middle of the chunk a point (chunk units) is in: where shapes snap to.
-fn centre(c: (f64, f64)) -> (f64, f64) {
+fn center(c: (f64, f64)) -> (f64, f64) {
     (c.0.floor() + 0.5, c.1.floor() + 0.5)
 }
 
-/// A circle's radius from its centre to a point (the middle of a chunk), at least one chunk.
+/// A circle's radius from its center to a point (the middle of a chunk), at least one chunk.
 fn circle_radius(from: (f64, f64), to: (f64, f64)) -> f64 {
     (to.0 - from.0).hypot(to.1 - from.1).max(1.0)
 }
@@ -553,9 +551,11 @@ enum Tool {
     Split,
 }
 
+/// The World Explorer's Prune tools: shapes drawn on the flat map pick the chunks to delete
+/// (or, inverted, the ones to keep), with the chunks of the world shown read to know which
+/// exist (and their InhabitedTime, for a Time layer).
 #[derive(Default)]
-pub struct PrunerPage {
-    pub ws: Option<Workspace>,
+pub struct PruneTools {
     tool: Option<Tool>,
     layers: Vec<PLayer>,
     selected: Option<usize>,
@@ -566,13 +566,6 @@ pub struct PrunerPage {
     /// The chunks last shaded as removed, with what they were worked out for, so a still
     /// picture is not recomputed every frame.
     shade: Option<(ShadeKey, std::rc::Rc<Vec<(i32, i32)>>)>,
-    /// Earlier states, newest last, for Undo; and the ones undone, for Redo.
-    undo: Vec<(Snap, String)>,
-    redo: Vec<(Snap, String)>,
-    /// The state at the last point it was settled; changes since are one step.
-    base: Option<Snap>,
-    job: Option<Job<std::path::PathBuf>>,
-    confirm_close: bool,
     /// The chunks of the dimension shown, by position, with their InhabitedTime once a Time
     /// layer needs it: what the list was read for (world, dimension, with times), the reading
     /// in progress, and the result. Only chunks that exist can be removed.
@@ -580,103 +573,15 @@ pub struct PrunerPage {
     chunks_job: Option<Job<std::collections::HashMap<(i32, i32), Option<i64>>>>,
     chunks: std::rc::Rc<std::collections::HashMap<(i32, i32), Option<i64>>>,
     chunks_loaded: bool,
-    /// The running job is an Optimize, not a prune.
-    optimizing: bool,
-    /// Asking whether to optimize the world.
-    confirm_optimize: bool,
-    /// The picture of where the shapes are (see `map`), with what it was drawn for.
+    /// The picture of where the shapes are (see `overlay`), with what it was drawn for.
     mask: Option<(MaskKey, egui::TextureHandle)>,
-    /// The other open worlds, each with its own layers and history.
-    parked: Vec<Parked>,
-    /// Showing the "Select a World to Prune" chooser while a world is open.
-    choosing: bool,
-    pub status: String,
-}
-
-/// A world that is open but not the one shown, with what was drawn on it.
-struct Parked {
-    ws: Workspace,
-    layers: Vec<PLayer>,
-    selected: Option<usize>,
-    inverted: bool,
-    undo: Vec<(Snap, String)>,
-    redo: Vec<(Snap, String)>,
-    base: Option<Snap>,
-}
-
-/// Everything Undo and Redo bring back: the layers and mode, and which world folder is open
-/// (a prune swaps in a pruned copy, which Undo swaps back).
-#[derive(Clone)]
-struct Snap {
-    layers: Vec<PLayer>,
-    inverted: bool,
-    selected: Option<usize>,
-    world: Option<(std::path::PathBuf, bool, bool)>,
-}
-
-impl Snap {
-    fn same(&self, other: &Snap) -> bool {
-        // Which world is open counts; saving it (which only changes its flags) does not.
-        self.layers == other.layers
-            && self.inverted == other.inverted
-            && self.world.as_ref().map(|w| &w.0) == other.world.as_ref().map(|w| &w.0)
-    }
-}
-
-/// What a change between two states was, in a few words, for the Undo and Redo messages.
-fn describe_change(before: &Snap, after: &Snap) -> String {
-    let title = |l: &PLayer| l.title().to_lowercase();
-    if before.world.as_ref().map(|w| &w.0) != after.world.as_ref().map(|w| &w.0) {
-        return "Pruned the world".into();
-    }
-    if after.layers.len() > before.layers.len() {
-        let added = after.layers.iter().find(|l| !before.layers.contains(l)).or(after.layers.last());
-        return format!("Added a {} layer", added.map_or(String::new(), title));
-    }
-    if after.layers.len() < before.layers.len() {
-        let gone = before.layers.iter().find(|l| !after.layers.contains(l)).or(before.layers.last());
-        return format!("Removed a {} layer", gone.map_or(String::new(), title));
-    }
-    if before.inverted != after.inverted {
-        return if after.inverted {
-            "Switched to Inverted (everything but the shapes is removed)".into()
-        } else {
-            "Switched to Normal (the shapes are removed)".into()
-        };
-    }
-    "Edited a layer".into()
+    /// A message for the page (a chunk list that could not be read...).
+    status: String,
 }
 
 type ShadeKey = (Vec<PLayer>, bool, (i32, i32, i32, i32));
 /// What the shape mask was drawn for: the shapes and the view (as bits).
 type MaskKey = (Vec<PLayer>, [u32; 8]);
-
-/// The size of a file, or of everything in a folder.
-fn size_of(path: &Path) -> u64 {
-    match std::fs::metadata(path) {
-        Ok(m) if m.is_file() => m.len(),
-        Ok(_) => std::fs::read_dir(path)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|e| size_of(&e.path()))
-            .sum(),
-        Err(_) => 0,
-    }
-}
-
-fn human_size(bytes: u64) -> String {
-    if bytes >= 1 << 20 {
-        format!("{:.1} MB", bytes as f64 / (1 << 20) as f64)
-    } else {
-        format!("{} KB", bytes.div_ceil(1024))
-    }
-}
-
-pub enum PrunerRequest {
-    None,
-    PickWorld(UiEdition),
-}
 
 fn selection(layers: &[PLayer], inverted: bool) -> Selection {
     Selection {
@@ -700,573 +605,33 @@ fn hatch(p: &egui::Painter, r: Rect, s: f32, stroke: Stroke) {
     }
 }
 
-impl PrunerPage {
-    /// The worlds open in this page, the one shown first.
-    pub fn open_worlds(&self) -> Vec<(String, std::path::PathBuf)> {
-        self.ws
-            .iter()
-            .chain(self.parked.iter().map(|p| &p.ws))
-            .map(|w| (w.edition.subject(&w.name), w.original.clone()))
-            .collect()
-    }
-
-    /// Forgets what was drawn: the layers, their history and anything half drawn.
-    fn clear_drawing(&mut self) {
-        self.layers.clear();
-        self.selected = None;
-        self.undo.clear();
-        self.redo.clear();
-        self.base = None;
-        self.drawing = None;
-        self.polygon.clear();
-        self.dragging = None;
-        self.shade = None;
-    }
-
-    /// Puts the world shown aside, with its layers, and leaves the page empty.
-    fn park(&mut self) -> Option<Parked> {
-        let ws = self.ws.take()?;
-        let parked = Parked {
-            ws,
-            layers: std::mem::take(&mut self.layers),
-            selected: self.selected,
-            inverted: self.inverted,
-            undo: std::mem::take(&mut self.undo),
-            redo: std::mem::take(&mut self.redo),
-            base: self.base.take(),
-        };
-        self.clear_drawing();
-        Some(parked)
-    }
-
-    /// Shows a world that was put aside.
-    fn unpark(&mut self, p: Parked) {
-        self.clear_drawing();
-        self.ws = Some(p.ws);
-        self.layers = p.layers;
-        self.selected = p.selected;
-        self.inverted = p.inverted;
-        self.undo = p.undo;
-        self.redo = p.redo;
-        self.base = p.base;
-    }
-
-    /// Shows the `i`th of the other worlds and puts the shown one in its place.
-    fn switch_to(&mut self, i: usize) {
-        if self.job.is_some() || i >= self.parked.len() {
-            return;
-        }
-        let next = self.parked.remove(i);
-        if let Some(current) = self.park() {
-            self.parked.insert(i, current);
-        }
-        self.unpark(next);
-        self.choosing = false;
-    }
-
-    /// Closes the world shown; another open one takes its place.
-    fn close_current(&mut self) {
-        self.ws = None;
-        self.clear_drawing();
-        self.choosing = false;
-        if let Some(p) = self.parked.pop() {
-            self.unpark(p);
-        }
-    }
-
-    pub fn open_world(&mut self, path: &Path, edition: UiEdition, settings: &Settings) {
-        // Already open here: show that one instead of reading the world a second time.
-        if let Some(i) = self
-            .open_worlds()
-            .iter()
-            .position(|(_, original)| crate::editor::same_path(original, path))
-        {
-            let name = self.open_worlds()[i].0.clone();
-            if i > 0 {
-                self.switch_to(i - 1);
-            }
-            self.choosing = false;
-            self.status = format!("{name} is already open in the Pruner, so it was not opened again.");
-            return;
-        }
-        match Workspace::open(path, edition, settings, false, false) {
-            Ok(ws) => {
-                if let Some(current) = self.park() {
-                    self.parked.push(current);
-                }
-                self.clear_drawing();
-                self.status = format!("Opened {}", ws.name);
-                self.ws = Some(ws);
-                self.choosing = false;
-            }
-            Err(e) => self.status = format!("Could not open the world: {e}"),
-        }
-    }
-
-    fn snapshot(&self) -> Snap {
-        Snap {
-            layers: self.layers.clone(),
-            inverted: self.inverted,
-            selected: self.selected,
-            world: self.ws.as_ref().map(|w| (w.path.clone(), w.copied, w.world_changed)),
-        }
-    }
-
-    /// Makes a change a step of its own once it is settled (not while a shape or number is
-    /// still being dragged), so one drag is one Undo.
-    fn track_history(&mut self, ui: &Ui) {
-        let now = self.snapshot();
-        let Some(base) = &self.base else {
-            self.base = Some(now);
-            return;
-        };
-        if base.same(&now) {
-            return;
-        }
-        if self.dragging.is_some() || ui.input(|i| i.pointer.any_down()) {
-            return;
-        }
-        if let Some(old) = self.base.replace(now) {
-            let what = describe_change(&old, self.base.as_ref().expect("just set"));
-            // Adding or removing a layer and switching the mode are worth a message.
-            if !what.is_empty() && !what.starts_with("Edited") && !what.starts_with("Pruned") {
-                self.status = what.clone();
-            }
-            self.undo.push((old, what));
-            if self.undo.len() > 200 {
-                self.undo.remove(0);
-            }
-            self.redo.clear();
-        }
-    }
-
-    fn restore(&mut self, s: Snap) {
-        self.layers = s.layers.clone();
-        self.inverted = s.inverted;
-        self.selected = s.selected.filter(|i| *i < self.layers.len());
-        self.polygon.clear();
-        self.drawing = None;
-        self.dragging = None;
-        if let (Some(ws), Some((path, copied, changed))) = (self.ws.as_mut(), &s.world) {
-            if ws.path != *path {
-                ws.path = path.clone();
-                ws.map.reload(path.clone());
-            }
-            ws.copied = *copied;
-            ws.world_changed = *changed;
-        }
-        self.base = Some(s);
-    }
-
-    fn can_undo(&self) -> bool {
-        self.job.is_none() && !self.undo.is_empty()
-    }
-
-    fn can_redo(&self) -> bool {
-        self.job.is_none() && !self.redo.is_empty()
-    }
-
-    fn undo(&mut self) {
-        if !self.can_undo() {
-            return;
-        }
-        if let Some((prev, what)) = self.undo.pop() {
-            self.redo.push((self.snapshot(), what.clone()));
-            self.restore(prev);
-            self.status = format!("Undid: {}", what.to_lowercase());
-        }
-    }
-
-    fn redo(&mut self) {
-        if !self.can_redo() {
-            return;
-        }
-        if let Some((next, what)) = self.redo.pop() {
-            self.undo.push((self.snapshot(), what.clone()));
-            self.restore(next);
-            self.status = format!("Redid: {}", what.to_lowercase());
-        }
-    }
-
-    fn prune(&mut self, ctx: &egui::Context, settings: &Settings) {
-        let Some(ws) = &self.ws else { return };
-        let sel = selection(&self.layers, self.inverted);
-        let src = ws.path.clone();
-        let edition = ws.edition;
-        let dim = ws.map.dimension.clone();
-        let out = match settings.new_workspace("PRUNER", &ws.name) {
-            Ok(p) => p,
-            Err(e) => {
-                self.status = format!("Could not create the working folder: {e}");
-                return;
-            }
-        };
-        self.status = "Pruning the world…".into();
-        self.job = Some(Job::spawn_notifying("Pruning", ctx, move || {
-            let java_dim = match dim.as_str() {
-                "minecraft:the_nether" => -1,
-                "minecraft:the_end" => 1,
-                _ => 0,
-            };
-            let result = match edition {
-                UiEdition::Java => {
-                    mctk_prune::prune_java(&src, &out, &sel, Some(java_dim)).map(|_| out.clone())
-                }
-                UiEdition::Bedrock => {
-                    let bedrock_dim = match java_dim {
-                        -1 => 1,
-                        1 => 2,
-                        _ => 0,
-                    };
-                    mctk_prune::prune_bedrock_world(&src, &out, &sel, Some(bedrock_dim))
-                        .map(|_| out.clone())
-                }
-                _ => (|| {
-                    let mut save = mctk_console::ConsoleSave::open(&src)?;
-                    mctk_prune::prune_console(&mut save, &sel, Some(java_dim))?;
-                    // A PS3 save folder becomes a folder, an Xbox 360 save a file, of the same name.
-                    let target = out.join(src.file_name().unwrap_or_default());
-                    mctk_prune::save_console_copy(&save, &target)?;
-                    Ok(target)
-                })(),
-            };
-            result.map_err(|e: mctk_prune::Error| e.to_string())
-        }));
-    }
-
-    pub fn ui(&mut self, ui: &mut Ui, settings: &mut Settings) -> PrunerRequest {
-        let mut request = PrunerRequest::None;
-        if let Some(r) = self.job.as_ref().and_then(Job::take) {
-            self.job = None;
-            let optimizing = std::mem::take(&mut self.optimizing);
-            match r {
-                Ok(new_path) => {
-                    let before = self.ws.as_ref().map_or(0, |w| size_of(&w.path));
-                    if let Some(ws) = &mut self.ws {
-                        ws.path = new_path.clone();
-                        ws.copied = true;
-                        ws.world_changed = true;
-                        ws.map.reload(new_path.clone());
-                    }
-                    if optimizing {
-                        // What was drawn stays: nothing was removed.
-                        self.status = format!(
-                            "Optimized: {} down to {}. Save to write the result back to the world.",
-                            human_size(before),
-                            human_size(size_of(&new_path))
-                        );
-                    } else {
-                        self.layers.clear();
-                        self.selected = None;
-                        self.status = "Pruned. Save to write the result back to the world.".into();
-                    }
-                }
-                Err(e) => {
-                    self.status = format!("{} failed: {e}", if optimizing { "Optimize" } else { "Prune" });
-                }
-            }
-        }
-        if self.ws.is_none() || self.choosing {
-            if let Some(e) = edition_chooser(ui, "Select a World to Prune", None) {
-                request = PrunerRequest::PickWorld(e);
-            }
-            if self.ws.is_some() {
-                // Changed their mind: back to the world that was open.
-                let r = Rect::from_min_size(ui.max_rect().left_top() + vec2(16.0, 16.0), vec2(110.0, 32.0));
-                let mut back = ui.new_child(egui::UiBuilder::new().max_rect(r));
-                if widgets::button(&mut back, Some(Icon::Close), "Cancel", 110.0, true).clicked() {
-                    self.choosing = false;
-                }
-            }
-            return request;
-        }
-        // Ctrl+Z undoes, Ctrl+Y or Ctrl+Shift+Z redoes (unless a text field is being typed in).
-        if !ui.ctx().wants_keyboard_input() {
-            let (redo, undo) = ui.input_mut(|i| {
-                let redo = i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::Z)
-                    || i.consume_key(egui::Modifiers::COMMAND, egui::Key::Y);
-                (redo, !redo && i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z))
-            });
-            if redo {
-                self.redo();
-            } else if undo {
-                self.undo();
-            }
-        }
-        let full = ui.max_rect();
-        self.left_panel(ui, settings);
-        let area = Rect::from_min_max(pos2(full.left() + LEFT_PANEL, full.top()), full.max);
-        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(area));
-        self.map(&mut child);
-        self.track_history(ui);
-        request
-    }
-
-    fn left_panel(&mut self, ui: &mut Ui, settings: &mut Settings) {
-        let full = ui.max_rect();
-        let panel = Rect::from_min_size(full.min, vec2(LEFT_PANEL, full.height()));
-        ui.painter().rect_filled(panel, 0.0, theme::BG);
-        // Inside the panel's last pixel column, so the page beside it does not cover half of it.
-        ui.painter().line_segment(
-            [panel.right_top() - vec2(0.5, 0.0), panel.right_bottom() - vec2(0.5, 0.0)],
-            Stroke::new(1.0_f32, theme::SEPARATOR),
-        );
-        let mut child =
-            ui.new_child(egui::UiBuilder::new().max_rect(panel.shrink2(vec2(6.0, 6.0))));
-        let ui = &mut child;
-        let Some(ws) = &self.ws else { return };
-        let (name, icon, dirty, bedrock) = (
-            ws.name.clone(),
-            ws.edition.icon(),
-            ws.dirty(),
-            ws.edition == UiEdition::Bedrock,
-        );
-        // The world selector is a drop-down as in the NBT editor, with "Open another world".
-        let others: Vec<(String, Icon)> =
-            self.parked.iter().map(|p| (p.ws.name.clone(), p.ws.edition.icon())).collect();
-        let switching = self.job.is_none();
-        let mut switch_to = None;
-        let mut open_another = false;
-        ui.horizontal(|ui| {
-            let (rect, resp) =
-                ui.allocate_exact_size(vec2(LEFT_PANEL - 12.0, 30.0), Sense::click());
-            let popup = ui.make_persistent_id("pruner-world-switch");
-            let open = widgets::dropdown_open(ui, popup);
-            ui.painter().rect_filled(
-                rect,
-                widgets::dropdown_corners(open),
-                if resp.hovered() { theme::BUTTON_HOVER } else { theme::BUTTON },
-            );
-            icons::paint(
-                ui.painter(),
-                Rect::from_center_size(rect.left_center() + vec2(14.0, 0.0), Vec2::splat(16.0)),
-                icon,
-                theme::TEXT_MUTED,
-            );
-            let font = theme::regular(14.0);
-            let shown = widgets::elide(ui, &name, &font, rect.width() - 52.0);
-            ui.painter().text(
-                rect.left_center() + vec2(28.0, 0.0),
-                Align2::LEFT_CENTER,
-                shown,
-                font,
-                theme::TEXT,
-            );
-            icons::paint(
-                ui.painter(),
-                Rect::from_center_size(rect.right_center() - vec2(12.0, 0.0), Vec2::splat(10.0)),
-                if open { Icon::ChevronUp } else { Icon::ChevronDown },
-                theme::TEXT_MUTED,
-            );
-            if resp.clicked() {
-                ui.memory_mut(|m| m.toggle_popup(popup));
-            }
-            widgets::dropdown_pinned(
-                ui,
-                popup,
-                &resp,
-                theme::BUTTON,
-                None,
-                |ui, inner| {
-                    let (row, _) = ui.allocate_exact_size(vec2(inner, 28.0), Sense::hover());
-                    ui.painter().rect_filled(row, 0.0, Color32::from_white_alpha(14));
-                    icons::paint(
-                        ui.painter(),
-                        Rect::from_center_size(row.left_center() + vec2(14.0, 0.0), Vec2::splat(16.0)),
-                        icon,
-                        theme::TEXT_MUTED,
-                    );
-                    let font = theme::regular(14.0);
-                    let shown = widgets::elide(ui, &name, &font, row.width() - 40.0);
-                    ui.painter().text(
-                        row.left_center() + vec2(28.0, 0.0),
-                        Align2::LEFT_CENTER,
-                        shown,
-                        font,
-                        theme::TEXT,
-                    );
-                    for (i, (other, other_icon)) in others.iter().enumerate() {
-                        let (row, r) = ui.allocate_exact_size(
-                            vec2(inner, 28.0),
-                            if switching { Sense::click() } else { Sense::hover() },
-                        );
-                        if r.hovered() && switching {
-                            ui.painter().rect_filled(row, 0.0, theme::BUTTON_HOVER);
-                        }
-                        icons::paint(
-                            ui.painter(),
-                            Rect::from_center_size(row.left_center() + vec2(14.0, 0.0), Vec2::splat(16.0)),
-                            *other_icon,
-                            theme::TEXT_MUTED,
-                        );
-                        let font = theme::regular(14.0);
-                        let shown = widgets::elide(ui, other, &font, row.width() - 40.0);
-                        ui.painter().text(
-                            row.left_center() + vec2(28.0, 0.0),
-                            Align2::LEFT_CENTER,
-                            shown,
-                            font,
-                            if switching { theme::TEXT } else { theme::TEXT_DIM },
-                        );
-                        if r.clicked() {
-                            switch_to = Some(i);
-                        }
-                    }
-                },
-                28.0,
-                |ui, inner| {
-                    let (row, r) = ui.allocate_exact_size(vec2(inner, 28.0), Sense::click());
-                    if r.hovered() {
-                        // The last row follows the list's rounded bottom corners.
-                        let corners = egui::CornerRadius { nw: 0, ne: 0, sw: 4, se: 4 };
-                        ui.painter().rect_filled(row, corners, theme::BUTTON_HOVER);
-                    }
-                    icons::paint(
-                        ui.painter(),
-                        Rect::from_center_size(row.left_center() + vec2(14.0, 0.0), Vec2::splat(14.0)),
-                        Icon::Plus,
-                        theme::TEXT_MUTED,
-                    );
-                    ui.painter().text(
-                        row.left_center() + vec2(28.0, 0.0),
-                        Align2::LEFT_CENTER,
-                        "Open another world",
-                        theme::regular(14.0),
-                        theme::TEXT,
-                    );
-                    if r.clicked() {
-                        open_another = true;
-                    }
-                },
-            );
-        });
-        if let Some(i) = switch_to {
-            self.switch_to(i);
-            return;
-        }
-        if open_another {
-            self.choosing = true;
-            return;
-        }
-        ui.add_space(4.0);
-        let half = (LEFT_PANEL - 20.0) / 2.0;
-        ui.horizontal(|ui| {
-            if widgets::button(ui, Some(Icon::Close), "Close", half, self.job.is_none()).clicked() {
-                if dirty {
-                    self.confirm_close = true;
-                } else {
-                    self.close_current();
-                }
-            }
-            if widgets::button(
-                ui,
-                Some(Icon::Save),
-                if dirty { "Save*" } else { "Save" },
-                half,
-                dirty && self.job.is_none(),
-            )
-            .clicked()
-            {
-                if let Some(ws) = &mut self.ws {
-                    self.status = match ws.sync_back() {
-                        Ok(()) => {
-                            ws.world_changed = false;
-                            format!(
-                                "Saved {} (the original was backed up as _MCTBackup)",
-                                ws.name
-                            )
-                        }
-                        Err(e) => format!("Save failed: {e}"),
-                    };
-                    crate::jobs::finished();
-                }
-            }
-        });
-        // Undo and Redo, in case something was pruned by accident.
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            let undo = widgets::button(ui, Some(Icon::Undo), "Undo", half, self.can_undo())
-                .on_hover_text("Undo (Ctrl+Z)");
-            let redo = widgets::button(ui, Some(Icon::Redo), "Redo", half, self.can_redo())
-                .on_hover_text("Redo (Ctrl+Y)");
-            if undo.clicked() {
-                self.undo();
-            }
-            if redo.clicked() {
-                self.redo();
-            }
-        });
-        // A line under them, as in the NBT editor.
-        ui.add_space(4.0);
-        ui.painter().line_segment(
-            [pos2(panel.left(), ui.cursor().top()), pos2(panel.right(), ui.cursor().top())],
-            Stroke::new(1.0_f32, theme::BORDER),
-        );
-        ui.add_space(6.0);
-        if self.confirm_close {
-            let mut answer = None;
-            egui::Modal::new(egui::Id::new("prune-confirm-close")).show(ui.ctx(), |ui| {
-                ui.label("The pruned world has not been saved. Close it anyway?");
-                ui.horizontal(|ui| {
-                    if ui.button("Close without saving").clicked() {
-                        answer = Some(true);
-                    }
-                    if ui.button("Cancel").clicked() {
-                        answer = Some(false);
-                    }
-                });
-            });
-            if let Some(a) = answer {
-                self.confirm_close = false;
-                if a {
-                    self.close_current();
-                    return;
-                }
-            }
-        }
-        if self.confirm_optimize {
-            let mut answer = None;
-            egui::Modal::new(egui::Id::new("prune-confirm-optimize")).show(ui.ctx(), |ui| {
-                ui.label("Do you want to optimize the world? (This may take several minutes)");
-                ui.horizontal(|ui| {
-                    if ui.button("Yes").clicked() {
-                        answer = Some(true);
-                    }
-                    if ui.button("No").clicked() {
-                        answer = Some(false);
-                    }
-                });
-            });
-            if let Some(yes) = answer {
-                self.confirm_optimize = false;
-                if yes {
-                    let ctx = ui.ctx().clone();
-                    self.optimize(&ctx, settings);
-                }
-            }
-        }
-        ui.add_space(6.0);
-        // Tool grid.
-        let tools: [(Option<Tool>, Icon, &str); 6] = [
+impl PruneTools {
+    /// The shape tools, Normal or Inverted, the layers' cards and the Prune button at the
+    /// panel's foot. Gives whether Prune was pressed.
+    pub(crate) fn tool_panel(&mut self, ui: &mut Ui, panel: Rect, bedrock: bool) -> bool {
+        let tools: [(Option<Tool>, Icon, &str); 5] = [
             (Some(Tool::Box), Icon::ShapeBox, "Box"),
             (Some(Tool::Circle), Icon::ShapeCircle, "Circle"),
             (Some(Tool::Polygon), Icon::ShapePolygon, "Polygon"),
             (Some(Tool::Split), Icon::ShapeSplit, "Split"),
             (None, Icon::Time, "Time"),
-            (None, Icon::Optimize, "Optimize"),
         ];
-        let w = (LEFT_PANEL - 12.0 - 8.0) / 3.0;
-        for row in tools.chunks(3) {
+        // Sized to the room, so the layers' cards below still show in a small window: the five
+        // in one row, their names under them only when the panel is tall (and on hover).
+        let tall = panel.height() >= 760.0;
+        let (bh, icon_size, named) = if tall { (54.0, 22.0, true) } else { (38.0, 22.0, false) };
+        let per_row = tools.len();
+        let w = (LEFT_PANEL - 12.0 - 4.0 * (per_row as f32 - 1.0)) / per_row as f32;
+        for row in tools.chunks(per_row) {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 for (tool, icon, label) in row {
-                    let optimize = *label == "Optimize";
                     let time = *label == "Time";
                     // Only Java and the consoles record InhabitedTime; Bedrock has none to go by.
-                    let enabled = if optimize { bedrock } else if time { !bedrock } else { true };
+                    let enabled = !(time && bedrock);
                     let active = tool.is_some() && self.tool == *tool;
                     let (r, resp) = ui.allocate_exact_size(
-                        vec2(w, 64.0),
+                        vec2(w, bh),
                         if enabled {
                             Sense::click()
                         } else {
@@ -1277,9 +642,9 @@ impl PrunerPage {
                         r,
                         theme::radius(4),
                         if resp.hovered() && enabled {
-                            theme::BUTTON_HOVER
+                            theme::button_hover()
                         } else {
-                            Color32::from_rgb(0x26, 0x2B, 0x33)
+                            theme::tile()
                         },
                     );
                     if active {
@@ -1291,37 +656,42 @@ impl PrunerPage {
                         );
                     }
                     let c = if enabled {
-                        theme::TEXT
+                        theme::text()
                     } else {
-                        theme::TEXT_DIM
+                        theme::text_dim()
                     };
+                    let lift = if named { bh * 0.14 } else { 0.0 };
                     icons::paint(
                         ui.painter(),
-                        Rect::from_center_size(r.center() - vec2(0.0, 9.0), Vec2::splat(28.0)),
+                        Rect::from_center_size(r.center() - vec2(0.0, lift), Vec2::splat(icon_size)),
                         *icon,
                         c,
                     );
-                    ui.painter().text(
-                        r.center() + vec2(0.0, 19.0),
-                        Align2::CENTER_CENTER,
-                        *label,
-                        theme::regular(13.5),
-                        c,
-                    );
-                    let resp = if optimize {
-                        resp.on_hover_text(if bedrock {
-                            "Write the world again with a compacted database, giving back the space the game leaves behind"
-                        } else {
-                            "Bedrock worlds only"
-                        })
-                    } else if time {
+                    if named {
+                        ui.painter().text(
+                            r.center() + vec2(0.0, bh * 0.3),
+                            Align2::CENTER_CENTER,
+                            *label,
+                            theme::regular(12.0),
+                            c,
+                        );
+                    }
+                    let resp = if time {
                         resp.on_hover_text(if bedrock {
                             "Bedrock worlds record no InhabitedTime, so there is nothing to prune by time"
                         } else {
                             "Prune the chunks by the time players spent near them (InhabitedTime)"
                         })
                     } else {
-                        resp
+                        // (The name, when the button has no room to show it.)
+                        let tip = match tool {
+                            Some(Tool::Box) => "Box: drag on the map to draw one",
+                            Some(Tool::Circle) => "Circle: drag from the middle on the map",
+                            Some(Tool::Polygon) => "Polygon: click the corners on the map; right-click places the last",
+                            Some(Tool::Split) => "Split: drag a line on the map; the side to its right is picked",
+                            None => label,
+                        };
+                        resp.on_hover_text(tip)
                     };
                     if resp.clicked() && enabled {
                         match tool {
@@ -1342,7 +712,6 @@ impl PrunerPage {
                                 });
                                 self.selected = Some(self.layers.len() - 1);
                             }
-                            None if optimize && self.job.is_none() => self.confirm_optimize = true,
                             None => {}
                         }
                     }
@@ -1361,7 +730,8 @@ impl PrunerPage {
             self.inverted = mode == 1;
         }
         ui.add_space(8.0);
-        let list_h = ui.available_height() - 70.0;
+        let prune_h = if tall { 46.0 } else { 36.0 };
+        let list_h = (ui.available_height() - prune_h - 24.0).max(0.0);
         egui::ScrollArea::vertical()
             .max_height(list_h)
             .auto_shrink(false)
@@ -1378,7 +748,7 @@ impl PrunerPage {
                         .is_some_and(|r| r.clicked());
                     let card_w = ui.available_width() - 16.0;
                     let frame = egui::Frame::new()
-                        .fill(Color32::from_rgb(0x1A, 0x1E, 0x24))
+                        .fill(theme::field())
                         .inner_margin(egui::Margin::same(8));
                     let resp = frame.show(ui, |ui| {
                         ui.set_width(card_w);
@@ -1396,7 +766,7 @@ impl PrunerPage {
                             ui.label(egui::RichText::new(l.title()).size(12.5).color(if sel {
                                 theme::accent()
                             } else {
-                                theme::TEXT_MUTED
+                                theme::text_muted()
                             }));
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
@@ -1437,7 +807,7 @@ impl PrunerPage {
                             PLayer::Polygon { points } => {
                                 ui.label(
                                     egui::RichText::new(format!("{} points", points.len()))
-                                        .color(theme::TEXT),
+                                        .color(theme::text()),
                                 );
 
                             }
@@ -1446,7 +816,7 @@ impl PrunerPage {
                                     egui::RichText::new("Select if InhabitedTime is:")
                                         .italics()
                                         .size(12.5)
-                                        .color(theme::TEXT),
+                                        .color(theme::text()),
                                 );
                                 ui.horizontal(|ui| {
                                     // Greater than, equal to, less than.
@@ -1474,22 +844,79 @@ impl PrunerPage {
                     self.selected = None;
                 }
             });
-        // The Prune button, with Undo above it in case it was pressed by accident.
+        // The Prune button at the panel's foot.
         let r = Rect::from_min_size(
-            pos2(panel.left() + 6.0, panel.bottom() - 54.0),
-            vec2(LEFT_PANEL - 12.0, 46.0),
+            pos2(panel.left() + 6.0, panel.bottom() - prune_h - 8.0),
+            vec2(LEFT_PANEL - 12.0, prune_h),
         );
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r));
-        let enabled = (!self.layers.is_empty() || self.inverted) && self.job.is_none();
-        let label = if self.job.is_some() { "Pruning…" } else { "Prune" };
-        if widgets::primary(&mut child, label, r.size(), enabled).clicked() {
-            let ctx = ui.ctx().clone();
-            self.prune(&ctx, settings);
+        let enabled = !self.layers.is_empty();
+        let resp = widgets::primary(&mut child, "Prune", r.size(), enabled).on_hover_text("Delete the chunks shaded red (Ctrl+Z undoes; Save writes it)");
+        resp.clicked() && enabled
+    }
+
+    /// The chunks the layers pick (those that exist), once the world's chunks are read: what
+    /// Prune removes.
+    pub(crate) fn picked_chunks(&self, bedrock: bool) -> Option<Vec<(i32, i32)>> {
+        if !self.chunks_loaded {
+            return None;
         }
+        let mut layers = self.layers.clone();
+        if bedrock {
+            layers.retain(|l| !matches!(l, PLayer::Time { .. }));
+        }
+        let sel = selection(&layers, self.inverted);
+        // (Inverted with nothing drawn would be every chunk: a shape first.)
+        if sel.layers.is_empty() {
+            return Some(Vec::new());
+        }
+        let mut v: Vec<(i32, i32)> = self.chunks.iter().filter(|(k, t)| !sel.keeps(ChunkPos::new(k.0, k.1), **t)).map(|(k, _)| *k).collect();
+        v.sort_unstable();
+        Some(v)
+    }
+
+    /// After a prune in the World Explorer: the shapes are cleared (the chunks are gone).
+    pub(crate) fn clear_layers(&mut self) {
+        self.layers.clear();
+        self.selected = None;
+        self.tool = None;
+        self.polygon.clear();
+        self.drawing = None;
+        self.dragging = None;
+        self.shade = None;
+    }
+
+    /// Puts the shape tool down (and drops a shape half drawn).
+    pub(crate) fn drop_tool(&mut self) {
+        self.tool = None;
+        self.polygon.clear();
+        self.drawing = None;
+        self.dragging = None;
+    }
+
+    /// Whether a shape tool is chosen (the map's clicks are its).
+    pub(crate) fn drawing_tool(&self) -> bool {
+        self.tool.is_some()
+    }
+
+    /// For development: a box layer (in chunks), chosen.
+    pub(crate) fn dev_box(&mut self, x: f64, z: f64, w: f64, h: f64) {
+        self.layers.push(PLayer::Box { x, z, w, h });
+        self.selected = Some(self.layers.len() - 1);
+    }
+
+    /// Whether there is anything to draw on the map: shapes, or one being made.
+    pub(crate) fn has_shapes(&self) -> bool {
+        !self.layers.is_empty() || self.tool.is_some() || !self.polygon.is_empty()
+    }
+
+    /// The messages it left (a chunk list that could not be read...), taken.
+    pub(crate) fn take_status(&mut self) -> String {
+        std::mem::take(&mut self.status)
     }
     /// Reads, in the background, which chunks the dimension shown has (and their InhabitedTime
     /// when a Time layer needs it).
-    fn read_chunks(&mut self, ctx: &egui::Context) {
+    pub(crate) fn read_chunks(&mut self, ctx: &egui::Context, ws: &Workspace) {
         if let Some(r) = self.chunks_job.as_ref().and_then(Job::take) {
             self.chunks_job = None;
             self.shade = None;
@@ -1501,7 +928,6 @@ impl PrunerPage {
                 Err(e) => self.status = format!("Could not read the world's chunks: {e}"),
             }
         }
-        let Some(ws) = &self.ws else { return };
         let (path, edition) = (ws.path.clone(), ws.edition);
         let dim = match ws.map.dimension.as_str() {
             "minecraft:the_nether" => -1,
@@ -1527,34 +953,15 @@ impl PrunerPage {
         }));
     }
 
-    /// Writes the Bedrock world again with a compacted database, as a working copy.
-    fn optimize(&mut self, ctx: &egui::Context, settings: &Settings) {
-        let Some(ws) = &self.ws else { return };
-        let src = ws.path.clone();
-        let out = match settings.new_workspace("PRUNER", &ws.name) {
-            Ok(p) => p,
-            Err(e) => {
-                self.status = format!("Could not create the working folder: {e}");
-                return;
-            }
-        };
-        self.status = "Optimizing the world…".into();
-        self.optimizing = true;
-        self.job = Some(Job::spawn_notifying("Optimizing", ctx, move || {
-            mctk_prune::optimize_bedrock_world(&src, &out)
-                .map(|_| out.clone())
-                .map_err(|e| e.to_string())
-        }));
+    /// Whether a drag on the map moves it (not while a shape tool is chosen or a shape's dot is
+    /// being dragged).
+    pub(crate) fn map_pans(&self) -> bool {
+        self.tool.is_none() && self.dragging.is_none()
     }
 
-    fn map(&mut self, ui: &mut Ui) {
-        self.read_chunks(ui.ctx());
-        let Some(ws) = &mut self.ws else { return };
-        // Chunks are picked with the pruning tools here, not by clicking.
-        ws.map.selectable = false;
-        let frame = ws
-            .map
-            .show_map(ui, self.tool.is_none() && self.dragging.is_none());
+    /// The shapes drawn on the flat map (the chunks they pick shaded), their dots, and the tool
+    /// chosen drawing a new one.
+    pub(crate) fn overlay(&mut self, ui: &mut Ui, ws: &mut Workspace, frame: &MapFrame) {
         let p = ui.painter_at(frame.rect);
         // The shape being drawn is shaded too, so the prune area shows while placing it.
         let mut shown = self.layers.clone();
@@ -1621,7 +1028,7 @@ impl PrunerPage {
             }
         }
         let to_screen = |c: (f64, f64)| frame.to_screen(vec2(c.0 as f32 * 16.0, c.1 as f32 * 16.0));        // The shapes themselves are tinted too, exactly: one picture of where any shape is, so
-        // overlapping shapes are one area and the tint does not pile up into a solid colour. (The
+        // overlapping shapes are one area and the tint does not pile up into a solid color. (The
         // chunks above are what will go, a whole chunk at a time; this is the shape that picked
         // them.)
         if !self.inverted && !shapes.is_empty() {
@@ -1692,7 +1099,13 @@ impl PrunerPage {
             ((b.x / 16.0) as f64, (b.y / 16.0) as f64)
         };
         // Before the shapes are drawn, so one just made shows its dots at once.
-        self.interact(&frame);
+        self.interact(frame);
+        // A dot dragged (or a shape drawn) near the edge scrolls the map along.
+        if self.dragging.is_some() || self.drawing.is_some() {
+            if let Some(q) = frame.response.interact_pointer_pos() {
+                ws.map.edge_scroll(ui.ctx(), frame.rect, q);
+            }
+        }
         let pointer = frame.response.hover_pos();
         // The arrow of a split: a shaft and head, each over a black one for contrast.
         let head = |p: &egui::Painter, from: Pos2, tip: Pos2, white: Color32, width: f32| {
@@ -1778,12 +1191,9 @@ impl PrunerPage {
                         ui.ctx().set_cursor_icon(cursor);
                     }
                     let fill = if hot { theme::RED } else { Color32::WHITE };
-                    // Every dot is a square; a box's move dot stretches over the chunks around its
-                    // centre when that is not the middle of one.
-                    let sq = match l.move_span().filter(|_| moves) {
-                        Some((lo, hi_)) => Rect::from_two_pos(to_screen(lo), to_screen(hi_)).expand(5.0),
-                        None => Rect::from_center_size(s, Vec2::splat(10.0)),
-                    };
+                    // Every dot is the same small square on screen (whatever the zoom or turn);
+                    // the area that grabs the move dot is bigger than what is drawn.
+                    let sq = Rect::from_center_size(s, Vec2::splat(10.0));
                     // The move dot is see-through until it is used.
                     let faint = moves && !hot;
                     p.rect_filled(sq, 0.0, if faint { Color32::from_white_alpha(40) } else { fill });
@@ -1848,7 +1258,7 @@ impl PrunerPage {
             // Always drawn closed: the corners so far, the pointer, then back to the first.
             let mut pts: Vec<Pos2> = self.polygon.iter().map(|c| to_screen(*c)).collect();
             if let Some(h) = frame.hover {
-                pts.push(to_screen(centre((h.x as f64 / 16.0, h.y as f64 / 16.0))));
+                pts.push(to_screen(center((h.x as f64 / 16.0, h.y as f64 / 16.0))));
             }
             let corners = pts.clone();
             pts.push(pts[0]);
@@ -1860,7 +1270,7 @@ impl PrunerPage {
         if let Some(tool) = self.tool {
             let hint = match tool {
                 Tool::Box => "Drag to draw a box",
-                Tool::Circle => "Drag from the centre to draw a circle",
+                Tool::Circle => "Drag from the center to draw a circle",
                 Tool::Split => "Drag to draw the split line; the right side is selected",
                 Tool::Polygon => "Click to add corners; right-click to place the last corner",
             };
@@ -1881,10 +1291,7 @@ impl PrunerPage {
                     .hover_pos()
                     .is_some_and(|q| l.pick_handle(q, &to_screen).is_some())
             });
-        if let Some(ws) = self.ws.as_mut() {
-            ws.map.hide_hover = on_handle;
-        }
-        ws_chrome(self.ws.as_mut(), ui, &frame);
+        ws.map.hide_hover = on_handle;
     }
 
     /// The layer the shape being drawn would become, for shading while placing it.
@@ -1892,7 +1299,7 @@ impl PrunerPage {
         if !self.polygon.is_empty() {
             let mut points = self.polygon.clone();
             if let Some(h) = hover {
-                points.push(centre((h.x as f64 / 16.0, h.y as f64 / 16.0)));
+                points.push(center((h.x as f64 / 16.0, h.y as f64 / 16.0)));
             }
             return (points.len() >= 3).then_some(PLayer::Polygon { points });
         }
@@ -1954,7 +1361,7 @@ impl PrunerPage {
         let Some(tool) = self.tool else { return };
         let Some(pos) = pointer else { return };
         // New shapes snap to the middle of the chunk under the pointer.
-        let c = centre(chunk(frame.to_block(pos)));
+        let c = center(chunk(frame.to_block(pos)));
         match tool {
             // Left-click adds a corner, right-click places the last one and closes
             // the polygon back to the first corner.
@@ -2015,15 +1422,55 @@ impl PrunerPage {
     }
 }
 
-fn ws_chrome(ws: Option<&mut Workspace>, ui: &mut Ui, frame: &MapFrame) {
-    if let Some(ws) = ws {
-        ws.map.show_chrome(ui, frame);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::Settings;
+    use std::path::Path;
+
+    /// In the World Explorer: a box drawn picks the chunks under it (inverted, all the others),
+    /// and Prune deletes them as one step that Undo brings back.
+    #[test]
+    fn explorer_prune_picks_the_shapes_chunks_and_undoes() {
+        let Ok(src) = std::env::var("MCTK_SNAPSHOT_WORLD") else { return };
+        let tmp = std::env::temp_dir().join(format!("mctk-explorer-prune-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        for d in ["region", "entities"] {
+            std::fs::create_dir_all(tmp.join(d)).unwrap();
+            for f in std::fs::read_dir(Path::new(&src).join(d)).unwrap().flatten() {
+                std::fs::copy(f.path(), tmp.join(d).join(f.file_name())).unwrap();
+            }
+        }
+        std::fs::copy(Path::new(&src).join("level.dat"), tmp.join("level.dat")).unwrap();
+        let mut ws = Workspace::open(&tmp, UiEdition::Java, &Settings::default(), false, false).expect("opens");
+        ws.show_explorer = true;
+        let mut page = PruneTools::default();
+        assert_eq!(page.picked_chunks(false), None, "nothing until the chunks are read");
+        page.chunks = std::rc::Rc::new(mctk_prune::chunk_times_java(&tmp, 0, false).expect("chunks"));
+        page.chunks_loaded = true;
+        assert_eq!(page.picked_chunks(false), Some(Vec::new()), "nothing drawn, nothing picked");
+        page.inverted = true;
+        assert_eq!(page.picked_chunks(false), Some(Vec::new()), "inverted with nothing drawn picks nothing either");
+        page.inverted = false;
+        page.layers.push(PLayer::Box { x: 0.0, z: 0.0, w: 2.0, h: 2.0 });
+        let picked = page.picked_chunks(false).unwrap();
+        assert!(!picked.is_empty() && picked.iter().all(|&(x, z)| (0..=2).contains(&x) && (0..=2).contains(&z)), "under the box: {picked:?}");
+        page.inverted = true;
+        let others = page.picked_chunks(false).unwrap();
+        assert_eq!(picked.len() + others.len(), page.chunks.len(), "inverted: every other chunk");
+        assert!(others.iter().all(|c| !picked.contains(c)));
+        page.inverted = false;
+
+        let read = |ws: &Workspace, c: (i32, i32)| crate::gpu_world::read_box(&ws.path, UiEdition::Java.world(),&ws.map.edits.read().unwrap(), [c.0 * 16, 0, c.1 * 16], [c.0 * 16 + 15, 0, c.1 * 16 + 15]).2;
+        assert_eq!(read(&ws, picked[0]), 1);
+        ws.map.selected = picked.clone();
+        ws.run_edit(crate::workspace::EditTool::DeleteChunks).expect("prunes");
+        assert!(picked.iter().all(|&c| read(&ws, c) == 0), "all gone at once");
+        assert_eq!(read(&ws, others[0]), 1, "the others stay");
+        ws.undo_any().expect("undoes");
+        assert!(picked.iter().all(|&c| read(&ws, c) == 1), "one step brings them all back");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 
     #[test]
     fn outlines_that_meet_a_box_meet_the_line_it_is_drawn_with() {
