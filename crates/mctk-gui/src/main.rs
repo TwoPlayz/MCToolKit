@@ -1,18 +1,29 @@
-//! MCToolKit desktop app: a frameless dark window,
-//! an app picker, and a sidebar with the NBT Editor, Converter and Pruner plus Settings
-//! and Settings. Long tasks run on background threads.
+//! MCToolKit desktop app: a frameless dark window, an app picker, and a sidebar with the NBT
+//! Editor (its World Explorer prunes too), the Converter and Settings. Long tasks run on background threads.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod array_view;
+mod atlas;
 mod heads;
 mod hex_editor;
 mod info;
 mod chunk_preview;
 mod converter;
 mod ctx_menu;
+mod edit;
+mod effects;
+mod explorer_ui;
 mod enchant;
+mod assets;
+mod entities;
+mod mobs;
+mod gpu_world;
+mod models;
 mod naming;
+mod mob_edit;
+mod item_edit;
+mod trades;
 mod inventory;
 mod item_picker;
 mod editor;
@@ -23,6 +34,9 @@ mod nbt_view;
 mod pruner;
 mod resource_pack;
 mod settings;
+#[cfg(test)]
+mod snapshot;
+mod street_view;
 mod theme;
 mod toasts;
 mod update;
@@ -52,7 +66,6 @@ const MIN_HEIGHT: f32 = 490.0;
 enum Page {
     Editor,
     Converter,
-    Pruner,
     Settings,
 }
 
@@ -60,7 +73,6 @@ enum Page {
 enum Purpose {
     Editor,
     Converter,
-    Pruner,
 }
 
 struct App {
@@ -68,7 +80,6 @@ struct App {
     settings: Settings,
     editor: editor::EditorPage,
     converter: converter::ConverterPage,
-    pruner: pruner::PrunerPage,
     picker: Option<(WorldPicker, Purpose)>,
     log: Vec<String>,
     /// The messages in the corner for the pages other than the NBT editor (which has its own).
@@ -77,41 +88,87 @@ struct App {
     zoom: f32,
     update_check: Option<jobs::Job<Option<update::Update>>>,
     update: Option<update::Update>,
+    /// Asking whether to save before closing; and the answer was to close (no asking again).
+    confirm_quit: bool,
+    quitting: bool,
 }
 
 impl App {
     fn new(cc: &eframe::CreationContext) -> Self {
         theme::install(&cc.egui_ctx);
         icons::install_textures(&cc.egui_ctx);
+        gpu_world::install(cc);
         let settings = Settings::load();
-        // Fill MCToolKit's own resource pack on first run (never a pack the user chose).
+        // MCToolKit's own resource pack keeps the latest release's assets, fetched as they are
+        // wanted (and again only when a newer release comes out).
         let pack = resource_pack::default_dir(&settings.working_dir());
-        if std::path::Path::new(&settings.resource_pack) == pack {
-            std::thread::spawn(move || resource_pack::ensure(&pack));
-        }
+        assets::set_root(pack.clone());
+        std::thread::spawn(move || resource_pack::ensure(&pack));
         let page = match settings.default_app {
             1 => Some(Page::Editor),
             2 => Some(Page::Converter),
-            3 => Some(Page::Pruner),
             _ => None,
         };
         let update_check = settings
             .check_updates
             .then(|| jobs::Job::spawn("Update check", &cc.egui_ctx, update::check));
-        App {
+        let mut app = App {
             page,
             update_check,
             update: None,
             converter: converter::ConverterPage::new(&settings),
             settings,
             editor: Default::default(),
-            pruner: Default::default(),
             picker: None,
             log: vec![format!("MCToolKit {} started", env!("CARGO_PKG_VERSION"))],
             last_statuses: Default::default(),
             toasts: Default::default(),
             zoom: 0.0,
+            confirm_quit: false,
+            quitting: false,
+        };
+        // It closed by crashing last time: say so, and where the details are.
+        let (log, pending) = crash_files();
+        if pending.exists() {
+            let _ = std::fs::remove_file(&pending);
+            let text = format!("MCToolKit closed unexpectedly last time. What happened is in {}", log.display());
+            app.log.push(text.clone());
+            app.toasts.push(&cc.egui_ctx, text);
         }
+        // For development and automated checks: MCTK_DEV_OPEN opens a Java world straight in the
+        // World Explorer, and MCTK_DEV_MAP places its map (see `MapView::dev_preset`).
+        if let Ok(path) = std::env::var("MCTK_DEV_OPEN") {
+            app.page = Some(Page::Editor);
+            app.editor.open_world(std::path::Path::new(&path), world_picker::UiEdition::Java, &app.settings);
+            app.editor.dev_show_explorer(std::env::var("MCTK_DEV_MAP").ok().as_deref());
+            // MCTK_DEV_QUIT: the "Save changes before closing?" question up (as on closing).
+            app.confirm_quit = std::env::var("MCTK_DEV_QUIT").is_ok() && !app.unsaved_worlds().is_empty();
+        }
+        // MCTK_DEV_THEME=dark|light: that theme (for this run; not saved unless settings change).
+        match std::env::var("MCTK_DEV_THEME").as_deref() {
+            Ok("dark") => app.settings.theme = 1,
+            Ok("light") => app.settings.theme = 2,
+            _ => {}
+        }
+        // MCTK_DEV_CONVERT=<java world>;<older java version>: the converter at its REPLACE step.
+        if let Ok(spec) = std::env::var("MCTK_DEV_CONVERT") {
+            let parts: Vec<&str> = spec.split(';').collect();
+            if let [path, version, rest @ ..] = parts.as_slice() {
+                let step = rest.first().and_then(|s| s.parse().ok()).unwrap_or(3);
+                app.converter.dev_replace(std::path::PathBuf::from(path), version, step);
+                app.page = Some(Page::Converter);
+            }
+        }
+        // MCTK_DEV_PAGE=home|settings|converter|editor: the page shown at start.
+        if let Ok(p) = std::env::var("MCTK_DEV_PAGE") {
+            app.page = match p.as_str() {
+                "settings" => Some(Page::Settings),
+                "converter" => Some(Page::Converter),
+                "editor" => Some(Page::Editor),
+                _ => None,
+            };
+        }
+        app
     }
 
     /// The name of `path` and the tool that has it open, when a tool other than `purpose`'s does.
@@ -120,10 +177,9 @@ impl App {
             let name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
             (edition.subject(&name), p.clone())
         });
-        let tools: [(Purpose, &'static str, Vec<(String, std::path::PathBuf)>); 3] = [
+        let tools: [(Purpose, &'static str, Vec<(String, std::path::PathBuf)>); 2] = [
             (Purpose::Editor, "NBT editor", self.editor.open_worlds()),
             (Purpose::Converter, "converter", converter.collect()),
-            (Purpose::Pruner, "pruner", self.pruner.open_worlds()),
         ];
         tools
             .into_iter()
@@ -146,11 +202,11 @@ impl App {
         let rect = Rect::from_min_size(ui.max_rect().min, vec2(ui.max_rect().width(), TITLE_BAR));
         let drag = ui.interact(rect, egui::Id::new("title-bar"), Sense::click_and_drag());
         let p = ui.painter();
-        p.rect_filled(rect, 0.0, theme::BG);
+        p.rect_filled(rect, 0.0, theme::bg());
         // Inside the bar's last pixel row, so the page drawn after it does not cover half of it.
         p.line_segment(
             [rect.left_bottom() - vec2(0.0, 0.5), rect.right_bottom() - vec2(0.0, 0.5)],
-            Stroke::new(1.0_f32, theme::SEPARATOR),
+            Stroke::new(1.0_f32, theme::separator()),
         );
         icons::paint(
             p,
@@ -163,7 +219,7 @@ impl App {
             Align2::LEFT_CENTER,
             "MCToolKit",
             theme::regular(17.0),
-            Color32::WHITE,
+            theme::strong(),
         );
         let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
         let mut x = rect.right();
@@ -189,7 +245,7 @@ impl App {
                     if id == "close" {
                         Color32::from_rgb(0xC4, 0x2B, 0x1C)
                     } else {
-                        theme::BUTTON_HOVER
+                        theme::button_hover()
                     },
                 );
             }
@@ -197,7 +253,7 @@ impl App {
                 ui.painter(),
                 Rect::from_center_size(r.center(), Vec2::splat(18.0)),
                 icon,
-                Color32::WHITE,
+                theme::strong(),
             );
             if resp.clicked() {
                 match id {
@@ -222,12 +278,12 @@ impl App {
             ui.painter().rect_filled(
                 r,
                 theme::radius(4),
-                if resp.hovered() { theme::BUTTON_HOVER } else { theme::BUTTON },
+                if resp.hovered() { theme::button_hover() } else { theme::button() },
             );
             ui.painter().galley(
                 pos2(r.left() + 12.0, r.center().y - galley.size().y / 2.0),
                 galley,
-                Color32::WHITE,
+                theme::strong(),
             );
             if resp.clicked() {
                 ctx.open_url(egui::OpenUrl::new_tab(&u.url));
@@ -278,10 +334,10 @@ impl App {
     fn sidebar(&mut self, ui: &mut egui::Ui) {
         let full = ui.max_rect();
         let rect = Rect::from_min_size(full.min, vec2(SIDEBAR, full.height()));
-        ui.painter().rect_filled(rect, 0.0, theme::BG);
+        ui.painter().rect_filled(rect, 0.0, theme::bg());
         ui.painter().line_segment(
             [rect.right_top() - vec2(0.5, 0.0), rect.right_bottom() - vec2(0.5, 0.0)],
-            Stroke::new(1.0_f32, theme::SEPARATOR),
+            Stroke::new(1.0_f32, theme::separator()),
         );
         let item = |ui: &mut egui::Ui,
                     top: f32,
@@ -296,16 +352,16 @@ impl App {
             let selected = current == Some(page);
             let p = ui.painter();
             if selected {
-                p.rect_filled(r, 0.0, theme::DEEP);
+                p.rect_filled(r, 0.0, theme::deep());
                 p.rect_filled(
                     Rect::from_min_size(r.min, vec2(2.5, r.height())),
                     0.0,
                     accent,
                 );
             } else if resp.hovered() {
-                p.rect_filled(r, 0.0, theme::CARD);
+                p.rect_filled(r, 0.0, theme::card());
             }
-            let ic = if selected { accent } else { theme::TEXT_MUTED };
+            let ic = if selected { accent } else { theme::text_muted() };
             icons::paint(
                 p,
                 Rect::from_center_size(r.center() - vec2(0.0, 9.0), Vec2::splat(30.0)),
@@ -313,9 +369,9 @@ impl App {
                 ic,
             );
             let tc = if selected {
-                Color32::WHITE
+                theme::strong()
             } else {
-                Color32::from_rgb(0xB8, 0xBE, 0xC6)
+                theme::text_muted()
             };
             let font = if selected {
                 theme::bold(10.5)
@@ -348,13 +404,6 @@ impl App {
                 theme::CONVERTER_ACCENT,
                 "Convert a Minecraft world to a different edition and/or version.",
             ),
-            (
-                Icon::AppPruner,
-                "Pruner",
-                Page::Pruner,
-                theme::PRUNER_ACCENT,
-                "Select and delete unwanted areas of a Minecraft world.",
-            ),
         ]
         .into_iter()
         .enumerate()
@@ -378,7 +427,7 @@ impl App {
             Icon::Gear,
             "Settings",
             Page::Settings,
-            Color32::WHITE,
+            theme::strong(),
             current,
         ) {
             self.page = Some(Page::Settings);
@@ -388,7 +437,7 @@ impl App {
             Align2::CENTER_CENTER,
             env!("CARGO_PKG_VERSION"),
             theme::regular(11.5),
-            theme::TEXT_MUTED,
+            theme::text_muted(),
         );
     }
 
@@ -399,7 +448,7 @@ impl App {
             Align2::CENTER_CENTER,
             "Select an App",
             theme::regular(20.0),
-            Color32::WHITE,
+            theme::strong(),
         );
         // The hovered app's description under the cards.
         let mut description = "";
@@ -418,19 +467,13 @@ impl App {
                 theme::CONVERTER_ACCENT,
                 "Convert a Minecraft world to a different edition and/or version.",
             ),
-            (
-                Icon::AppPruner,
-                "Pruner",
-                Page::Pruner,
-                theme::PRUNER_ACCENT,
-                "Select and delete unwanted areas of a Minecraft world.",
-            ),
         ]
         .into_iter()
         .enumerate()
         {
+            // (Two cards, side by side about the middle.)
             let r = Rect::from_center_size(
-                c + vec2((i as f32 - 1.0) * 212.0, 10.0),
+                c + vec2((i as f32 - 0.5) * 212.0, 10.0),
                 vec2(192.0, 192.0),
             );
             let resp = ui
@@ -441,9 +484,9 @@ impl App {
                 r,
                 theme::radius(6),
                 if resp.hovered() {
-                    Color32::from_rgb(0x2B, 0x30, 0x3B)
+                    theme::button_hover()
                 } else {
-                    theme::CARD
+                    theme::card()
                 },
             );
             p.rect_stroke(
@@ -452,9 +495,9 @@ impl App {
                 Stroke::new(
                     1.0_f32,
                     if resp.hovered() {
-                        Color32::from_rgb(0x33, 0x39, 0x42)
+                        theme::chip()
                     } else {
-                        theme::BORDER
+                        theme::border()
                     },
                 ),
                 egui::StrokeKind::Inside,
@@ -470,7 +513,7 @@ impl App {
                 Align2::CENTER_CENTER,
                 label,
                 theme::regular(15.0),
-                Color32::from_rgb(0xC0, 0xC6, 0xCE),
+                theme::text(),
             );
             if resp.hovered() {
                 description = about;
@@ -484,8 +527,64 @@ impl App {
             Align2::CENTER_CENTER,
             description,
             theme::regular(15.0),
-            Color32::from_rgb(0x9E, 0xAE, 0xC2),
+            theme::text_muted(),
         );
+    }
+
+    /// The names of the open worlds with changes not saved.
+    fn unsaved_worlds(&self) -> Vec<String> {
+        self.editor.workspaces.iter().filter(|w| w.dirty()).map(|w| w.name.clone()).collect()
+    }
+
+    /// "Save changes before closing?": Save writes every world with changes and closes (unless
+    /// one fails, which is said and the app stays open); Don't Save closes; Cancel stays.
+    fn quit_dialog(&mut self, ctx: &egui::Context) {
+        if !self.confirm_quit {
+            return;
+        }
+        let names = self.unsaved_worlds();
+        let which = match names.as_slice() {
+            [] => String::new(),
+            [one] => one.clone(),
+            many => format!("{} worlds ({})", many.len(), many.join(", ")),
+        };
+        let answer = editor::dialog(
+            ctx,
+            "confirm-quit",
+            "Save changes before closing?",
+            &[(format!("{which} has changes that are not saved."), false), ("Closing without saving loses them.".into(), true)],
+            &[(Some(Icon::Save), "Save"), (None, "Don't Save"), (None, "Cancel")],
+            true,
+        );
+        match answer {
+            Some(Some(0)) => {
+                let mut failed = None;
+                for ws in self.editor.workspaces.iter_mut().filter(|w| w.dirty()) {
+                    if let Err(e) = ws.save() {
+                        failed = Some(format!("Could not save {}: {e}", ws.name));
+                        break;
+                    }
+                }
+                self.confirm_quit = false;
+                match failed {
+                    Some(e) => {
+                        self.log.push(e.clone());
+                        self.toasts.push(ctx, e);
+                    }
+                    None => {
+                        self.quitting = true;
+                        ctx.send_viewport_cmd(ViewportCommand::Close);
+                    }
+                }
+            }
+            Some(Some(1)) => {
+                self.confirm_quit = false;
+                self.quitting = true;
+                ctx.send_viewport_cmd(ViewportCommand::Close);
+            }
+            Some(_) => self.confirm_quit = false,
+            None => {}
+        }
     }
 
     /// Collects page status messages into the debug log.
@@ -496,15 +595,11 @@ impl App {
             self.log.push(s.clone());
             self.last_statuses[0] = s.clone();
         }
-        for status in [
-            &mut self.converter.status,
-            &mut self.pruner.status,
-        ] {
-            if !status.is_empty() {
-                let text = std::mem::take(status);
-                self.log.push(text.clone());
-                self.toasts.push(ctx, text);
-            }
+        let status = &mut self.converter.status;
+        if !status.is_empty() {
+            let text = std::mem::take(status);
+            self.log.push(text.clone());
+            self.toasts.push(ctx, text);
         }
         if self.log.len() > 500 {
             self.log.drain(..100);
@@ -527,24 +622,46 @@ impl eframe::App for App {
         if over_button {
             ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
         }
-        // Each page has its own accent colour for highlights, buttons and switches.
+        // Each page has its own accent color for highlights, buttons and switches.
         let accent = match self.page {
             Some(Page::Editor) => theme::Accent::Green,
-            Some(Page::Pruner) => theme::Accent::Red,
             _ => theme::Accent::Blue,
         };
         theme::set_accent(accent);
         ctx.style_mut(|s| s.visuals.selection.bg_fill = theme::accent());
-        icons::set_texture_pack(self.settings.texture_pack());
         toasts::set_only_warnings(self.settings.hide_messages);
+        // The theme the settings ask for (System: as Windows is set, followed while running).
+        let light = match self.settings.theme {
+            1 => false,
+            2 => true,
+            _ => ctx.system_theme() == Some(egui::Theme::Light),
+        };
+        if light != theme::is_light() {
+            theme::set_light(ctx, light);
+        }
         if self.zoom != self.settings.zoom() {
             self.zoom = self.settings.zoom();
             ctx.set_zoom_factor(self.zoom);
         }
+        // Closing with unsaved changes in a world: not yet, first ask (from the taskbar too, so
+        // before the minimized window's early return; it is brought back up to ask).
+        if ctx.input(|i| i.viewport().close_requested()) && !self.quitting && !self.unsaved_worlds().is_empty() {
+            ctx.send_viewport_cmd(ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
+            self.confirm_quit = true;
+        }
+        // Minimized: nothing to draw (and the window's place and size then are Windows' own,
+        // far off screen and of no size, not to be remembered).
+        let minimized = ctx.input(|i| i.viewport().minimized.unwrap_or(false));
+        if minimized {
+            return;
+        }
         if self.settings.remember_position {
             if let Some(r) = ctx.input(|i| i.viewport().outer_rect) {
                 let w = [r.left(), r.top(), r.width(), r.height()];
-                if self.settings.window != Some(w)
+                let sane = r.left() > -10_000.0 && r.top() > -10_000.0 && r.width() >= 200.0 && r.height() >= 150.0;
+                if sane
+                    && self.settings.window != Some(w)
                     && !ctx.input(|i| i.viewport().maximized.unwrap_or(false))
                 {
                     self.settings.window = Some(w);
@@ -573,11 +690,12 @@ impl eframe::App for App {
             ));
         }
         Self::resize_edges(ctx);
+        self.quit_dialog(ctx);
         self.collect_log(ctx);
         self.toasts.show(ctx);
         egui::CentralPanel::default()
             // Windows draws the rounded outline (see `round_corners`).
-            .frame(egui::Frame::new().fill(theme::BG))
+            .frame(egui::Frame::new().fill(theme::bg()))
             .show(ctx, |ui| {
                 self.title_bar(ctx, ui);
                 let full = ui.max_rect();
@@ -605,7 +723,7 @@ impl eframe::App for App {
                             Rect::from_min_max(body.min, pos2(body.right(), y)),
                         )
                     };
-                    ui.painter().rect_filled(log_rect, 0.0, theme::DEEP);
+                    ui.painter().rect_filled(log_rect, 0.0, theme::deep());
                     let mut child =
                         ui.new_child(egui::UiBuilder::new().id_salt("debug-log").max_rect(log_rect.shrink(6.0)));
                     egui::ScrollArea::vertical()
@@ -617,7 +735,7 @@ impl eframe::App for App {
                                     egui::RichText::new(line)
                                         .monospace()
                                         .size(12.0)
-                                        .color(theme::TEXT_MUTED),
+                                        .color(theme::text_muted()),
                                 );
                             }
                         });
@@ -639,13 +757,6 @@ impl eframe::App for App {
                             self.converter.ui(&mut child, &mut self.settings)
                         {
                             self.open_picker(ctx, e, Purpose::Converter);
-                        }
-                    }
-                    Page::Pruner => {
-                        if let pruner::PrunerRequest::PickWorld(e) =
-                            self.pruner.ui(&mut child, &mut self.settings)
-                        {
-                            self.open_picker(ctx, e, Purpose::Pruner);
                         }
                     }
                     Page::Settings => {
@@ -682,7 +793,6 @@ impl eframe::App for App {
                     match purpose {
                         Purpose::Editor => self.editor.open_world(&path, edition, &self.settings),
                         Purpose::Converter => self.converter.set_input(path, edition),
-                        Purpose::Pruner => self.pruner.open_world(&path, edition, &self.settings),
                     }
                 }
             }
@@ -739,7 +849,42 @@ fn window_icon() -> egui::IconData {
     }
 }
 
+/// Where a crash is written down (`crash.log` in the app's settings folder), and the mark left
+/// for the next start to say so.
+fn crash_files() -> (std::path::PathBuf, std::path::PathBuf) {
+    let dir = settings::app_dir();
+    (dir.join("crash.log"), dir.join("crash_pending"))
+}
+
+/// Adds a line to `crash.log` (something that went wrong without closing the app).
+pub fn crash_note(text: &str) {
+    use std::io::Write;
+    let (log, _) = crash_files();
+    let _ = std::fs::create_dir_all(log.parent().unwrap_or(std::path::Path::new(".")));
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log) {
+        let _ = writeln!(f, "[{secs}] {text}");
+    }
+}
+
+/// On a crash: what happened, where, and the call stack, written to `crash.log`, and a mark for
+/// the next start to tell the user.
+fn install_crash_log() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let thread = std::thread::current().name().unwrap_or("unnamed").to_string();
+        let trace = std::backtrace::Backtrace::force_capture();
+        crash_note(&format!("MCToolKit {} crashed on thread '{thread}': {info}\n{trace}", env!("CARGO_PKG_VERSION")));
+        // Only the main thread's crash closes the app (a worker's is caught where it is used).
+        if thread == "main" {
+            let _ = std::fs::write(crash_files().1, b"1");
+        }
+        default(info);
+    }));
+}
+
 fn main() -> eframe::Result<()> {
+    install_crash_log();
     let settings = Settings::load();
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("MCToolKit")
@@ -747,10 +892,31 @@ fn main() -> eframe::Result<()> {
         .with_decorations(false)
         .with_inner_size([1250.0, 686.0])
         .with_min_inner_size([MIN_WIDTH, MIN_HEIGHT]);
-    if let (true, Some([x, y, w, h])) = (settings.remember_position, settings.window) {
+    // (A place saved while minimized, far off screen, is not used.)
+    if let (true, Some([x, y, w, h])) = (settings.remember_position, settings.window.filter(|w| w[0] > -10_000.0 && w[1] > -10_000.0)) {
         viewport = viewport
             .with_position([x, y])
             .with_inner_size([w.max(MIN_WIDTH), h.max(MIN_HEIGHT)]);
+    }
+    // For development: MCTK_DEV_SIZE=w,h opens the window that size (for screenshots).
+    if let Some((w, h)) = std::env::var("MCTK_DEV_SIZE").ok().and_then(|s| s.split_once(',').and_then(|(w, h)| Some((w.trim().parse::<f32>().ok()?, h.trim().parse::<f32>().ok()?)))) {
+        viewport = viewport.with_position([0.0, 0.0]).with_inner_size([w, h]);
+    }
+    // Drawn with wgpu (Vulkan or Direct3D 12) so the world viewer's 3D runs on the GPU, with a
+    // depth buffer for it; OpenGL if wgpu cannot start (MCTK_RENDERER=gl forces it).
+    let gl_only = std::env::var("MCTK_RENDERER").is_ok_and(|r| r == "gl");
+    if !gl_only {
+        let options = eframe::NativeOptions {
+            viewport: viewport.clone(),
+            renderer: eframe::Renderer::Wgpu,
+            depth_buffer: 24,
+            wgpu_options: gpu_world::wgpu_options(),
+            ..Default::default()
+        };
+        match eframe::run_native("mctoolkit", options, Box::new(|cc| Ok(Box::new(App::new(cc))))) {
+            Ok(()) => return Ok(()),
+            Err(e) => eprintln!("wgpu could not start ({e}); drawing with OpenGL"),
+        }
     }
     let options = eframe::NativeOptions {
         viewport,

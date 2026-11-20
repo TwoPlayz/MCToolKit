@@ -30,7 +30,8 @@ pub enum DocSource {
         z: i32,
     },
     BedrockKey(Vec<u8>),
-    /// Read-only view of a Bedrock chunk's NBT records.
+    /// A Bedrock chunk's NBT records gathered in one tree (block entities, pending ticks,
+    /// entities), each saved back to where it came from.
     BedrockChunk {
         dim: i32,
         x: i32,
@@ -44,7 +45,131 @@ pub enum DocSource {
     },
 }
 
+/// One of the World Explorer's editing tools.
+#[derive(Clone, Debug, PartialEq)]
+pub enum EditTool {
+    /// Makes every block in the selected box air.
+    DeleteBlocks,
+    /// Removes the entities standing in the selected box.
+    DeleteEntities,
+    /// Deletes the selected chunks.
+    DeleteChunks,
+    /// Fills the box with a block.
+    Fill(mctk_java::BlockState),
+    /// In the box, makes the blocks named `from` the block `to` (keeping the properties both
+    /// have when `keep` is set).
+    Replace { from: Vec<String>, to: mctk_java::BlockState, keep: bool },
+    /// Clears the box after it was copied.
+    Cut,
+    /// Places the copied box with its lowest north-west corner at `origin`.
+    Paste { origin: [i32; 3], place: crate::edit::transform::Placement, with_air: bool },
+    /// Paints a ball (or cube) of a block (air erases) around a block.
+    /// `stroke`: going on with the brush stroke before (dragged), one step to undo with it.
+    Brush { center: [i32; 3], radius: i32, sphere: bool, state: mctk_java::BlockState, stroke: bool },
+    /// Removes the one entity (mob, item...) standing at a place (the one selected).
+    DeleteEntity([f64; 3]),
+    /// Makes one block another (air removes it).
+    SetBlock([i32; 3], mctk_java::BlockState),
+    /// Turns one block a quarter turn, keeping what it holds.
+    TurnBlock([i32; 3]),
+    /// Sets properties of one block (waterlogged...), keeping what it holds.
+    BlockProps([i32; 3], Vec<(String, String)>),
+    /// Turns the entity standing at a place a quarter turn.
+    TurnEntity([f64; 3]),
+    /// Makes the entity standing at a place another kind (a Java id).
+    RetypeEntity([f64; 3], String),
+}
+
+impl EditTool {
+    pub fn label(&self) -> &'static str {
+        match self {
+            EditTool::DeleteBlocks => "Delete Blocks",
+            EditTool::DeleteEntities => "Delete Entities",
+            EditTool::DeleteChunks => "Delete Chunks",
+            EditTool::Fill(_) => "Fill",
+            EditTool::Replace { .. } => "Replace",
+            EditTool::Cut => "Cut",
+            EditTool::Paste { .. } => "Paste",
+            EditTool::Brush { .. } => "Brush",
+            EditTool::DeleteEntity(_) => "Delete Entity",
+            EditTool::SetBlock(..) => "Change Block",
+            EditTool::TurnBlock(_) => "Turn Block",
+            EditTool::BlockProps(..) => "Change Block",
+            EditTool::TurnEntity(_) => "Turn Entity",
+            EditTool::RetypeEntity(..) => "Change Entity",
+        }
+    }
+}
+
+/// The size of a file, or of everything in a folder.
+fn dir_size(path: &Path) -> u64 {
+    match std::fs::metadata(path) {
+        Ok(m) if m.is_file() => m.len(),
+        Ok(_) => std::fs::read_dir(path).into_iter().flatten().flatten().map(|e| dir_size(&e.path())).sum(),
+        Err(_) => 0,
+    }
+}
+
+/// "12.3 MB", "640 KB".
+fn human_size(bytes: u64) -> String {
+    if bytes >= 1 << 20 { format!("{:.1} MB", bytes as f64 / (1 << 20) as f64) } else { format!("{} KB", bytes.div_ceil(1024)) }
+}
+
+/// The chunks a box of blocks covers.
+fn box_chunks(lo: [i32; 3], hi: [i32; 3]) -> Vec<(i32, i32)> {
+    let mut v = Vec::new();
+    for cz in lo[2].div_euclid(16)..=hi[2].div_euclid(16) {
+        for cx in lo[0].div_euclid(16)..=hi[0].div_euclid(16) {
+            v.push((cx, cz));
+        }
+    }
+    v
+}
+
+/// The console dimension number for a dimension name (0, -1 the Nether, 1 the End).
+fn console_dim(dim: &str) -> i32 {
+    match dim {
+        "minecraft:the_nether" => -1,
+        "minecraft:the_end" => 1,
+        _ => 0,
+    }
+}
+
+/// A region file's position from its name (`r.-1.2.mca`).
+fn region_pos(file: &Path) -> Option<mctk_anvil::RegionPos> {
+    let name = file.file_name()?.to_str()?;
+    let mut parts = name.strip_prefix("r.")?.strip_suffix(".mca")?.split('.');
+    let x = parts.next()?.parse().ok()?;
+    let z = parts.next()?.parse().ok()?;
+    Some(mctk_anvil::RegionPos { x, z })
+}
+
 /// A number no other tab has had, so a tab keeps its identity when tabs are reordered.
+/// The entities region file beside a Java chunk region file (`<dimension>/entities/r.x.z.mca` for
+/// `<dimension>/region/r.x.z.mca`); `None` for a region file not in a `region` folder.
+fn entities_file(region: &Path) -> Option<PathBuf> {
+    let dir = region.parent()?;
+    let name = region.file_name()?;
+    (dir.file_name()? == "region").then(|| dir.parent().unwrap_or(Path::new(".")).join("entities").join(name))
+}
+
+/// A Java chunk's entities, kept apart since 1.17 (in `entities/`): their list, empty when none
+/// are saved (so some can be added). `None` for chunks from before, which hold their own.
+fn chunk_entities(region: &Path, x: i32, z: i32, chunk: &NamedTag) -> Option<Tag> {
+    // 1.17 (data version 2724) moved them out.
+    let version = chunk.tag.get("DataVersion").and_then(Tag::as_i64).unwrap_or(0);
+    if version < 2724 {
+        return None;
+    }
+    let file = entities_file(region)?;
+    let (lx, lz) = ChunkPos::new(x, z).local();
+    let stored = Region::open(&file).ok().and_then(|r| r.read_chunk(lx, lz).ok().flatten());
+    Some(match stored.as_ref().and_then(|s| s.tag.get("Entities")) {
+        Some(list @ Tag::List(_)) => list.clone(),
+        _ => Tag::List(List::new(TagType::Compound)),
+    })
+}
+
 /// A short name for a file or record, for messages.
 pub fn source_name(source: &DocSource) -> String {
     match source {
@@ -147,9 +272,12 @@ pub struct Workspace {
     pub docs: Vec<Doc>,
     pub active: Option<usize>,
     pub map: MapView,
-    pub show_locator: bool,
+    pub show_explorer: bool,
     /// The working copy differs from the original (e.g. after pruning).
     pub world_changed: bool,
+    /// A Bedrock world's database is written again, compacted, on the next save (giving back
+    /// the space the game leaves behind when it deletes records), even with nothing else changed.
+    pub optimize_on_save: bool,
     pub expanded: HashSet<String>,
     /// The file or folder picked in the side panel (the target of its shortcuts).
     pub selected_file: Option<PathBuf>,
@@ -202,6 +330,8 @@ pub struct Workspace {
     /// What the last file operation did, for the status line.
     pub file_note: String,
     backed_up: HashSet<PathBuf>,
+    /// A file or record read for its right-click menu (a player's effects), and what it holds.
+    pub peeked: Option<(DocSource, Option<mctk_nbt::Compound>)>,
 }
 
 pub fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
@@ -316,8 +446,9 @@ impl Workspace {
             docs: Vec::new(),
             active: None,
             map: MapView::new(path.to_path_buf(), we),
-            show_locator: false,
+            show_explorer: false,
             world_changed: false,
+            optimize_on_save: false,
             expanded: HashSet::from(["level".to_string()]),
             selected_file: None,
             file_clip: None,
@@ -347,6 +478,7 @@ impl Workspace {
             db_dirty: false,
             console_dirty: false,
             file_note: String::new(),
+            peeked: None,
             backed_up: HashSet::new(),
         };
         match edition {
@@ -405,8 +537,9 @@ impl Workspace {
             docs: Vec::new(),
             active: None,
             map: MapView::new(dir, crate::world::Edition::Java),
-            show_locator: false,
+            show_explorer: false,
             world_changed: false,
+            optimize_on_save: false,
             expanded,
             selected_file: None,
             file_clip: None,
@@ -436,6 +569,7 @@ impl Workspace {
             db_dirty: false,
             console_dirty: false,
             file_note: String::new(),
+            peeked: None,
             backed_up: HashSet::new(),
         }
     }
@@ -474,7 +608,12 @@ impl Workspace {
     }
 
     pub fn dirty(&self) -> bool {
-        self.world_changed || !self.gone.is_empty() || self.docs.iter().any(|d| d.tree.dirty)
+        self.world_changed || !self.gone.is_empty() || self.docs.iter().any(|d| d.tree.dirty) || self.has_edits() || self.optimize_on_save
+    }
+
+    /// Whether the World Explorer's tools changed anything not saved yet.
+    pub fn has_edits(&self) -> bool {
+        self.map.edits.read().is_ok_and(|l| l.is_dirty())
     }
 
     /// Whether a file or record is marked deleted (or sits inside a deleted folder).
@@ -676,7 +815,7 @@ impl Workspace {
     }
 
     fn history_doc(&self) -> Option<&Doc> {
-        if self.show_locator {
+        if self.show_explorer {
             return None;
         }
         self.active.and_then(|i| self.docs.get(i))
@@ -685,16 +824,24 @@ impl Workspace {
     /// Whether the Undo button has anything to take back: the open tab's tag edits or a file
     /// change on the left.
     pub fn can_undo_any(&self) -> bool {
-        self.history_doc().is_some_and(|d| d.tree.can_undo()) || !self.ops.is_empty()
+        self.edit_history(false) || self.history_doc().is_some_and(|d| d.tree.can_undo()) || !self.ops.is_empty()
     }
 
     pub fn can_redo_any(&self) -> bool {
-        self.history_doc().is_some_and(|d| d.tree.can_redo()) || !self.ops_redo.is_empty()
+        self.edit_history(true) || self.history_doc().is_some_and(|d| d.tree.can_redo()) || !self.ops_redo.is_empty()
     }
 
-    /// Takes back whichever happened last, a tag edit in the open tab or a file change. Returns
-    /// what was undone, to tell the user.
+    /// In the World Explorer: whether its tools have a step to undo (or redo).
+    fn edit_history(&self, redo: bool) -> bool {
+        self.show_explorer && self.map.edits.read().is_ok_and(|l| if redo { l.can_redo() } else { l.can_undo() })
+    }
+
+    /// Takes back whichever happened last, a tag edit in the open tab or a file change (in the
+    /// World Explorer, its tools' last step). Returns what was undone, to tell the user.
     pub fn undo_any(&mut self) -> Result<String, String> {
+        if self.edit_history(false) {
+            return Ok(self.undo_edit(false).unwrap_or_default());
+        }
         let tag = self.history_doc().filter(|d| d.tree.can_undo()).map(|d| d.stamp);
         let file = self.ops.last().map(|(s, _)| *s);
         if file.is_some() && file > tag {
@@ -723,7 +870,7 @@ impl Workspace {
                 n => format!("Restored {n} items"),
             });
         }
-        if let Some(i) = self.active.filter(|_| !self.show_locator && tag.is_some()) {
+        if let Some(i) = self.active.filter(|_| !self.show_explorer && tag.is_some()) {
             if let Some(d) = self.docs.get_mut(i) {
                 d.tree.undo();
                 self.last_undone_file = false;
@@ -734,6 +881,9 @@ impl Workspace {
     }
 
     pub fn redo_any(&mut self) -> Result<String, String> {
+        if self.edit_history(true) {
+            return Ok(self.undo_edit(true).unwrap_or_default());
+        }
         let tag = self.history_doc().is_some_and(|d| d.tree.can_redo());
         let file = !self.ops_redo.is_empty();
         if file && (!tag || self.last_undone_file) {
@@ -941,9 +1091,127 @@ impl Workspace {
         }
     }
 
+    /// Writes a Bedrock chunk's tags back to the records they were gathered from: its block
+    /// entities and pending ticks to the chunk's own records, and each entity to its record
+    /// (found by its `UniqueID` among those the chunk lists), the chunk's list made to match.
+    /// An entity with no record yet goes in the chunk's old entity record when it has one, else
+    /// gets a record of its own. One no longer there has its record removed.
+    fn save_bedrock_chunk(&mut self, dim: i32, x: i32, z: i32, root: &NamedTag) -> Result<(), String> {
+        let w = self.bedrock.as_mut().ok_or("world not loaded")?;
+        let d = mctk_bedrock::Dimension::from_id(dim).ok_or("bad dimension")?;
+        let key = |tag| ChunkKey { x, z, dimension: d, tag, subchunk: None }.encode();
+        let list = |name: &str| -> Vec<Compound> {
+            root.tag.get(name).and_then(Tag::as_list).map(|l| l.iter().filter_map(Tag::as_compound).cloned().collect()).unwrap_or_default()
+        };
+        let bytes = |c: &Compound| mctk_nbt::to_bytes(&NamedTag { name: String::new(), tag: Tag::Compound(c.clone()) }, Flavor::Bedrock).map_err(|e| e.to_string());
+        let joined = |items: &[Compound]| -> Result<Vec<u8>, String> {
+            let mut out = Vec::new();
+            for c in items {
+                out.extend(bytes(c)?);
+            }
+            Ok(out)
+        };
+        for (name, tag) in [("BlockEntities", ChunkTag::BlockEntity), ("PendingTicks", ChunkTag::PendingTicks)] {
+            let items = list(name);
+            if items.is_empty() {
+                w.db.entries.remove(&key(tag));
+            } else {
+                w.db.entries.insert(key(tag), joined(&items)?);
+            }
+        }
+        // The entities' own records, by the `UniqueID` each holds.
+        let digp = Key::ActorDigest { x, z, dimension: d }.encode();
+        let listed: Vec<Vec<u8>> = w.db.get(&digp).unwrap_or_default().chunks_exact(8).map(<[u8]>::to_vec).collect();
+        let mut by_id: std::collections::HashMap<i64, Vec<u8>> = std::collections::HashMap::new();
+        for uid in &listed {
+            let id = w.db.get(&Key::Actor(uid.clone()).encode()).and_then(bedrock_nbt).and_then(|t| t.tag.get("UniqueID").and_then(Tag::as_i64));
+            if let Some(id) = id {
+                by_id.insert(id, uid.clone());
+            }
+        }
+        let had_old = w.db.get(&key(ChunkTag::Entity)).is_some();
+        let (mut kept, mut old) = (Vec::new(), Vec::new());
+        for a in list("Entities") {
+            let id = a.get("UniqueID").and_then(Tag::as_i64);
+            let uid = match id.and_then(|i| by_id.get(&i).cloned()) {
+                Some(uid) => uid,
+                None if had_old => {
+                    old.push(a);
+                    continue;
+                }
+                // New here: a record of its own, named by its id.
+                None => id.unwrap_or_else(|| kept.len() as i64 + 1).to_le_bytes().to_vec(),
+            };
+            w.db.entries.insert(Key::Actor(uid.clone()).encode(), bytes(&a)?);
+            kept.push(uid);
+        }
+        for uid in listed.iter().filter(|u| !kept.contains(u)) {
+            w.db.entries.remove(&Key::Actor(uid.clone()).encode());
+        }
+        if kept.is_empty() {
+            w.db.entries.remove(&digp);
+        } else {
+            w.db.entries.insert(digp, kept.concat());
+        }
+        if had_old {
+            if old.is_empty() {
+                w.db.entries.remove(&key(ChunkTag::Entity));
+            } else {
+                w.db.entries.insert(key(ChunkTag::Entity), joined(&old)?);
+            }
+        }
+        Ok(())
+    }
+
+    /// Before saving a Java chunk shown with its entities (see `chunk_entities`): the chunk
+    /// without them, its `Entities` written to the entities file they came from (one made for it
+    /// when there was none and it now has some).
+    fn split_entities(&mut self, region: &Path, x: i32, z: i32, mut root: NamedTag, now: u32) -> Result<NamedTag, String> {
+        let Some(file) = entities_file(region) else { return Ok(root) };
+        let Some(Tag::List(list)) = root.tag.as_compound_mut().and_then(|c| c.shift_remove("Entities")) else { return Ok(root) };
+        let pos = ChunkPos::new(x, z);
+        let (lx, lz) = pos.local();
+        let old = Region::open(&file).ok();
+        let stored = old.as_ref().and_then(|r| r.read_chunk(lx, lz).ok().flatten());
+        if stored.is_none() && list.is_empty() {
+            return Ok(root);
+        }
+        let mut record = match stored {
+            Some(NamedTag { tag: Tag::Compound(c), .. }) => c,
+            _ => {
+                let mut c = Compound::new();
+                let version = root.tag.get("DataVersion").and_then(Tag::as_i64).unwrap_or(0) as i32;
+                c.insert("DataVersion".into(), Tag::Int(version));
+                c.insert("Position".into(), Tag::IntArray(vec![x, z]));
+                c
+            }
+        };
+        record.insert("Entities".into(), Tag::List(list));
+        let record = NamedTag { name: String::new(), tag: Tag::Compound(record) };
+        let mut b = match &old {
+            Some(r) => {
+                self.backup_file(&file).map_err(|e| e.to_string())?;
+                RegionBuilder::from_region(r).map_err(|e| e.to_string())?
+            }
+            None => RegionBuilder::default(),
+        };
+        b.set(lx, lz, Some(RawChunk::encode(&record, ChunkCompression::Zlib, now).map_err(|e| e.to_string())?));
+        let dir = file.parent().unwrap_or(Path::new("."));
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        b.write(dir, pos.region()).map_err(|e| e.to_string())?;
+        Ok(root)
+    }
+
     // -------------------------------------------------------------- documents
 
     fn load(&self, source: &DocSource) -> Result<(String, Option<Format>, NamedTag, bool), String> {
+        // A chunk the World Explorer's tools changed opens once those changes are saved (the
+        // tab would show it as it was).
+        if let Some(id) = self.tab_chunk(source) {
+            if self.map.edits.read().is_ok_and(|l| l.has_chunk(&id)) {
+                return Err(format!("Chunk {}, {} has unsaved changes from the World Explorer: save the world first", id.1, id.2));
+            }
+        }
         match source {
             DocSource::File(p) => {
                 let name = p.file_name().unwrap_or_default().to_string_lossy();
@@ -962,11 +1230,24 @@ impl Workspace {
             DocSource::JavaChunk { region, x, z } => {
                 let r = Region::open(region).map_err(|e| e.to_string())?;
                 let (lx, lz) = ChunkPos::new(*x, *z).local();
-                let root = r
+                let mut root = r
                     .read_chunk(lx, lz)
                     .map_err(|e| e.to_string())?
                     .ok_or("that chunk is not stored")?;
-                Ok((format!("Chunk {x}, {z}"), None, root, false))
+                // The same kind of file holds a chunk's entities (in `entities/`).
+                let entities = region.parent().and_then(|d| d.file_name()).is_some_and(|n| n == "entities");
+                let title = if entities { format!("Entities {x}, {z}") } else { format!("Chunk {x}, {z}") };
+                // Since 1.17 a chunk's mobs, items and other entities are kept apart, in
+                // `entities/`: shown here among the chunk's tags, as `Entities`, and put back
+                // there on saving (see `split_entities`).
+                if !entities {
+                    if let Some(list) = chunk_entities(region, *x, *z, &root) {
+                        if let Some(c) = root.tag.as_compound_mut() {
+                            c.insert("Entities".into(), list);
+                        }
+                    }
+                }
+                Ok((title, None, root, false))
             }
             DocSource::BedrockKey(k) => {
                 let w = self.bedrock.as_ref().ok_or("world not loaded")?;
@@ -1023,7 +1304,18 @@ impl Workspace {
                         let _ = actors.push(t.tag);
                     }
                 }
+                // Before 1.18.30 a chunk kept its entities in a record of its own.
+                let mut s = w.db.get(&key(ChunkTag::Entity)).unwrap_or_default();
+                while !s.is_empty() {
+                    match mctk_nbt::read_root(&mut s, Flavor::Bedrock) {
+                        Ok(t) => {
+                            let _ = actors.push(t.tag);
+                        }
+                        Err(_) => break,
+                    }
+                }
                 root.insert("Entities".into(), Tag::List(actors));
+                // Editable: saving puts each part back (see `save_bedrock_chunk`).
                 Ok((
                     format!("Chunk {x}, {z}"),
                     None,
@@ -1031,7 +1323,7 @@ impl Workspace {
                         name: String::new(),
                         tag: Tag::Compound(root),
                     },
-                    true,
+                    false,
                 ))
             }
             DocSource::ConsoleEntry(name) => {
@@ -1066,6 +1358,22 @@ impl Workspace {
     }
 
     /// Opens (or focuses) a document tab.
+    /// What a file or record holds at its root (as open, if it is), read once for a menu and
+    /// kept until `peeked` is cleared.
+    pub fn peek_root(&mut self, source: &DocSource) -> Option<mctk_nbt::Compound> {
+        if let Some((s, c)) = &self.peeked {
+            if s == source {
+                return c.clone();
+            }
+        }
+        let c = match self.docs.iter().find(|d| d.source == *source) {
+            Some(d) => d.tree.root.tag.as_compound().cloned(),
+            None => self.load(source).ok().and_then(|(_, _, root, _)| root.tag.as_compound().cloned()),
+        };
+        self.peeked = Some((source.clone(), c.clone()));
+        c
+    }
+
     pub fn open_doc(&mut self, source: DocSource) -> Result<(), String> {
         // Something marked deleted is only waiting to go; it is not opened.
         if self.is_gone(&source) {
@@ -1073,7 +1381,7 @@ impl Workspace {
         }
         if let Some(i) = self.docs.iter().position(|d| d.source == source) {
             self.active = Some(i);
-            self.show_locator = false;
+            self.show_explorer = false;
             return Ok(());
         }
         let (title, format, root, read_only) = self.load(&source)?;
@@ -1091,7 +1399,7 @@ impl Workspace {
             stamp: 0,
         });
         self.active = Some(self.docs.len() - 1);
-        self.show_locator = false;
+        self.show_explorer = false;
         Ok(())
     }
 
@@ -1221,6 +1529,357 @@ impl Workspace {
         Ok(format!("Deleted {}", file_label(path)))
     }
 
+    // -----------------------------------------------------------------------------------------
+    // The World Explorer's editing tools
+    // -----------------------------------------------------------------------------------------
+
+    /// The world under the edit layer, for the map's dimension `dim`.
+    pub(crate) fn edit_base(&self, dim: &str) -> Result<crate::edit::chunks::Base<'_>, String> {
+        use crate::edit::chunks::Base;
+        Ok(match self.edition {
+            UiEdition::Java => {
+                let w = mctk_java::JavaWorld::open(&self.path).map_err(|e| e.to_string())?;
+                let d = w.dimension(dim).ok_or("no such dimension")?;
+                Base::Java { region_dir: d.region_dir(), entities_dir: d.entities_dir() }
+            }
+            UiEdition::Bedrock => {
+                let world = self.bedrock.as_ref().ok_or("world not loaded")?;
+                let d = match dim {
+                    "minecraft:the_nether" => mctk_bedrock::Dimension::Nether,
+                    "minecraft:the_end" => mctk_bedrock::Dimension::End,
+                    _ => mctk_bedrock::Dimension::Overworld,
+                };
+                Base::Bedrock { world, dim: d }
+            }
+            _ => {
+                let save = self.console.as_ref().ok_or("save not loaded")?;
+                Base::Console { save, dim: console_dim(dim) }
+            }
+        })
+    }
+
+    /// The chunk a chunk tab shows (dimension, x, z).
+    fn tab_chunk(&self, source: &DocSource) -> Option<crate::edit::layer::ChunkId> {
+        match source {
+            DocSource::JavaChunk { region, x, z } => {
+                let p = region.to_string_lossy();
+                let dim = if p.contains("DIM-1") {
+                    "minecraft:the_nether"
+                } else if p.contains("DIM1") {
+                    "minecraft:the_end"
+                } else {
+                    "minecraft:overworld"
+                };
+                Some((dim.to_string(), *x, *z))
+            }
+            DocSource::BedrockChunk { dim, x, z } => Some((["minecraft:overworld", "minecraft:the_nether", "minecraft:the_end"].get(*dim as usize).copied().unwrap_or("minecraft:overworld").to_string(), *x, *z)),
+            DocSource::ConsoleChunk { x, z, .. } => Some((self.map.dimension.clone(), *x, *z)),
+            _ => None,
+        }
+    }
+
+    /// Before a tool changes chunks: a tab with unsaved changes open on one of them stops it;
+    /// tabs without changes close (they would show the chunk as it was).
+    fn release_tabs(&mut self, chunks: &[(i32, i32)]) -> Result<(), String> {
+        let dim = self.map.dimension.clone();
+        let hit = |ws: &Workspace, d: &Doc| ws.tab_chunk(&d.source).is_some_and(|(dd, x, z)| dd == dim && chunks.contains(&(x, z)));
+        if let Some(d) = self.docs.iter().find(|d| hit(self, d) && d.tree.dirty) {
+            return Err(format!("Save or close the tab \u{201c}{}\u{201d} first (it has unsaved changes)", d.title));
+        }
+        while let Some(i) = self.docs.iter().position(|d| hit(self, d)) {
+            self.close_doc(i);
+        }
+        Ok(())
+    }
+
+    /// Runs one of the World Explorer's tools on the box (or, for chunks, the chunks) selected:
+    /// one step to undo, shown at once in 3D, written when the world is saved.
+    pub fn run_edit(&mut self, tool: EditTool) -> Result<String, String> {
+        use crate::edit::tools;
+        let sel = self.map.sel_box;
+        let chunks: Vec<(i32, i32)> = match (&tool, sel) {
+            (EditTool::DeleteChunks, _) => self.map.selected.clone(),
+            (EditTool::DeleteEntity(p) | EditTool::TurnEntity(p) | EditTool::RetypeEntity(p, _), _) => box_chunks([p[0].floor() as i32, 0, p[2].floor() as i32], [p[0].floor() as i32, 0, p[2].floor() as i32]),
+            (EditTool::SetBlock(p, _) | EditTool::TurnBlock(p) | EditTool::BlockProps(p, _), _) => box_chunks(*p, *p),
+            (EditTool::Brush { center: c, radius: r, .. }, _) => box_chunks([c[0] - r, c[1] - r, c[2] - r], [c[0] + r, c[1] + r, c[2] + r]),
+            (EditTool::Paste { origin, place, .. }, _) => {
+                let clip = self.map.clipboard.as_ref().ok_or("Copy something first")?;
+                let size = place.size(clip.size);
+                box_chunks(*origin, [origin[0] + size[0] - 1, origin[1] + size[1] - 1, origin[2] + size[2] - 1])
+            }
+            (_, Some((lo, hi))) => box_chunks(lo, hi),
+            (_, None) => return Err("Select a box first (Box Select)".into()),
+        };
+        if chunks.is_empty() {
+            return Err("Select some chunks first".into());
+        }
+        let plural = |n: usize, w: &str| match (w, n) {
+            ("entity", 1) => "1 entity".to_string(),
+            ("entity", n) => format!("{n} entities"),
+            (w, 1) => format!("1 {w}"),
+            (w, n) => format!("{n} {w}s"),
+        };
+        let blocks = |d: &tools::Done| {
+            let mut m = if d.blocks == 0 { "nothing to change".to_string() } else { format!("{} in {}", plural(d.blocks, "block"), plural(d.chunks, "chunk")) };
+            if d.unmapped > 0 {
+                m.push_str(&format!(" ({} this kind of world has no such block for)", plural(d.unmapped, "block")));
+            }
+            m
+        };
+        let clip = self.map.clipboard.clone();
+        let resume = matches!(tool, EditTool::Brush { stroke: true, .. });
+        let (msg, notes) = self.edit_step(tool.label(), &chunks, resume, |ed| match &tool {
+            EditTool::DeleteBlocks => {
+                let n = tools::delete_blocks(ed, sel.expect("checked"));
+                if n == 0 { "Nothing there to change".to_string() } else { format!("Cleared the box ({})", plural(n, "chunk")) }
+            }
+            EditTool::DeleteEntities => format!("Removed {}", plural(tools::delete_entities(ed, sel.expect("checked")), "entity")),
+            EditTool::DeleteChunks => format!("Deleted {}", plural(tools::delete_chunks(ed, &chunks), "chunk")),
+            EditTool::Fill(state) => format!("Filled: {}", blocks(&tools::fill(ed, sel.expect("checked"), state))),
+            EditTool::Replace { from, to, keep } => format!("Replaced: {}", blocks(&tools::replace(ed, sel.expect("checked"), from, to, *keep))),
+            EditTool::Cut => {
+                let n = tools::delete_blocks(ed, sel.expect("checked"));
+                let e = tools::delete_entities(ed, sel.expect("checked"));
+                format!("Cut the box ({}, {})", plural(n, "chunk"), plural(e, "entity"))
+            }
+            EditTool::Paste { origin, place, with_air } => match &clip {
+                Some(c) => {
+                    let done = tools::paste(ed, c, *origin, *place, *with_air);
+                    let e = tools::paste_entities(ed, c, *origin, *place);
+                    let mut m = format!("Pasted: {}", blocks(&done));
+                    if e > 0 {
+                        m.push_str(&format!(" and {}", plural(e, "entity")));
+                    }
+                    m
+                }
+                None => "Copy something first".into(),
+            },
+            EditTool::DeleteEntity(p) => {
+                if tools::delete_entity_at(ed, *p) { "Removed it".to_string() } else { "It was not found there".to_string() }
+            }
+            EditTool::Brush { center, radius, sphere, state, .. } => format!("Painted: {}", blocks(&tools::brush(ed, *center, *radius, *sphere, state))),
+            EditTool::SetBlock(p, state) => {
+                tools::fill(ed, (*p, *p), state);
+                if state.name.ends_with(":air") { "Removed the block".into() } else { format!("Made it {}", crate::item_picker::display_name(&state.name)) }
+            }
+            EditTool::TurnBlock(p) => {
+                tools::turn_block(ed, *p);
+                "Turned the block".into()
+            }
+            EditTool::BlockProps(p, props) => {
+                tools::set_block_props(ed, *p, props);
+                props.iter().map(|(k, v)| format!("{k}: {v}")).collect::<Vec<_>>().join(", ")
+            }
+            EditTool::TurnEntity(p) => {
+                if tools::edit_entity_at(ed, *p, &tools::turn_entity) { "Turned it".into() } else { "It was not found there".into() }
+            }
+            EditTool::RetypeEntity(p, id) => {
+                let id = id.clone();
+                if tools::edit_entity_at(ed, *p, &move |e| tools::retype_entity(e, &id)) { "Changed it".into() } else { "It was not found there".into() }
+            }
+        })?;
+        Ok(match notes.first() {
+            Some(first) => format!("{msg}. {first}"),
+            None => msg,
+        })
+    }
+
+    /// One step of the editing tools over `chunks`: open tabs on them dealt with, `run` given
+    /// the world to change through the edit layer, the step kept to undo and the 3D view told.
+    /// Gives what `run` said and what could not be done.
+    fn edit_step(&mut self, label: &str, chunks: &[(i32, i32)], resume: bool, run: impl FnOnce(&mut crate::edit::chunks::Editor) -> String) -> Result<(String, Vec<String>), String> {
+        self.release_tabs(chunks)?;
+        let dim = self.map.dimension.clone();
+        let edits = self.map.edits.clone();
+        let mut layer = edits.write().map_err(|_| "the edits are locked")?;
+        let base = self.edit_base(&dim)?;
+        let mut ed = crate::edit::chunks::Editor { layer: &mut layer, base, dim: dim.clone(), notes: Vec::new() };
+        if resume {
+            ed.layer.resume(label);
+        } else {
+            ed.layer.begin(label);
+        }
+        let msg = run(&mut ed);
+        let notes = std::mem::take(&mut ed.notes);
+        let changed = ed.layer.commit();
+        drop(layer);
+        let here: Vec<(i32, i32)> = changed.iter().filter(|(d, ..)| *d == dim).map(|(_, x, z)| (*x, *z)).collect();
+        self.map.edits_changed(&here);
+        Ok((msg, notes))
+    }
+
+    /// Copies the box selected (blocks and block entities) for Paste; with `cut`, the box is
+    /// then cleared (one step to undo).
+    pub fn copy_box(&mut self, cut: bool) -> Result<String, String> {
+        let (lo, hi) = self.map.sel_box.ok_or("Select a box first (Box Select)")?;
+        let dim = self.map.dimension.clone();
+        let clip = {
+            let edits = self.map.edits.clone();
+            let mut layer = edits.write().map_err(|_| "the edits are locked")?;
+            let base = self.edit_base(&dim)?;
+            let ed = crate::edit::chunks::Editor { layer: &mut layer, base, dim, notes: Vec::new() };
+            crate::edit::tools::copy(&ed, (lo, hi))
+        };
+        let (size, solid) = (clip.size, clip.solid());
+        self.map.clipboard = Some(clip);
+        let what = format!("{} \u{d7} {} \u{d7} {} ({solid} blocks)", size[0], size[1], size[2]);
+        if cut {
+            self.run_edit(EditTool::Cut)?;
+            return Ok(format!("Cut {what}: Paste to place it"));
+        }
+        Ok(format!("Copied {what}: Paste to place it"))
+    }
+
+    /// Reads a schematic file (`.schem`, `.nbt`, `.mcstructure`, `.schematic`) as the copy to
+    /// paste, and starts placing it.
+    pub fn import_schematic(&mut self, path: &Path) -> Result<String, String> {
+        use crate::edit::schematic::{Format, read};
+        let format = Format::from_path(path).ok_or("Not a schematic file (.schem, .nbt, .mcstructure or .schematic)")?;
+        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+        let clip = read(&bytes, format).map_err(|e| format!("Could not read the {}: {e}", format.name()))?;
+        let (size, solid) = (clip.size, clip.solid());
+        self.map.clipboard = Some(clip);
+        self.map.paste = Some(Default::default());
+        Ok(format!("{} \u{d7} {} \u{d7} {} ({solid} blocks) from {}: click where it goes", size[0], size[1], size[2], path.file_name().unwrap_or_default().to_string_lossy()))
+    }
+
+    /// Writes the box selected as a schematic file (its format by the file's extension).
+    pub fn export_selection(&mut self, path: &Path) -> Result<String, String> {
+        use crate::edit::schematic::{Format, write};
+        let format = Format::from_path(path).ok_or("Pick a schematic file type (.schem, .nbt, .mcstructure or .schematic)")?;
+        let b = self.map.sel_box.ok_or("Select a box first (Box Select)")?;
+        let dim = self.map.dimension.clone();
+        let clip = {
+            let edits = self.map.edits.clone();
+            let mut layer = edits.write().map_err(|_| "the edits are locked")?;
+            let base = self.edit_base(&dim)?;
+            let ed = crate::edit::chunks::Editor { layer: &mut layer, base, dim, notes: Vec::new() };
+            crate::edit::tools::copy(&ed, b)
+        };
+        let bytes = write(&clip, format)?;
+        std::fs::write(path, bytes).map_err(|e| e.to_string())?;
+        Ok(format!("Saved the box as a {} ({})", format.name(), path.file_name().unwrap_or_default().to_string_lossy()))
+    }
+
+    /// Takes back the editing tools' last step (in the World Explorer).
+    fn undo_edit(&mut self, redo: bool) -> Option<String> {
+        let edits = self.map.edits.clone();
+        let mut layer = edits.write().ok()?;
+        let (label, chunks) = if redo { layer.redo()? } else { layer.undo()? };
+        drop(layer);
+        let dim = self.map.dimension.clone();
+        let here: Vec<(i32, i32)> = chunks.iter().filter(|(d, ..)| *d == dim).map(|(_, x, z)| (*x, *z)).collect();
+        self.map.edits_changed(&here);
+        Some(if redo { format!("Redid {label}") } else { format!("Undid {label}") })
+    }
+
+    /// Writes the editing tools' changes into the world (files for Java, the database for
+    /// Bedrock, the save's regions for console). Gives the chunks written (in the map's
+    /// dimension), and whether the database or the console save must be written out.
+    fn save_edits(&mut self, now: u32) -> Result<(Vec<(i32, i32)>, bool, bool, bool), String> {
+        let edits = self.map.edits.clone();
+        let layer = edits.read().map_err(|_| "the edits are locked")?;
+        if !layer.is_dirty() {
+            return Ok((Vec::new(), false, false, false));
+        }
+        let all = layer.chunks();
+        let deleted = all.iter().any(|c| layer.is_deleted(c)) || layer.bedrock.values().any(Option::is_none);
+        let here: Vec<(i32, i32)> = all.iter().filter(|(d, ..)| *d == self.map.dimension).map(|(_, x, z)| (*x, *z)).collect();
+        let (mut db, mut console) = (false, false);
+        // Java: each region file (and entities file) once, with all its chunks.
+        if !layer.java.is_empty() {
+            let w = mctk_java::JavaWorld::open(&self.path).map_err(|e| e.to_string())?;
+            let mut files: std::collections::BTreeMap<PathBuf, Vec<(usize, usize, Option<NamedTag>)>> = Default::default();
+            for ((dim, x, z), jc) in &layer.java {
+                let d = w.dimension(dim).ok_or("no such dimension")?;
+                let pos = ChunkPos::new(*x, *z);
+                let (lx, lz) = pos.local();
+                let name = pos.region().file_name();
+                files.entry(d.region_dir().join(&name)).or_default().push((lx, lz, jc.root.clone()));
+                if let Some(e) = &jc.entities {
+                    files.entry(d.entities_dir().join(&name)).or_default().push((lx, lz, e.clone()));
+                }
+            }
+            for (file, chunks) in files {
+                let old = Region::open(&file).ok();
+                let mut b = match &old {
+                    Some(r) => {
+                        self.backup_file(&file).map_err(|e| e.to_string())?;
+                        RegionBuilder::from_region(r).map_err(|e| e.to_string())?
+                    }
+                    None if chunks.iter().all(|c| c.2.is_none()) => continue,
+                    None => RegionBuilder::default(),
+                };
+                for (lx, lz, root) in chunks {
+                    let raw = match root {
+                        Some(r) => Some(RawChunk::encode(&r, ChunkCompression::Zlib, now).map_err(|e| e.to_string())?),
+                        None => None,
+                    };
+                    b.set(lx, lz, raw);
+                }
+                let dir = file.parent().unwrap_or(Path::new(".")).to_path_buf();
+                std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                let pos = region_pos(&file).ok_or("bad region file name")?;
+                b.write(&dir, pos).map_err(|e| e.to_string())?;
+            }
+        }
+        // Bedrock: into the database, written out with the rest.
+        if !layer.bedrock.is_empty() {
+            let w = self.bedrock.as_mut().ok_or("world not loaded")?;
+            for (k, v) in &layer.bedrock {
+                match v {
+                    Some(v) => {
+                        w.db.entries.insert(k.clone(), v.clone());
+                    }
+                    None => {
+                        w.db.entries.remove(k);
+                    }
+                }
+            }
+            db = true;
+        }
+        // Console: each region entry once, with all its chunks.
+        if !layer.console.is_empty() {
+            // The console games keep light as saved: the chunks changed (and those beside them)
+            // lit again here, so they look right when the world is loaded.
+            let mut roots: std::collections::BTreeMap<crate::edit::layer::ChunkId, Option<NamedTag>> = layer.console.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            let dims: std::collections::BTreeSet<String> = roots.keys().map(|k| k.0.clone()).collect();
+            for dim in dims {
+                let edited: Vec<(i32, i32)> = roots.iter().filter(|(k, v)| k.0 == dim && v.is_some()).map(|(k, _)| (k.1, k.2)).collect();
+                for ((x, z), root) in crate::gpu_world::console_relight(&self.path, &dim, &layer, &edited) {
+                    roots.insert((dim.clone(), x, z), Some(root));
+                }
+            }
+            let s = self.console.as_mut().ok_or("save not loaded")?;
+            let codec = s.platform.chunk_codec();
+            let mut by_entry: std::collections::BTreeMap<String, Vec<(usize, usize, Option<NamedTag>)>> = Default::default();
+            for ((dim, x, z), root) in &roots {
+                let want = console_dim(dim);
+                let (rx, rz) = (x.div_euclid(32), z.div_euclid(32));
+                let Some(entry) = s.archive.regions().into_iter().find(|(d, a, b, _)| *d == want && *a == rx && *b == rz).map(|e| e.3.name.clone()) else { continue };
+                by_entry.entry(entry).or_default().push((x.rem_euclid(32) as usize, z.rem_euclid(32) as usize, root.clone()));
+            }
+            for (entry, chunks) in by_entry {
+                let e = s.archive.entries.iter_mut().find(|e| e.name == entry).ok_or("region missing")?;
+                let r = ConsoleRegion::parse(e.data.clone()).map_err(|e| e.to_string())?;
+                let mut b = ConsoleRegionBuilder::default();
+                for (lx, lz) in r.chunks().collect::<Vec<_>>() {
+                    b.set(lx, lz, r.raw_chunk(lx, lz).map_err(|e| e.to_string())?);
+                }
+                for (lx, lz, root) in chunks {
+                    let raw = match root {
+                        Some(r) => Some(RawConsoleChunk::encode(&r, codec, now).map_err(|e| e.to_string())?),
+                        None => None,
+                    };
+                    b.set(lx, lz, raw);
+                }
+                e.data = b.build().map_err(|e| e.to_string())?;
+            }
+            console = true;
+        }
+        Ok((here, db, console, deleted))
+    }
+
     fn backup_file(&mut self, path: &Path) -> std::io::Result<()> {
         if !self.copied && path.is_file() && self.backed_up.insert(path.to_path_buf()) {
             std::fs::copy(path, backup_name(path, "_MCTBackup"))?;
@@ -1249,13 +1908,33 @@ impl Workspace {
             .map_or(0, |d| d.as_secs() as u32);
         let mut written = 0;
         let mut bedrock_db_changed = std::mem::take(&mut self.db_dirty);
+        // Optimize: the database written again whatever changed (writing it is compacting it).
+        let optimize = only.is_none() && self.bedrock.is_some() && std::mem::take(&mut self.optimize_on_save);
+        let db_before = if optimize { dir_size(&self.path.join("db")) } else { 0 };
+        bedrock_db_changed |= optimize;
+        // (A working copy is written back to the original with it.)
+        self.world_changed |= optimize;
         let mut console_changed = std::mem::take(&mut self.console_dirty);
-        let changed_world = self.world_changed || bedrock_db_changed || console_changed;
+        // The World Explorer's edits (with the whole world only).
+        let (edited, edit_db, edit_console, edit_deleted) = if only.is_none() { self.save_edits(now)? } else { Default::default() };
+        let had_edits = !edited.is_empty() || edit_db || edit_console;
+        bedrock_db_changed |= edit_db;
+        console_changed |= edit_console;
+        let changed_world = self.world_changed || bedrock_db_changed || console_changed || had_edits;
         let dirty: Vec<usize> = (0..self.docs.len())
             .filter(|&i| only.is_none_or(|o| o == i))
             .filter(|&i| self.docs[i].tree.dirty && !self.docs[i].tree.read_only)
             .collect();
+        // The chunks written, for the World Explorer's 3D view to read again.
+        let mut chunks: Vec<(i32, i32)> = edited;
+        if had_edits {
+            self.world_changed = true;
+        }
         for i in dirty {
+            match &self.docs[i].source {
+                DocSource::JavaChunk { x, z, .. } | DocSource::BedrockChunk { x, z, .. } | DocSource::ConsoleChunk { x, z, .. } => chunks.push((*x, *z)),
+                _ => {}
+            }
             // Deleted tags go now, and what was new counts as saved.
             self.docs[i].tree.purge_deleted();
             let (source, format, root) = {
@@ -1270,6 +1949,8 @@ impl Workspace {
                     std::fs::write(&p, bytes).map_err(|e| e.to_string())?;
                 }
                 DocSource::JavaChunk { region, x, z } => {
+                    // The entities shown among the chunk's tags go back to their own file.
+                    let root = self.split_entities(&region, x, z, root, now)?;
                     self.backup_file(&region).map_err(|e| e.to_string())?;
                     let r = Region::open(&region).map_err(|e| e.to_string())?;
                     let mut b = RegionBuilder::from_region(&r).map_err(|e| e.to_string())?;
@@ -1297,7 +1978,10 @@ impl Workspace {
                         .insert(k, bytes);
                     bedrock_db_changed = true;
                 }
-                DocSource::BedrockChunk { .. } => {}
+                DocSource::BedrockChunk { dim, x, z } => {
+                    self.save_bedrock_chunk(dim, x, z, &root)?;
+                    bedrock_db_changed = true;
+                }
                 DocSource::ConsoleEntry(name) => {
                     let Some(Format::Java(c)) = format else {
                         continue;
@@ -1374,6 +2058,17 @@ impl Workspace {
             self.sync_back()?;
         }
         self.world_changed = false;
+        if had_edits {
+            if let Ok(mut l) = self.map.edits.write() {
+                l.clear();
+            }
+        }
+        if edit_deleted {
+            // Chunks gone: the flat map is drawn again too.
+            self.map.reload(self.path.clone());
+        } else if !chunks.is_empty() {
+            self.map.chunks_changed(&chunks);
+        }
         if only.is_none() {
             self.fresh_files.clear();
             self.edited_files.clear();
@@ -1383,11 +2078,17 @@ impl Workspace {
             self.ops_redo.clear();
         }
         let written = written + deleted;
-        Ok(if written == 0 && !changed_world {
-            "Nothing to save".into()
+        let mut msg = if written == 0 && !changed_world && !optimize {
+            "Nothing to save".to_string()
         } else {
             format!("Saved {written} file(s)")
-        })
+        };
+        if optimize {
+            let after = dir_size(&self.path.join("db"));
+            let sizes = format!("{} down to {}", human_size(db_before), human_size(after));
+            msg = if written == 0 && !had_edits { format!("Optimized the database ({sizes})") } else { format!("{msg}; the database optimized ({sizes})") };
+        }
+        Ok(msg)
     }
 
     /// Writes the working copy over the original, keeping a backup of the original.

@@ -1648,3 +1648,5 @@ D minecraft:andesite|	minecraft:stone|stone_type=s:andesite
 D minecraft:polished_andesite|	minecraft:stone|stone_type=s:andesite_smooth
 D minecraft:tall_grass|upper_block_bit=b:0	minecraft:double_plant|double_plant_type=s:grass,upper_block_bit=b:0
 D minecraft:large_fern|upper_block_bit=b:0	minecraft:double_plant|double_plant_type=s:fern,upper_block_bit=b:0
+B minecraft:end_gateway		
+B minecraft:moving_block		

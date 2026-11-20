@@ -99,6 +99,10 @@ pub fn suggest(state: &BlockState, target: &Registry, renames: &Renames) -> Opti
         }
     }
 
+    if let Some(s) = nearest(state, target) {
+        return Some(Suggestion { action: Action::Replace(s), reason: Reason::SameShape });
+    }
+
     if let Some(s) = same_family(state, target) {
         return Some(Suggestion { action: Action::Replace(s), reason: Reason::SameShape });
     }
@@ -137,6 +141,113 @@ pub fn suggest(state: &BlockState, target: &Registry, renames: &Renames) -> Opti
         action: Action::Air,
         reason: Reason::NoEquivalent,
     })
+}
+
+/// Blocks later versions added, and the older blocks that look and behave most like them
+/// (the first the target has is used): deepslate is stone to an older world, not air.
+const NEAREST: &[(&str, &[&str])] = &[
+    ("deepslate", &["stone"]),
+    ("cobbled_deepslate", &["cobblestone"]),
+    ("polished_deepslate", &["polished_andesite", "stone"]),
+    ("deepslate_bricks", &["stone_bricks"]),
+    ("cracked_deepslate_bricks", &["cracked_stone_bricks", "stone_bricks"]),
+    ("deepslate_tiles", &["stone_bricks"]),
+    ("cracked_deepslate_tiles", &["cracked_stone_bricks", "stone_bricks"]),
+    ("chiseled_deepslate", &["chiseled_stone_bricks", "stone_bricks"]),
+    ("reinforced_deepslate", &["obsidian"]),
+    ("infested_deepslate", &["infested_stone", "stone"]),
+    ("tuff", &["andesite", "stone"]),
+    ("calcite", &["diorite", "stone"]),
+    ("dripstone_block", &["granite", "stone"]),
+    ("smooth_basalt", &["basalt", "stone"]),
+    ("basalt", &["stone"]),
+    ("polished_basalt", &["stone"]),
+    ("blackstone", &["cobblestone"]),
+    ("gilded_blackstone", &["cobblestone"]),
+    ("amethyst_block", &["purpur_block", "purple_wool"]),
+    ("budding_amethyst", &["purpur_block", "purple_wool"]),
+    ("moss_block", &["green_wool", "grass_block"]),
+    ("pale_moss_block", &["light_gray_wool", "grass_block"]),
+    ("rooted_dirt", &["coarse_dirt", "dirt"]),
+    ("mud", &["dirt"]),
+    ("packed_mud", &["coarse_dirt", "dirt"]),
+    ("mud_bricks", &["bricks"]),
+    ("muddy_mangrove_roots", &["dirt"]),
+    ("mangrove_roots", &["oak_log"]),
+    ("raw_iron_block", &["iron_block"]),
+    ("raw_gold_block", &["gold_block"]),
+    ("raw_copper_block", &["copper_block", "orange_terracotta"]),
+    ("copper_ore", &["stone"]),
+    ("sculk", &["black_wool", "obsidian"]),
+    ("powder_snow", &["snow_block"]),
+    ("tinted_glass", &["black_stained_glass", "glass"]),
+    ("crying_obsidian", &["obsidian"]),
+    ("netherite_block", &["obsidian"]),
+    ("ancient_debris", &["netherrack"]),
+    ("crimson_nylium", &["netherrack"]),
+    ("warped_nylium", &["netherrack"]),
+    ("soul_soil", &["soul_sand"]),
+    ("shroomlight", &["glowstone"]),
+    ("honey_block", &["slime_block"]),
+    ("honeycomb_block", &["yellow_wool"]),
+    ("target", &["hay_block"]),
+    ("lodestone", &["stone"]),
+    ("glow_lichen", &["vine"]),
+    ("azalea", &["oak_sapling"]),
+    ("flowering_azalea", &["oak_sapling"]),
+    ("azalea_leaves", &["oak_leaves"]),
+    ("flowering_azalea_leaves", &["oak_leaves"]),
+    ("torchflower", &["poppy"]),
+    ("bamboo_block", &["oak_log"]),
+    ("stripped_bamboo_block", &["stripped_oak_log", "oak_log"]),
+    ("bamboo_mosaic", &["oak_planks"]),
+    ("suspicious_sand", &["sand"]),
+    ("suspicious_gravel", &["gravel"]),
+    ("trial_spawner", &["spawner"]),
+    ("crafter", &["dropper"]),
+    ("creaking_heart", &["oak_log"]),
+    ("resin_block", &["orange_terracotta", "orange_wool"]),
+    ("resin_bricks", &["bricks"]),
+];
+
+/// Newer materials inside longer names, and the older material put in their place (in order:
+/// the longer first), so a deepslate brick stair becomes a stone brick stair.
+const MATERIALS: &[(&str, &str)] = &[
+    ("cobbled_deepslate", "cobblestone"),
+    ("polished_deepslate", "polished_andesite"),
+    ("deepslate_tile", "stone_brick"),
+    ("deepslate_brick", "stone_brick"),
+    ("deepslate", "stone"),
+    ("polished_tuff", "polished_andesite"),
+    ("tuff_brick", "stone_brick"),
+    ("tuff", "andesite"),
+    ("polished_blackstone_brick", "stone_brick"),
+    ("polished_blackstone", "polished_andesite"),
+    ("blackstone", "cobblestone"),
+    ("mud_brick", "brick"),
+    ("resin_brick", "brick"),
+    ("bamboo_mosaic", "oak"),
+];
+
+/// The nearest older block for one a later version added (see [`NEAREST`] and [`MATERIALS`]).
+fn nearest(state: &BlockState, target: &Registry) -> Option<BlockState> {
+    let bare = state.name.strip_prefix("minecraft:").unwrap_or(&state.name);
+    if let Some((_, older)) = NEAREST.iter().find(|(n, _)| *n == bare) {
+        for o in *older {
+            if let Some(s) = adapt(state, &format!("minecraft:{o}"), target) {
+                return Some(s);
+            }
+        }
+    }
+    for (newer, older) in MATERIALS {
+        if bare.contains(newer) {
+            let swapped = format!("minecraft:{}", bare.replacen(newer, older, 1));
+            if let Some(s) = adapt(state, &swapped, target) {
+                return Some(s);
+            }
+        }
+    }
+    None
 }
 
 /// Materials and colours preferred, in order, when several blocks of the target share a shape.
@@ -318,6 +429,26 @@ mod tests {
         // A half slab keeps being a slab.
         let g = suggest(&s("minecraft:oak_slab").with("type", "bottom"), &t, &none);
         assert!(g.is_none());
+    }
+
+    /// Newer blocks become what an older world has that is most like them, not air: deepslate
+    /// is stone, its walls and stairs stone's, tuff andesite (for a real older version).
+    #[test]
+    fn newer_blocks_become_their_nearest_older_block() {
+        let t = mctk_registry::builtin::java("1.16.5").expect("1.16.5");
+        let r = Renames::java_blocks();
+        let to = |st: BlockState| match suggest(&st, &t, &r).map(|g| g.action) {
+            Some(Action::Replace(s)) => s.name,
+            other => format!("{other:?}"),
+        };
+        assert_eq!(to(s("minecraft:deepslate").with("axis", "y")), "minecraft:stone");
+        assert_eq!(to(s("minecraft:cobbled_deepslate")), "minecraft:cobblestone");
+        assert_eq!(to(s("minecraft:cobbled_deepslate_wall")), "minecraft:cobblestone_wall");
+        assert_eq!(to(s("minecraft:deepslate_brick_stairs").with("facing", "north")), "minecraft:stone_brick_stairs");
+        assert_eq!(to(s("minecraft:deepslate_iron_ore")), "minecraft:iron_ore");
+        assert_eq!(to(s("minecraft:tuff")), "minecraft:andesite");
+        assert_eq!(to(s("minecraft:calcite")), "minecraft:diorite");
+        assert_eq!(to(s("minecraft:moss_block")), "minecraft:green_wool");
     }
 
     #[test]

@@ -192,7 +192,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn decodes_base64_and_recognises_uuids() {
+    fn decodes_base64_and_recognizes_uuids() {
         assert_eq!(base64("aGVsbG8gd29ybGQ=").unwrap(), b"hello world");
         assert_eq!(base64("YQ==").unwrap(), b"a");
         assert_eq!(

@@ -406,8 +406,9 @@ impl ActorIds {
 /// an area effect cloud is Bedrock-specific.
 const JAVA_SKIPPED: [&str; 2] = ["minecraft:player", "minecraft:area_effect_cloud"];
 
-/// Java entities that are nothing without their data (the item, the block), which the shared
-/// fields do not carry. Item frames are converted with their chunk instead.
+/// Java entities that are nothing without their data, which the shared fields do not carry:
+/// item frames are converted with their chunk instead (items on the ground and falling blocks
+/// carry theirs, see `carrier_to_actor`).
 const NEEDS_DATA: [&str; 4] = [
     "minecraft:item",
     "minecraft:falling_block",
@@ -544,6 +545,81 @@ fn minimal_actor(
     Some(Actor { chunk, key, nbt: out })
 }
 
+/// Converts an entity that is its contents: an item on the ground (its stack, converted as a
+/// chest's would be) or a falling block (its block, by the block table). Left out, and
+/// counted, when what it carries has no Bedrock form.
+fn carrier_to_actor(
+    java: &Compound,
+    java_id: &str,
+    offset: (i32, i32),
+    ids: &mut ActorIds,
+    report: &mut EditionReport,
+) -> Option<Actor> {
+    let empty = |report: &mut EditionReport| {
+        report.skip(&format!("entities: {java_id}"), 1);
+        None
+    };
+    let carried: Compound = if java_id == "minecraft:item" {
+        let Some(stack) = java.get("Item").and_then(Tag::as_compound) else { return empty(report) };
+        match crate::block_entity::item_to_bedrock(stack, report) {
+            Some(mut item) => {
+                item.remove("Slot");
+                item
+            }
+            None => {
+                report.skip("entities: minecraft:item (an item Bedrock has no form for)", 1);
+                return None;
+            }
+        }
+    } else {
+        // The block: `BlockState` ({Name, Properties}; `block_state` too, should a version name
+        // it so), or before 1.13 `Block` (a name) or `TileID` (a number).
+        let state = if let Some(bs) = java.get("BlockState").or_else(|| java.get("block_state")).and_then(Tag::as_compound) {
+            let mut state = mctk_java::BlockState::new(bs.get("Name").and_then(Tag::as_str).unwrap_or("minecraft:sand"));
+            if let Some(props) = bs.get("Properties").and_then(Tag::as_compound) {
+                for (k, v) in props.iter() {
+                    if let Some(v) = v.as_str() {
+                        state.properties.insert(k.clone(), v.to_string());
+                    }
+                }
+            }
+            state
+        } else if let Some(name) = java.get("Block").and_then(Tag::as_str) {
+            let name = if name.contains(':') { name.to_string() } else { format!("minecraft:{name}") };
+            mctk_java::BlockState::new(&name)
+        } else if let Some(id) = java.get("TileID").and_then(Tag::as_i64) {
+            let data = java.get("Data").and_then(Tag::as_i64).unwrap_or(0);
+            match crate::legacy_tables::LegacyTables::get().block(id as u8, data as u8) {
+                Some(s) => s.clone(),
+                None => return empty(report),
+            }
+        } else {
+            report.skip("entities: minecraft:falling_block (no block saved in it)", 1);
+            return None;
+        };
+        let m = mctk_mapping::mappings();
+        let Some(b) = m.java_to_bedrock(&m.complete_java(&state)) else {
+            report.skip("entities: minecraft:falling_block (a block Bedrock has no form for)", 1);
+            return None;
+        };
+        let mut block = Compound::new();
+        block.insert("name".into(), Tag::String(b.name.clone()));
+        block.insert("states".into(), Tag::Compound(b.states.clone()));
+        block.insert("version".into(), Tag::Int(mctk_mapping::block_version()));
+        block
+    };
+    let mut actor = minimal_actor(java, java_id, offset, ids, report)?;
+    if java_id == "minecraft:item" {
+        actor.nbt.insert("Item".into(), Tag::Compound(carried));
+        actor.nbt.insert("Age".into(), Tag::Short(i64_of(java, "Age").unwrap_or(0).clamp(0, i16::MAX as i64) as i16));
+        actor.nbt.insert("Health".into(), Tag::Short(i64_of(java, "Health").unwrap_or(5) as i16));
+    } else {
+        actor.nbt.insert("FallingBlock".into(), Tag::Compound(carried));
+        actor.nbt.insert("Time".into(), Tag::Byte(i64_of(java, "Time").unwrap_or(0).clamp(0, 127) as i8));
+    }
+    Some(actor)
+}
+
 /// Converts a Java painting. Java keeps the block it hangs on; Bedrock stores a position
 /// that depends on the picture's size and the way it faces.
 fn painting_to_actor(
@@ -669,6 +745,9 @@ pub(crate) fn entity_to_actor(
     let java_id = java.get("id").and_then(Tag::as_str)?;
     if java_id == "minecraft:painting" {
         return painting_to_actor(java, offset, ids, report);
+    }
+    if java_id == "minecraft:item" || java_id == "minecraft:falling_block" {
+        return carrier_to_actor(java, java_id, offset, ids, report);
     }
     let Some(ident) = bedrock_type(java_id) else {
         report.skip(&format!("entities: {java_id}"), 1);
@@ -1174,8 +1253,39 @@ mod tests {
             c.insert("Pos".into(), double_list(&[0.0, 0.0, 0.0]));
             let mut report = EditionReport::default();
             assert!(entity_to_actor(&c, (0, 0), &mut ActorIds::default(), &mut report).is_none());
-            assert_eq!(report.skipped.get(&format!("entities: {id}")), Some(&1), "{id}");
+            // Counted once (with why, where it can say).
+            let n: usize = report.skipped.iter().filter(|(k, _)| k.starts_with(&format!("entities: {id}"))).map(|(_, n)| *n).sum();
+            assert_eq!(n, 1, "{id}: {:?}", report.skipped);
         }
+    }
+
+    /// An item on the ground carries its stack, a falling block its block, in Bedrock's form.
+    #[test]
+    fn items_on_the_ground_and_falling_blocks_carry_what_they_are() {
+        let mut item = Compound::new();
+        item.insert("id".into(), Tag::String("minecraft:item".into()));
+        item.insert("Pos".into(), double_list(&[3.5, 70.0, 4.5]));
+        let mut stack = Compound::new();
+        stack.insert("id".into(), Tag::String("minecraft:diamond".into()));
+        stack.insert("count".into(), Tag::Int(5));
+        item.insert("Item".into(), Tag::Compound(stack));
+        let mut report = EditionReport::default();
+        let a = entity_to_actor(&item, (0, 0), &mut ActorIds::default(), &mut report).expect("converted");
+        assert_eq!(a.nbt.get("identifier").and_then(Tag::as_str), Some("minecraft:item"));
+        let it = a.nbt.get("Item").and_then(Tag::as_compound).expect("its stack");
+        assert_eq!(it.get("Name").and_then(Tag::as_str), Some("minecraft:diamond"));
+        assert_eq!(it.get("Count").and_then(Tag::as_i64), Some(5));
+
+        let mut sand = Compound::new();
+        sand.insert("id".into(), Tag::String("minecraft:falling_block".into()));
+        sand.insert("Pos".into(), double_list(&[3.5, 90.0, 4.5]));
+        let mut bs = Compound::new();
+        bs.insert("Name".into(), Tag::String("minecraft:sand".into()));
+        sand.insert("BlockState".into(), Tag::Compound(bs));
+        let a = entity_to_actor(&sand, (0, 0), &mut ActorIds::default(), &mut report).expect("converted");
+        let fb = a.nbt.get("FallingBlock").and_then(Tag::as_compound).expect("its block");
+        assert_eq!(fb.get("name").and_then(Tag::as_str), Some("minecraft:sand"));
+        assert!(report.skipped.is_empty(), "{:?}", report.skipped);
     }
 
     #[test]

@@ -109,6 +109,77 @@ impl BedrockBlock {
     }
 }
 
+/// The Bedrock state for the Java states the built-in table gets wrong (it gives every one of
+/// them a single Bedrock state): torches, which Bedrock names by the side they hang on (a Java
+/// torch facing east hangs on the block to its west, as the game's own legacy tables show);
+/// cauldrons, which Bedrock fills in sixths (two a bottle) and tells apart by their liquid; big
+/// dripleaf stems (a dripleaf without its head) and tall seagrass.
+fn corrected(java: &BlockState) -> Option<BedrockBlock> {
+    let prop = |k: &str| java.properties.get(k).map(String::as_str);
+    let mut states = Compound::new();
+    let mut set = |k: &str, v: Tag| {
+        states.insert(k.to_string(), v);
+    };
+    let s = |v: &str| Tag::String(v.to_string());
+    let level = || prop("level").and_then(|l| l.parse::<i32>().ok()).unwrap_or(3);
+    let name = match java.name.trim_start_matches("minecraft:") {
+        "torch" | "soul_torch" | "copper_torch" | "redstone_torch" | "wall_torch" | "soul_wall_torch" | "copper_wall_torch" | "redstone_wall_torch" => {
+            let n = java.name.trim_start_matches("minecraft:");
+            let side = match prop("facing") {
+                None => "top",
+                Some("east") => "west",
+                Some("west") => "east",
+                Some("south") => "north",
+                Some(_) => "south",
+            };
+            set("torch_facing_direction", s(side));
+            let base = n.replace("_wall_torch", "_torch").replace("wall_torch", "torch");
+            if base == "redstone_torch" && prop("lit") == Some("false") { "unlit_redstone_torch".to_string() } else { base }
+        }
+        "cauldron" => {
+            set("cauldron_liquid", s("water"));
+            set("fill_level", Tag::Int(0));
+            "cauldron".into()
+        }
+        "water_cauldron" | "powder_snow_cauldron" => {
+            set("cauldron_liquid", s(if java.name.ends_with("water_cauldron") { "water" } else { "powder_snow" }));
+            set("fill_level", Tag::Int(level() * 2));
+            "cauldron".into()
+        }
+        "lava_cauldron" => {
+            set("cauldron_liquid", s("lava"));
+            set("fill_level", Tag::Int(6));
+            "cauldron".into()
+        }
+        "big_dripleaf_stem" => {
+            set("big_dripleaf_head", Tag::Byte(0));
+            set("big_dripleaf_tilt", s("none"));
+            set("minecraft:cardinal_direction", s(prop("facing").unwrap_or("north")));
+            "big_dripleaf".into()
+        }
+        "tall_seagrass" => {
+            set("sea_grass_type", s(if prop("half") == Some("upper") { "double_top" } else { "double_bot" }));
+            "seagrass".into()
+        }
+        _ => return None,
+    };
+    Some(BedrockBlock { name: format!("minecraft:{name}"), states })
+}
+
+/// Bedrock states the corrected table has no exact entry for, made ones it has: a cauldron
+/// filled an odd number of sixths (Java counts thirds) is rounded up.
+fn normalised(name: &str, states: &Compound) -> Option<Compound> {
+    if name != "minecraft:cauldron" {
+        return None;
+    }
+    let fill = states.get("fill_level").and_then(Tag::as_i64)?;
+    (fill % 2 == 1).then(|| {
+        let mut s = states.clone();
+        s.insert("fill_level".into(), Tag::Int(fill as i32 + 1));
+        s
+    })
+}
+
 /// Canonical text key for a Bedrock state: name plus sorted, typed states.
 fn bedrock_key(name: &str, states: &Compound) -> String {
     let mut parts: Vec<String> = states.iter().map(|(k, v)| format!("{k}={v:?}")).collect();
@@ -275,6 +346,7 @@ impl Mappings {
                     .cloned()
                     .unwrap_or_default(),
             };
+            let b = corrected(&state).unwrap_or(b);
             let rank = e.get("r").and_then(Tag::as_i64).unwrap_or(0) as u8;
             m.java_index.insert(state.clone(), id);
             m.java_by_name
@@ -378,6 +450,11 @@ impl Mappings {
         if let Some(&id) = self.bedrock_index.get(&bedrock_key(name, states)) {
             return Some(&self.java[id as usize]);
         }
+        if let Some(s) = normalised(name, states) {
+            if let Some(&id) = self.bedrock_index.get(&bedrock_key(name, &s)) {
+                return Some(&self.java[id as usize]);
+            }
+        }
         // Bedrock spells flowing liquid both ways (`water` with a depth, `flowing_water`).
         if let Some(&id) = liquid_alias(name).and_then(|a| self.bedrock_index.get(&bedrock_key(a, states))) {
             return Some(&self.java[id as usize]);
@@ -419,6 +496,19 @@ impl Mappings {
 mod tests {
     use super::*;
 
+    /// The plain stone slab is Bedrock's "normal" stone slab, its double too (the double was
+    /// once left as an unknown "stone_double_slab", so the converter asked to replace it), and
+    /// end gateways have a block.
+    #[test]
+    fn stone_slabs_and_end_gateways_map_to_bedrock() {
+        let m = mappings();
+        let name = |s: BlockState| m.java_to_bedrock(&m.complete_java(&s)).map(|b| b.name.clone());
+        assert_eq!(name(BlockState::new("minecraft:stone_slab").with("type", "bottom")).as_deref(), Some("minecraft:normal_stone_slab"));
+        assert_eq!(name(BlockState::new("minecraft:stone_slab").with("type", "double")).as_deref(), Some("minecraft:normal_stone_double_slab"));
+        assert_eq!(name(BlockState::new("minecraft:smooth_stone_slab").with("type", "double")).as_deref(), Some("minecraft:smooth_stone_double_slab"));
+        assert_eq!(name(BlockState::new("minecraft:end_gateway")).as_deref(), Some("minecraft:end_gateway"));
+    }
+
     #[test]
     fn table_loads_and_maps_both_ways() {
         let m = mappings();
@@ -434,6 +524,33 @@ mod tests {
                 .name,
             "minecraft:stone"
         );
+        // Torches, cauldrons, dripleaf stems and tall seagrass keep what they are both ways (the
+        // table once gave each kind a single Bedrock state).
+        let full = |s: BlockState| m.complete_java(&s);
+        for s in [
+            BlockState::new("minecraft:wall_torch").with("facing", "north"),
+            BlockState::new("minecraft:wall_torch").with("facing", "east"),
+            BlockState::new("minecraft:torch"),
+            BlockState::new("minecraft:redstone_wall_torch").with("facing", "south").with("lit", "false"),
+            BlockState::new("minecraft:soul_wall_torch").with("facing", "west"),
+            BlockState::new("minecraft:water_cauldron").with("level", "2"),
+            BlockState::new("minecraft:lava_cauldron"),
+            BlockState::new("minecraft:powder_snow_cauldron").with("level", "3"),
+            BlockState::new("minecraft:cauldron"),
+            BlockState::new("minecraft:big_dripleaf_stem").with("facing", "east"),
+            BlockState::new("minecraft:tall_seagrass").with("half", "upper"),
+        ] {
+            let s = full(s);
+            let b = m.java_to_bedrock(&s).unwrap();
+            assert_eq!(m.bedrock_to_java(&b.name, &b.states).map(|j| full(j.clone())), Some(s.clone()), "{s} via {} {:?}", b.name, b.states);
+        }
+        let attached = m.java_to_bedrock(&BlockState::new("minecraft:wall_torch").with("facing", "east")).unwrap();
+        assert_eq!(attached.states.get("torch_facing_direction"), Some(&Tag::String("west".into())));
+        // A cauldron a third full in sixths (Bedrock fills two a bottle; an odd count rounds up).
+        let mut odd = Compound::new();
+        odd.insert("cauldron_liquid".into(), Tag::String("water".into()));
+        odd.insert("fill_level".into(), Tag::Int(3));
+        assert_eq!(m.bedrock_to_java("minecraft:cauldron", &odd).unwrap().properties.get("level").map(String::as_str), Some("2"));
         // Waterlogged and dry stairs share a Bedrock state; the reverse picks the dry one.
         let stairs = BlockState::new("minecraft:oak_stairs")
             .with("facing", "east")

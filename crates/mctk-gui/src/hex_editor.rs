@@ -209,10 +209,10 @@ impl HexEditor {
         let mut out = Outcome::default();
         let full = ui.max_rect();
         let bar = Rect::from_min_size(full.min, vec2(full.width(), TOOLBAR_H));
-        ui.painter().rect_filled(bar, 0.0, theme::BG);
+        ui.painter().rect_filled(bar, 0.0, theme::bg());
         ui.painter().line_segment(
             [bar.left_bottom(), bar.right_bottom()],
-            Stroke::new(1.0_f32, theme::BORDER),
+            Stroke::new(1.0_f32, theme::border()),
         );
         self.toolbar(ui, bar, name, read_only, views, view, &mut out);
         let body = Rect::from_min_max(pos2(full.left(), bar.bottom()), full.max);
@@ -247,17 +247,17 @@ impl HexEditor {
         ui.style_mut().override_font_id = Some(theme::regular(14.0 * k));
         // Other ways to look at the array (a map's picture, light layers) beside the hex dump.
         if views.len() > 1 {
-            ui.label(egui::RichText::new("View:").color(theme::TEXT_MUTED));
+            ui.label(egui::RichText::new("View:").color(theme::text_muted()));
             widgets::segmented(ui, view, views, 0.0, true);
             let x = ui.cursor().left() + 6.0;
             ui.painter().line_segment(
                 [pos2(x, bar.top() + 9.0), pos2(x, bar.bottom() - 9.0)],
-                Stroke::new(1.0_f32, theme::BORDER),
+                Stroke::new(1.0_f32, theme::border()),
             );
             ui.add_space(12.0);
         }
         if *view == 0 {
-            ui.label(egui::RichText::new("Mode:").color(theme::TEXT_MUTED));
+            ui.label(egui::RichText::new("Mode:").color(theme::text_muted()));
             let mut mode = self.insert as usize;
             if widgets::segmented(ui, &mut mode, &["Overwrite", "Insert"], 0.0, !read_only) {
                 self.insert = mode == 1;
@@ -266,10 +266,10 @@ impl HexEditor {
             let x = ui.cursor().left() + 6.0;
             ui.painter().line_segment(
                 [pos2(x, bar.top() + 9.0), pos2(x, bar.bottom() - 9.0)],
-                Stroke::new(1.0_f32, theme::BORDER),
+                Stroke::new(1.0_f32, theme::border()),
             );
             ui.add_space(12.0 * k);
-            ui.label(egui::RichText::new("Bytes Per Line:").color(theme::TEXT_MUTED));
+            ui.label(egui::RichText::new("Bytes Per Line:").color(theme::text_muted()));
             self.lines_picker(ui);
         }
         // Import, Export and the close cross sit at the right.
@@ -305,7 +305,7 @@ impl HexEditor {
         ui.painter().rect_filled(
             r,
             widgets::dropdown_corners(open),
-            if resp.hovered() { theme::BUTTON_HOVER } else { theme::BUTTON },
+            if resp.hovered() { theme::button_hover() } else { theme::button() },
         );
         let label = if self.per_line == 0 { "Auto".to_string() } else { self.per_line.to_string() };
         ui.painter().text(
@@ -313,20 +313,20 @@ impl HexEditor {
             Align2::LEFT_CENTER,
             label,
             theme::regular(14.0 * k),
-            theme::TEXT,
+            theme::text(),
         );
         crate::icons::paint(
             ui.painter(),
             egui::Rect::from_center_size(r.right_center() - vec2(12.0 * k, 0.0), egui::Vec2::splat(10.0 * k)),
             if open { Icon::ChevronUp } else { Icon::ChevronDown },
-            theme::TEXT_MUTED,
+            theme::text_muted(),
         );
         if resp.clicked() {
             ui.memory_mut(|m| m.toggle_popup(id));
         }
-        let tints = (theme::BUTTON_HOVER, Color32::from_white_alpha(14));
+        let tints = (theme::button_hover(), theme::wash(14));
         let mut pick = None;
-        widgets::dropdown(ui, id, &resp, theme::BUTTON, None, |ui, _| {
+        widgets::dropdown(ui, id, &resp, theme::button(), None, |ui, _| {
             let choices = std::iter::once(0).chain(LINE_CHOICES);
             let count = LINE_CHOICES.len() + 1;
             for (i, n) in choices.enumerate() {
@@ -398,10 +398,10 @@ impl HexEditor {
         let content_h = rows as f32 * ROW_H + 8.0;
         let len = self.bytes.len();
 
-        let offset_colour = Color32::from_rgb(0x4E, 0x6A, 0x96);
-        let zero_colour = Color32::from_rgb(0x3A, 0x48, 0x62);
-        let byte_colour = Color32::from_rgb(0x7F, 0x97, 0xBF);
-        let text_colour = Color32::from_rgb(0x9A, 0xAE, 0xCF);
+        let offset_color = Color32::from_rgb(0x4E, 0x6A, 0x96);
+        let zero_color = Color32::from_rgb(0x3A, 0x48, 0x62);
+        let byte_color = Color32::from_rgb(0x7F, 0x97, 0xBF);
+        let text_color = Color32::from_rgb(0x9A, 0xAE, 0xCF);
 
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(body));
         let ui = &mut child;
@@ -474,7 +474,7 @@ impl HexEditor {
             // The line between the bytes and their text.
             painter.line_segment(
                 [pos2(ascii_x - cw, body.top()), pos2(ascii_x - cw, body.bottom())],
-                Stroke::new(1.0_f32, theme::BORDER),
+                Stroke::new(1.0_f32, theme::border()),
             );
             let first = ((viewport.min.y - 4.0) / ROW_H).floor().max(0.0) as usize;
             let last = (((viewport.max.y) / ROW_H).ceil() as usize + 1).min(rows);
@@ -486,7 +486,7 @@ impl HexEditor {
                     Align2::LEFT_TOP,
                     format!("{:0w$X}", r * per_line, w = digits),
                     font.clone(),
-                    offset_colour,
+                    offset_color,
                 );
                 for c in 0..per_line {
                     let i = r * per_line + c;
@@ -503,7 +503,7 @@ impl HexEditor {
                         Align2::LEFT_TOP,
                         format!("{b:02X}"),
                         font.clone(),
-                        if b == 0 { zero_colour } else { byte_colour },
+                        if b == 0 { zero_color } else { byte_color },
                     );
                     let ch = if (0x20..0x7F).contains(&b) { b as char } else { '.' };
                     painter.text(
@@ -511,7 +511,7 @@ impl HexEditor {
                         Align2::LEFT_TOP,
                         ch,
                         font.clone(),
-                        if ch == '.' { zero_colour } else { text_colour },
+                        if ch == '.' { zero_color } else { text_color },
                     );
                 }
             }

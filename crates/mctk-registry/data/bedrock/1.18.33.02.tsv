@@ -1833,3 +1833,5 @@ D minecraft:green_wool|	minecraft:wool|color=s:green
 D minecraft:red_wool|	minecraft:wool|color=s:red
 D minecraft:black_wool|	minecraft:wool|color=s:black
 D minecraft:grass_block|	minecraft:grass|
+B minecraft:end_gateway		
+B minecraft:moving_block		

@@ -1822,3 +1822,5 @@ D minecraft:grass_block|	minecraft:grass|
 B minecraft:small_dripleaf_block	direction=i:0|i:1|i:2|i:3,upper_block_bit=b:0|b:1	direction=i:3,upper_block_bit=b:1
 D minecraft:small_dripleaf_block|minecraft:cardinal_direction=s:east,upper_block_bit=b:1	minecraft:small_dripleaf_block|direction=i:3,upper_block_bit=b:1
 D minecraft:small_dripleaf_block|minecraft:cardinal_direction=s:south,upper_block_bit=b:1	minecraft:small_dripleaf_block|direction=i:0,upper_block_bit=b:1
+B minecraft:end_gateway		
+B minecraft:moving_block		

@@ -5,6 +5,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
+use std::sync::Arc;
 
 use eframe::egui::{self, Align2, Color32, Id, Pos2, Rect, Sense, Stroke, Ui, Vec2, pos2, vec2};
 use mctk_nbt::{Compound, Compression, Flavor, List, NamedTag, Tag, TagType};
@@ -190,7 +191,7 @@ fn type_name(t: TagType) -> &'static str {
     }
 }
 
-/// Colours extensions name: Qt/SVG colour names or #rrggbb.
+/// Colors extensions name: Qt/SVG color names or #rrggbb.
 pub fn named_color(name: &str) -> Option<Color32> {
     let n = name.trim().to_ascii_lowercase();
     if let Some(hex) = n.strip_prefix('#') {
@@ -264,7 +265,7 @@ fn type_icon(p: &egui::Painter, r: Rect, t: TagType) {
     }
     match t {
         TagType::Compound => icons::paint(p, r, Icon::Compound, theme::FOLDER),
-        TagType::List => icons::paint(p, r, Icon::List, theme::TEXT),
+        TagType::List => icons::paint(p, r, Icon::List, theme::text()),
         TagType::String => icons::badge(p, r, "Aa", Color32::TRANSPARENT, false),
         TagType::Byte => icons::badge(p, r, "B", theme::BADGE_BYTE, false),
         TagType::Short => icons::badge(p, r, "S", theme::BADGE_SHORT, false),
@@ -373,14 +374,22 @@ enum Action {
     OpenInventory(TagPath),
     /// Open the map file (`map_2`) of a map item in the map editor.
     OpenMap(String),
-    /// Give an item or mob a display name to rename.
-    AddName(TagPath),
+    /// Give an item, mob or container this custom name (empty: none).
+    SetName(TagPath, String),
+    /// Make an item never wear out (true), or wear out again.
+    SetUnbreakable(TagPath, bool),
+    /// Change a mob, villager or gateway (see mob_edit).
+    EditMob(TagPath, crate::mob_edit::MobEdit),
+    /// Open the trades screen on the villager at this path.
+    OpenTrades(TagPath),
+    /// Change an item stack's attributes or adventure-mode blocks (see item_edit).
+    EditItem(TagPath, crate::item_edit::ItemEdit),
     /// Put a new item stack at the end of the list at this path.
     AddStack(TagPath, Compound),
     /// Set tags that exist to new values, as one undo step called by the text.
     SetValues(Vec<(TagPath, Tag)>, String),
     /// Give an enchantment of the item stack a level, or take it off with `None`.
-    SetEnchant(TagPath, String, Option<i64>),
+    SetEnchant(TagPath, crate::enchant::EnchantEdit),
     Copy(TagPath),
     Cut(TagPath),
     Paste(TagPath),
@@ -534,6 +543,129 @@ fn item_stack(c: &Compound) -> Option<(String, Option<i64>)> {
     };
     Some((id, count))
 }
+/// What a compound that is no item stack stands for, in any edition: a block entity (an `id` and
+/// its block's `x`, `y`, `z`), an entity (an `id` with its `Pos` or `UUID`, or Bedrock's
+/// `identifier`) or a block state (Java's `Name` with its `Properties`, Bedrock's `name` with its
+/// `states`). Gives the item to picture it by and its name.
+fn thing_of(c: &Compound) -> Option<(String, String)> {
+    let bare = |id: &str| id.trim_start_matches("minecraft:").to_string();
+    let is_int = |k: &str| matches!(c.get(k), Some(Tag::Int(_)));
+    // A block state.
+    if let Some(Tag::String(n)) = c.get("Name") {
+        if c.len() == 1 || (c.len() == 2 && c.contains_key("Properties")) {
+            return Some((n.clone(), item_name(n)));
+        }
+    }
+    if let (Some(Tag::String(_)), Some(Tag::Compound(_))) = (c.get("name"), c.get("states")) {
+        let entry = NamedTag { name: String::new(), tag: Tag::Compound(c.clone()) };
+        let java = crate::world::bedrock_java_state(&entry);
+        return Some((java.name.clone(), item_name(&java.name)));
+    }
+    // An entity.
+    let entity = c.contains_key("identifier") || (matches!(c.get("id"), Some(Tag::String(_))) && (c.contains_key("Pos") || c.contains_key("UUID")));
+    if entity {
+        let id = mctk_convert::view::java_entity_id(c)?;
+        let n = bare(&id);
+        // A dropped item: the item it is.
+        if n == "item" {
+            if let Some((item, _)) = c.get("Item").and_then(Tag::as_compound).and_then(item_stack) {
+                return Some((item.clone(), format!("{} (dropped)", item_name(&item))));
+            }
+        }
+        let icon = match n.as_str() {
+            "falling_block" => c
+                .get("BlockState")
+                .or_else(|| c.get("FallingBlock"))
+                .and_then(|b| b.get("Name").or_else(|| b.get("name")))
+                .and_then(Tag::as_str)
+                .map_or_else(|| "sand".to_string(), str::to_string),
+            "experience_orb" => "experience_bottle".into(),
+            "player" => "player_head".into(),
+            // A mob: its spawn egg (a rabbit is not its meat); a thing with an item of its own
+            // (a boat, a minecart, an armor stand): that.
+            other if crate::models::item_model(&format!("{other}_spawn_egg")).is_some() => format!("{other}_spawn_egg"),
+            other if crate::models::item_model(other).is_some() => other.to_string(),
+            other => format!("{other}_spawn_egg"),
+        };
+        return Some((icon, item_name(&id)));
+    }
+    // A block entity.
+    if matches!(c.get("id"), Some(Tag::String(_))) && is_int("x") && is_int("y") && is_int("z") {
+        let id = mctk_convert::view::java_block_entity_id(c)?;
+        let icon = match bare(&id).as_str() {
+            "mob_spawner" => "spawner".to_string(),
+            "sign" => "oak_sign".into(),
+            "hanging_sign" => "oak_hanging_sign".into(),
+            "banner" => "white_banner".into(),
+            "bed" => "red_bed".into(),
+            "skull" => "skeleton_skull".into(),
+            "end_portal" | "end_gateway" => "end_portal_frame".into(),
+            "piston" | "moving_piston" => "piston".into(),
+            "brushable_block" => "suspicious_sand".into(),
+            other => other.to_string(),
+        };
+        return Some((icon, item_name(&id)));
+    }
+    None
+}
+
+/// What a compound's menu can change if it is a mob (or an armor stand, an item frame) or an end
+/// gateway: `None` for anything else.
+fn mob_menu(c: &Compound, block_entity: bool, data_version: Option<i64>) -> Option<MobMenu> {
+    use crate::mob_edit as m;
+    if block_entity {
+        let id = mctk_convert::view::java_block_entity_id(c)?;
+        if !id.ends_with("end_gateway") {
+            return None;
+        }
+        return Some(MobMenu { id, gateway: Some((m::gateway_exit(c).unwrap_or([0, 64, 0]), m::gateway_exact(c))), ..Default::default() });
+    }
+    // A player's file (Java and the console editions keep no id in it): its status effects.
+    let player_file = !crate::naming::is_mob(c) && c.contains_key("abilities") && m::health(c).is_some();
+    if player_file {
+        return Some(MobMenu {
+            id: "minecraft:player".into(),
+            icon: "player_head".into(),
+            effects: Some((m::effects(c), crate::effects::choices(c, crate::effects::Holder::Mob, data_version))),
+            data_version,
+            ..Default::default()
+        });
+    }
+    if !crate::naming::is_mob(c) {
+        return None;
+    }
+    let id = mctk_convert::view::java_entity_id(c)?;
+    let health = m::health(c);
+    // What it wears: living things (they have health) and armor stands.
+    let wears = health.is_some() || id.ends_with("armor_stand");
+    let icon = thing_of(c).map(|(i, _)| i).unwrap_or_else(|| format!("{}_spawn_egg", id.trim_start_matches("minecraft:")));
+    Some(MobMenu {
+        id: id.clone(),
+        icon,
+        invulnerable: Some(m::invulnerable(c)),
+        no_ai: m::no_ai(c).filter(|_| health.is_some()),
+        invisible: m::invisible(c, &id),
+        gravity: m::gravity(c),
+        equipment: if wears {
+            m::equipment(c, data_version)
+                .into_iter()
+                .map(|(s, item)| {
+                    let stack = item.as_ref().and_then(|_| m::slot_stack(c, s, data_version).cloned());
+                    (s, item, stack)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        },
+        data_version,
+        trades: m::trades_with(&id),
+        drops: m::drops(c, data_version).filter(|_| health.is_some() && !id.ends_with(":player")),
+        effects: health.map(|_| (m::effects(c), crate::effects::choices(c, crate::effects::Holder::Mob, data_version))),
+        shulker_color: m::shulker_color(c, &id),
+        gateway: None,
+    })
+}
+
 /// An item id as a name to read: `minecraft:diamond_sword` is "Diamond Sword".
 fn item_name(id: &str) -> String {
     id.rsplit(':')
@@ -626,6 +758,12 @@ pub struct NbtTree {
     inventory: Option<(TagPath, crate::inventory::State)>,
     /// The second chest of a large chest, when the screen shows both (its `Items` list).
     inventory_partner: Option<TagPath>,
+    /// The villager (its path) whose trades screen is open.
+    trades: Option<TagPath>,
+    /// The large chests' halves (see RowCtx::chests), and the tree generation they were found for.
+    chests: (Option<u64>, HashMap<TagPath, (bool, usize)>),
+    /// The document read as a Java chunk (for its block states), and the generation it was read at.
+    decoded: RefCell<Option<(u64, Option<Arc<mctk_java::Chunk>>)>>,
     /// Set by "Open Map Editor" on a map item: the name of its `map_N` file; the page opens it.
     pub open_map_request: Option<String>,
     /// Describes the edit about to be pushed on the undo stack.
@@ -680,19 +818,69 @@ struct RowCtx<'a> {
     /// The tag whose children are being drawn is a container (a chest ...): its `Items` list can
     /// open as a screen.
     container: &'a Cell<bool>,
+    /// The halves of large chests, by the path of each chest: which half it is and where the
+    /// other is.
+    chests: &'a HashMap<TagPath, (bool, usize)>,
+    /// The document's DataVersion (Java), for laying new tags out as its version does.
+    data_version: Option<i64>,
 }
 
-/// What a row's menu offers beyond the usual, worked out where the tag and its neighbours are known.
+/// What a row's menu offers beyond the usual, worked out where the tag and its neighbors are known.
 #[derive(Default)]
 struct Extras {
     /// The list "Edit Inventory" opens.
     inventory: Option<TagPath>,
     /// The `map_N` file of a map item.
     map: Option<String>,
-    /// An item that can be given a display name.
-    name_item: bool,
-    /// A mob that can be given a custom name.
-    name_mob: bool,
+    /// Something that can be given a custom name (an item; or a mob, or a container such as a
+    /// chest), and the name it has now.
+    name: Option<(bool, String)>,
+    /// An item that wears out: whether it is made never to.
+    unbreakable: Option<bool>,
+    /// A mob (or armor stand, item frame, end gateway): what its menu can change.
+    mob: Option<MobMenu>,
+    /// An item stack: its attribute modifiers (None where its edition keeps none) and the
+    /// blocks it can break and be placed on in adventure mode.
+    item: Option<(Option<Vec<crate::item_edit::Modifier>>, Vec<String>, Vec<String>)>,
+    /// The document's DataVersion (Java), for the menus that write by version.
+    data_version: Option<i64>,
+    /// A block entity's menu: a spawner's mob, a container's lock.
+    block: Option<BlockMenu>,
+}
+
+/// What a block entity's menu can change.
+#[derive(Default)]
+struct BlockMenu {
+    /// A spawner: the mob it spawns now (a Java id), if it has one.
+    spawner: Option<Option<String>>,
+    /// A container that can be locked: the name of the key that opens it ("" when unlocked).
+    lock: Option<String>,
+}
+
+/// What a mob's (or gateway's) menu offers, and how things are now; None where it does not apply.
+#[derive(Default)]
+struct MobMenu {
+    /// Its current Java id, and the item to picture it by (its spawn egg).
+    id: String,
+    icon: String,
+    invulnerable: Option<bool>,
+    no_ai: Option<bool>,
+    invisible: Option<bool>,
+    gravity: Option<bool>,
+    /// What it wears and holds, slot by slot, and the stack itself.
+    equipment: Vec<(crate::mob_edit::Slot, Option<(String, i64)>, Option<Compound>)>,
+    /// The document's DataVersion, for the stacks' menus.
+    data_version: Option<i64>,
+    /// A villager or wandering trader.
+    trades: bool,
+    /// What it drops and picks up (mobs, outside Bedrock).
+    drops: Option<crate::mob_edit::Drops>,
+    /// Living things and players: their status effects, and those they can be given.
+    effects: Option<(Vec<crate::effects::Effect>, Vec<&'static str>)>,
+    /// A shulker: its color (16: its own).
+    shulker_color: Option<i64>,
+    /// An end gateway: where it sends things, and whether exactly there.
+    gateway: Option<([i64; 3], Option<bool>)>,
 }
 
 /// The tree's own scale, set from the tag bar; kept by the app for every document.
@@ -754,6 +942,9 @@ impl NbtTree {
             hex: None,
             inventory: None,
             inventory_partner: None,
+            chests: (None, HashMap::new()),
+            trades: None,
+            decoded: RefCell::new(None),
             open_map_request: None,
             edit_note: String::new(),
             announced: None,
@@ -889,16 +1080,16 @@ impl NbtTree {
 
     fn toolbar(&mut self, ui: &mut Ui) {
         let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), Sense::hover());
-        ui.painter().rect_filled(bar, 0.0, theme::BG);
+        ui.painter().rect_filled(bar, 0.0, theme::bg());
         ui.painter().line_segment(
             [bar.left_bottom(), bar.right_bottom()],
-            Stroke::new(1.0_f32, theme::BORDER),
+            Stroke::new(1.0_f32, theme::border()),
         );
         let y = bar.center().y;
         // The tree's scale: a box like the tag values, dragged left and right or typed in.
         let fr = Rect::from_min_size(pos2(bar.left() + 8.0, y - 11.0), vec2(56.0, 22.0));
         let reset = Rect::from_min_size(fr.right_top(), vec2(24.0, 22.0));
-        ui.painter().rect_filled(fr.union(reset), theme::radius(3), theme::FIELD);
+        ui.painter().rect_filled(fr.union(reset), theme::radius(3), theme::field());
         let mut pct = (tree_scale(ui.ctx()) * 100.0).round() as i32;
         {
             let mut child = ui.new_child(
@@ -926,18 +1117,18 @@ impl NbtTree {
             let off = pct != 100;
             let resp = ui.interact(reset, Id::new("nbt-scale-reset"), if off { Sense::click() } else { Sense::hover() });
             if resp.hovered() && off {
-                ui.painter().rect_filled(reset, theme::radius(3), Color32::from_white_alpha(28));
+                ui.painter().rect_filled(reset, theme::radius(3), theme::wash(28));
             }
             icons::paint(
                 ui.painter(),
                 Rect::from_center_size(reset.center(), Vec2::splat(14.0)),
                 Icon::Undo,
                 if !off {
-                    theme::CHIP
+                    theme::chip()
                 } else if resp.hovered() {
-                    Color32::WHITE
+                    theme::strong()
                 } else {
-                    theme::TEXT_MUTED
+                    theme::text_muted()
                 },
             );
             if resp.on_hover_text("Reset the tree scale to 100%").clicked() && off {
@@ -948,7 +1139,7 @@ impl NbtTree {
         let dx = reset.right() + 8.0;
         ui.painter().line_segment(
             [pos2(dx, bar.top() + 8.0), pos2(dx, bar.bottom() - 8.0)],
-            Stroke::new(1.0_f32, theme::BORDER),
+            Stroke::new(1.0_f32, theme::border()),
         );
         let mut x = dx + 8.0;
         let button = |ui: &mut Ui,
@@ -971,9 +1162,9 @@ impl NbtTree {
             );
             if resp.hovered() && enabled {
                 ui.painter()
-                    .rect_filled(r, theme::radius(3), theme::BUTTON_HOVER);
+                    .rect_filled(r, theme::radius(3), theme::button_hover());
             }
-            let c = if enabled { theme::TEXT } else { theme::CHIP };
+            let c = if enabled { theme::text() } else { theme::chip() };
             paint(ui.painter(), r.shrink(5.0), c);
             let clicked = resp.clicked();
             resp.on_hover_text(tip);
@@ -1009,16 +1200,16 @@ impl NbtTree {
         let tags_end = x;
         let resp = ui.interact(sr, Id::new("nbt-find"), Sense::click());
         if resp.hovered() {
-            ui.painter().rect_filled(sr, theme::radius(4), Color32::from_white_alpha(28));
+            ui.painter().rect_filled(sr, theme::radius(4), theme::wash(28));
         }
         icons::paint(
             ui.painter(),
             sr.shrink(4.0),
             Icon::Search,
             if resp.hovered() || self.finding {
-                Color32::WHITE
+                theme::strong()
             } else {
-                theme::TEXT_MUTED
+                theme::text_muted()
             },
         );
         if resp.clicked() {
@@ -1038,7 +1229,7 @@ impl NbtTree {
                     fr,
                     egui::TextEdit::singleline(&mut self.find)
                         .hint_text("Find tag or value")
-                        .background_color(theme::DEEP),
+                        .background_color(theme::deep()),
                 )
             } else {
                 let at = pos2(bar.right() - 8.0 - 220.0, bar.bottom() + 4.0);
@@ -1047,16 +1238,16 @@ impl NbtTree {
                     .fixed_pos(at)
                     .show(ui.ctx(), |ui| {
                         egui::Frame::new()
-                            .fill(theme::DEEP)
+                            .fill(theme::deep())
                             .corner_radius(4)
-                            .stroke(Stroke::new(1.0_f32, theme::BORDER))
+                            .stroke(Stroke::new(1.0_f32, theme::border()))
                             .inner_margin(2.0)
                             .show(ui, |ui| {
                                 ui.add_sized(
                                     vec2(216.0, 22.0),
                                     egui::TextEdit::singleline(&mut self.find)
                                         .hint_text("Find tag or value")
-                                        .background_color(theme::DEEP),
+                                        .background_color(theme::deep()),
                                 )
                             })
                             .inner
@@ -1197,7 +1388,7 @@ impl NbtTree {
                 } else {
                     Icon::ChevronRight
                 },
-                theme::TEXT_MUTED,
+                theme::text_muted(),
             );
             if resp.clicked()
                 && ui
@@ -1216,12 +1407,12 @@ impl NbtTree {
         x += 20.0 * k;
         // A tag in a list has no name of its own, only its place; one in a compound is named.
         if in_compound {
-            let name_galley = p.layout_no_wrap(label.to_string(), theme::regular(13.0 * k), theme::TEXT);
+            let name_galley = p.layout_no_wrap(label.to_string(), theme::regular(13.0 * k), theme::text());
             let name_w = name_galley.size().x;
             p.galley(
                 pos2(x, rect.center().y - name_galley.size().y / 2.0),
                 name_galley,
-                theme::TEXT,
+                theme::text(),
             );
             x += name_w + 6.0 * k;
         }
@@ -1262,6 +1453,11 @@ impl NbtTree {
             Tag::Compound(c) => item_stack(c),
             _ => None,
         };
+        // Otherwise a block entity, entity or block state: its picture and name.
+        let thing = match &*tag {
+            Tag::Compound(c) if item.is_none() => thing_of(c),
+            _ => None,
+        };
         // Where an extension's icon and label (or our own hint) go.
         let mut after;
         let mut gloss = None;
@@ -1270,13 +1466,13 @@ impl NbtTree {
                 let g = p.layout_no_wrap(
                     counted.unwrap_or_default(),
                     theme::regular(12.0 * k),
-                    theme::TEXT_DIM,
+                    theme::text_dim(),
                 );
                 let hint_w = g.size().x;
                 p.galley(
                     pos2(x, rect.center().y - g.size().y / 2.0),
                     g,
-                    theme::TEXT_DIM,
+                    theme::text_dim(),
                 );
                 after = x + hint_w + 8.0 * k;
                 // An item stack: its picture, name and how many, after the count of tags.
@@ -1285,23 +1481,23 @@ impl NbtTree {
                     // Enchanted: tinted purple.
                     let enchanted = matches!(&*tag, Tag::Compound(c) if !crate::enchant::read(c).is_empty());
                     let tint = if enchanted { crate::enchant::PURPLE } else { Color32::WHITE };
-                    // Bedrock keeps a stack with no name and no count in every empty slot: a grey
+                    // Bedrock keeps a stack with no name and no count in every empty slot: a gray
                     // grass block, and "Empty".
                     let empty = matches!(&*tag, Tag::Compound(c) if is_bedrock_item(c)) && (id.is_empty() || *n == Some(0));
                     let drawn = if empty {
                         icons::item_texture("grass_block").is_some_and(|f| icons::gray_image(&p, ir, &f))
                     } else {
-                        icons::item_texture(id).is_some_and(|f| icons::file_image_tinted(&p, ir, &f, tint))
+                        icons::item_icon(&p, ir, id, tint)
                     };
                     if !drawn {
-                        icons::paint(&p, ir, Icon::File, theme::TEXT_DIM);
+                        icons::paint(&p, ir, Icon::File, theme::text_dim());
                     }
                     let ink = if enchanted {
                         Color32::from_rgb(0xCF, 0xA8, 0xFF)
                     } else if empty {
-                        theme::TEXT_DIM
+                        theme::text_dim()
                     } else {
-                        theme::TEXT
+                        theme::text()
                     };
                     after += 22.0 * k;
                     let shown_name = if empty { "Empty".to_string() } else { item_name(id) };
@@ -1309,31 +1505,72 @@ impl NbtTree {
                     let w = name.size().x;
                     p.galley(pos2(after, rect.center().y - name.size().y / 2.0), name, ink);
                     after += w + 6.0 * k;
+                    // Its custom name, in italics.
+                    if let Some(custom) = tag.as_compound().and_then(crate::naming::item_name).filter(|n| !n.trim().is_empty()) {
+                        let g = p.layout_no_wrap(format!("\u{201c}{custom}\u{201d}"), theme::italic(12.5 * k), theme::text_muted());
+                        let w = g.size().x;
+                        p.galley(pos2(after, rect.center().y - g.size().y / 2.0), g, theme::text_muted());
+                        after += w + 6.0 * k;
+                    }
                     if !empty && n.is_some_and(|n| n != 1) {
                         let c = p.layout_no_wrap(
                             format!("\u{d7}{}", n.unwrap_or_default()),
                             theme::regular(12.5 * k),
-                            theme::TEXT_MUTED,
+                            theme::text_muted(),
                         );
                         let w = c.size().x;
-                        p.galley(pos2(after, rect.center().y - c.size().y / 2.0), c, theme::TEXT_MUTED);
+                        p.galley(pos2(after, rect.center().y - c.size().y / 2.0), c, theme::text_muted());
                         after += w + 8.0 * k;
                     }
-                }                if matches!(&*tag, Tag::ByteArray(_) | Tag::IntArray(_) | Tag::LongArray(_)) && !is_gone {
+                }
+                if let Some((icon, name)) = &thing {
+                    let ir = Rect::from_min_size(pos2(after, rect.center().y - 8.0 * k), Vec2::splat(16.0 * k));
+                    if !icons::item_icon(&p, ir, icon, Color32::WHITE) {
+                        icons::paint(&p, ir, Icon::File, theme::text_dim());
+                    }
+                    after += 22.0 * k;
+                    // Half of a large chest: named so, with which half and where the other is,
+                    // and a dot in a color of the pair's own.
+                    let pair = cx.chests.get(&path).copied();
+                    let shown = if pair.is_some() { format!("Large {name}") } else { name.clone() };
+                    let g = p.layout_no_wrap(shown, theme::regular(13.0 * k), theme::text());
+                    let w = g.size().x;
+                    p.galley(pos2(after, rect.center().y - g.size().y / 2.0), g, theme::text());
+                    after += w + 8.0 * k;
+                    // Its custom name (a named mob, a named chest), in italics.
+                    if let Some(custom) = tag.as_compound().and_then(crate::naming::mob_name).filter(|n| !n.trim().is_empty()) {
+                        let g = p.layout_no_wrap(format!("\u{201c}{custom}\u{201d}"), theme::italic(12.5 * k), theme::text_muted());
+                        let w = g.size().x;
+                        p.galley(pos2(after, rect.center().y - g.size().y / 2.0), g, theme::text_muted());
+                        after += w + 8.0 * k;
+                    }
+                    if let (Some((right, other)), Some(Seg::Index(me))) = (pair, path.last()) {
+                        let hue = ((*me).min(other) as f32 * 0.618_034).fract();
+                        let dot = Color32::from(egui::ecolor::Hsva::new(hue, 0.55, 0.95, 1.0));
+                        p.circle_filled(pos2(after + 4.0 * k, rect.center().y), 4.0 * k, dot);
+                        after += 12.0 * k;
+                        let note = format!("{} half", if right { "right" } else { "left" });
+                        let g = p.layout_no_wrap(note, theme::regular(12.0 * k), theme::text_dim());
+                        let w = g.size().x;
+                        p.galley(pos2(after, rect.center().y - g.size().y / 2.0), g, theme::text_dim());
+                        after += w + 8.0 * k;
+                    }
+                }
+                if matches!(&*tag, Tag::ByteArray(_) | Tag::IntArray(_) | Tag::LongArray(_)) && !is_gone {
                     // "Hex Edit..." is on offer on the selected or hovered row.
                     // (The row itself stops being hovered once the pointer is on the button.)
                     let over_row = ui.input(|i| i.pointer.hover_pos()).is_some_and(|q| rect.contains(q));
                     if selected || over_row {
                         let font = theme::regular(12.0 * k);
-                        let w = p.layout_no_wrap("Hex Edit...".into(), font.clone(), theme::TEXT).size().x + 16.0 * k;
+                        let w = p.layout_no_wrap("Hex Edit...".into(), font.clone(), theme::text()).size().x + 16.0 * k;
                         let br = Rect::from_min_size(pos2(after, rect.top() + 2.0 * k), vec2(w, rh - 4.0 * k));
                         let bresp = ui.interact(br, ui.id().with(("hex-open", &key)), Sense::click());
                         p.rect_filled(
                             br,
                             theme::radius(3),
-                            if bresp.hovered() { theme::BUTTON_HOVER } else { theme::BUTTON },
+                            if bresp.hovered() { theme::button_hover() } else { theme::button() },
                         );
-                        p.text(br.center(), Align2::CENTER_CENTER, "Hex Edit...", font, theme::TEXT);
+                        p.text(br.center(), Align2::CENTER_CENTER, "Hex Edit...", font, theme::text());
                         if bresp.clicked() {
                             actions.push(Action::OpenHex(path.clone()));
                         }
@@ -1357,7 +1594,7 @@ impl NbtTree {
                 if let Some(info) = cx.rows.borrow_mut().last_mut() {
                     info.field = Some(r);
                 }
-                p.rect_filled(r, theme::radius(2), theme::FIELD);
+                p.rect_filled(r, theme::radius(2), theme::field());
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r));
                 child.style_mut().visuals.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
                 child.style_mut().visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
@@ -1426,7 +1663,7 @@ impl NbtTree {
                     .find_map(|n| icons::pack_texture(n))
                     .is_some_and(|f| icons::file_image(&p, ir, &f)),
                 crate::info::NoteIcon::Own(i) => {
-                    icons::paint(&p, ir, i, theme::TEXT_MUTED);
+                    icons::paint(&p, ir, i, theme::text_muted());
                     true
                 }
                 crate::info::NoteIcon::Image(name) => icons::image(&p, ir, name, Color32::WHITE),
@@ -1470,7 +1707,7 @@ impl NbtTree {
                 });
             } else {
                 let extras = {
-                    let mut e = Extras::default();
+                    let mut e = Extras { data_version: cx.data_version, ..Default::default() };
                     match &*tag {
                         Tag::Compound(c) => {
                             let kind_ok = c.get("id").and_then(Tag::as_str).is_some_and(|i| crate::inventory::Kind::of_container(i).is_some());
@@ -1482,9 +1719,30 @@ impl NbtTree {
                             if let Some((id, n)) = &item {
                                 let empty = is_bedrock_item(c) && (id.is_empty() || *n == Some(0));
                                 e.map = crate::naming::map_file(c, id);
-                                e.name_item = !empty && item_id_key(tag).is_some() && !crate::naming::has_item_name(c);
+                                if !empty && item_id_key(tag).is_some() {
+                                    e.name = Some((true, crate::naming::item_name(c).unwrap_or_default()));
+                                    use crate::item_edit::{Rule, modifiers, rule_blocks};
+                                    e.item = Some((modifiers(c, cx.data_version), rule_blocks(c, Rule::Break, cx.data_version), rule_blocks(c, Rule::Place, cx.data_version)));
+                                    if crate::inventory::durability(id).is_some() {
+                                        e.unbreakable = Some(crate::naming::is_unbreakable(c));
+                                    }
+                                }
                             }
-                            e.name_mob = crate::naming::is_mob(c) && !crate::naming::has_mob_name(c);
+                            let block_entity = c.contains_key("x") && c.contains_key("y") && c.contains_key("z");
+                            if item.is_none() {
+                                e.mob = mob_menu(c, block_entity, cx.data_version);
+                            }
+                            // A spawner's mob; a container's lock.
+                            if block_entity {
+                                let spawner = crate::mob_edit::is_spawner(c).then(|| crate::mob_edit::spawner_mob(c));
+                                let lock = crate::mob_edit::lockable(c).then(|| crate::mob_edit::lock(c));
+                                if spawner.is_some() || lock.is_some() {
+                                    e.block = Some(BlockMenu { spawner, lock });
+                                }
+                            }
+                            if e.name.is_none() && (crate::naming::is_mob(c) || (kind_ok && block_entity)) {
+                                e.name = Some((false, crate::naming::mob_name(c).unwrap_or_default()));
+                            }
                         }
                         Tag::List(l) => {
                             let named = matches!(label, "Inventory" | "EnderItems" | "EnderChestInventory") || (label == "Items" && cx.container.get());
@@ -1605,40 +1863,364 @@ impl NbtTree {
         }
         // An inventory list opens as the game's inventory screen.
         if let Some(target) = &extras.inventory {
-            if ctx_menu::item(ui, Icon::File, "Edit Inventory", "", true) {
+            if ctx_menu::painted(ui, "Edit Inventory", "", true, ctx_menu::item_icon("chest")) {
                 actions.push(Action::OpenInventory(target.clone()));
             }
             ctx_menu::separator(ui);
         }
-        // An item stack can become another item.
+        // An item stack: what it is and has, together under `Item ▸`.
         if let Some(key) = item_id_key(tag) {
             let current = tag.as_compound().and_then(item_stack).map(|(id, _)| id).unwrap_or_default();
             // Console and old worlds name an item by number: only items that have one are offered.
             let numeric = !matches!(tag.get(key), Some(Tag::String(_)));
-            let picked = ctx_menu::submenu_wide(ui, cx, Icon::Refresh, "Change Item", crate::item_picker::WIDTH, crate::item_picker::HEIGHT, |ui| {
-                crate::item_picker::show(ui, &current, numeric)
+            let icon = current.clone();
+            let chosen = ctx_menu::submenu_painted(ui, cx, move |p, r, ink| {
+                if !icons::item_icon_gray(p, r, &icon) {
+                    icons::paint(p, r, Icon::File, ink);
+                }
+            }, "Item", 260.0, 380.0, |ui| {
+                let old = ctx_menu::set_row_width(ui.ctx(), 260.0);
+                let mut inner = ctx_menu::Cx::default();
+                let mut out: Vec<Action> = Vec::new();
+                // The item, and how many (at the top of the list, up to what the stack's count
+                // holds: an int 99, as the game reads it; a byte 127).
+                if let Some(c) = tag.as_compound() {
+                    let (count_key, count) = match (c.get("count"), c.get("Count")) {
+                        (Some(t), _) => ("count", t.as_i64().unwrap_or(1)),
+                        (None, Some(t)) => ("Count", t.as_i64().unwrap_or(1)),
+                        _ => ("count", 1),
+                    };
+                    let most = if count_key == "count" { 99 } else { 127 };
+                    let picked = ctx_menu::submenu_wide(ui, &mut inner, Icon::Refresh, "Change Item", crate::item_picker::WIDTH, crate::item_picker::HEIGHT + 30.0, |ui| {
+                        crate::item_picker::show_counted(ui, &current, numeric, count, most)
+                    });
+                    // A potion's kind and effects; a shulker box's color.
+                    if let Some(e) = crate::item_edit::special_rows(ui, &mut inner, &path_key(path), &current, c, extras.data_version) {
+                        out.push(Action::EditItem(path.clone(), e));
+                    }
+                    if let Some((id, n)) = picked {
+                        if let Some(id) = id {
+                            out.push(Action::SetItem(path.clone(), id));
+                        }
+                        if n != count {
+                            let mut p = path.clone();
+                            p.push(Seg::Key(count_key.into()));
+                            let value = match c.get(count_key) {
+                                Some(Tag::Byte(_)) => Tag::Byte(n as i8),
+                                Some(Tag::Short(_)) => Tag::Short(n as i16),
+                                _ => Tag::Int(n as i32),
+                            };
+                            out.push(Action::SetValues(vec![(p, value)], format!("Set the count to {n}")));
+                        }
+                    }
+                    if let Some(e) = crate::enchant::menu(ui, &mut inner, &crate::enchant::read(c)) {
+                        out.push(Action::SetEnchant(path.clone(), e));
+                    }
+                }
+                if let Some(on) = extras.unbreakable {
+                    if ctx_menu::toggle(ui, "Unbreakable", on) {
+                        out.push(Action::SetUnbreakable(path.clone(), !on));
+                    }
+                }
+                if let Some((mods, breaks, places)) = &extras.item {
+                    if let Some(e) = crate::item_edit::menu_rows(ui, &mut inner, &path_key(path), mods.as_deref(), breaks, places) {
+                        out.push(Action::EditItem(path.clone(), e));
+                    }
+                }
+                if let Some((true, current)) = &extras.name {
+                    if let Some(n) = crate::item_edit::name_menu(ui, &mut inner, current) {
+                        out.push(Action::SetName(path.clone(), n));
+                    }
+                }
+                if let Some(map) = &extras.map {
+                    if ctx_menu::painted(ui, "Open Map Editor", "", true, ctx_menu::item_icon("filled_map")) {
+                        out.push(Action::OpenMap(map.clone()));
+                    }
+                }
+                ctx_menu::set_row_width(ui.ctx(), old);
+                (!out.is_empty()).then_some(out)
             });
-            if let Some(id) = picked {
-                actions.push(Action::SetItem(path.clone(), id));
-            }
-            if let Some(c) = tag.as_compound() {
-                if let Some((id, level)) = crate::enchant::menu(ui, cx, &crate::enchant::read(c)) {
-                    actions.push(Action::SetEnchant(path.clone(), id, level));
-                }
-            }
-            if extras.name_item && ctx_menu::item(ui, Icon::Rename, "Add Display Name", "", true) {
-                actions.push(Action::AddName(path.clone()));
-            }
-            if let Some(map) = &extras.map {
-                if ctx_menu::item(ui, Icon::File, "Open Map Editor", "", true) {
-                    actions.push(Action::OpenMap(map.clone()));
-                }
-            }
+            actions.extend(chosen.into_iter().flatten());
             ctx_menu::separator(ui);
         }
-        if extras.name_mob {
-            if ctx_menu::item(ui, Icon::Rename, "Add Custom Name", "", true) {
-                actions.push(Action::AddName(path.clone()));
+        // A mob (or armor stand, item frame): what it is and has, under its name; an end
+        // gateway: where it sends things.
+        if let Some(m) = &extras.mob {
+            use crate::mob_edit::MobEdit;
+            let gateway = m.gateway.is_some();
+            let title = if gateway { "End Gateway".to_string() } else { item_name(&m.id) };
+            let egg = if gateway { "end_portal_frame".to_string() } else { m.icon.clone() };
+            let chosen = ctx_menu::submenu_painted(ui, cx, move |p, r, ink| {
+                if !icons::item_icon_gray(p, r, &egg) {
+                    icons::paint(p, r, Icon::File, ink);
+                }
+            }, &title, 260.0, 320.0, |ui| {
+                let old = ctx_menu::set_row_width(ui.ctx(), 260.0);
+                let mut inner = ctx_menu::Cx::default();
+                let mut out: Vec<Action> = Vec::new();
+                let edit = |out: &mut Vec<Action>, e: MobEdit| out.push(Action::EditMob(path.clone(), e));
+                if m.trades && ctx_menu::painted(ui, "Edit Trades", "", true, ctx_menu::item_icon("emerald")) {
+                    out.push(Action::OpenTrades(path.clone()));
+                }
+                if let Some(on) = m.invulnerable {
+                    if ctx_menu::toggle(ui, "Invulnerable", on) {
+                        edit(&mut out, MobEdit::Invulnerable(!on));
+                    }
+                }
+                if let Some(on) = m.no_ai {
+                    if ctx_menu::toggle(ui, "No AI", on) {
+                        edit(&mut out, MobEdit::NoAi(!on));
+                    }
+                }
+                if let Some(on) = m.invisible {
+                    if ctx_menu::toggle(ui, "Invisible", on) {
+                        edit(&mut out, MobEdit::Invisible(!on));
+                    }
+                }
+                // Shown as the tag is: ticked when `NoGravity` is set (it floats).
+                if let Some(falls) = m.gravity {
+                    if ctx_menu::toggle(ui, "No Gravity", !falls) {
+                        edit(&mut out, MobEdit::Gravity(!falls));
+                    }
+                }
+                if !m.equipment.is_empty() {
+                    let rows = m.equipment.len() as f32;
+                    let picked = ctx_menu::submenu_painted(ui, &mut inner, ctx_menu::item_icon("iron_chestplate"), "Equipment", 280.0, 20.0 + rows * 32.0, |ui| {
+                        let old = ctx_menu::set_row_width(ui.ctx(), 280.0);
+                        let mut slots = ctx_menu::Cx::default();
+                        let mut out = None;
+                        for (slot, item, stack) in &m.equipment {
+                            let label = match item {
+                                Some((id, 1)) => format!("{}: {}", slot.name(), crate::item_picker::display_name(id)),
+                                Some((id, n)) => format!("{}: {} \u{d7}{n}", slot.name(), crate::item_picker::display_name(id)),
+                                None => format!("{}: nothing", slot.name()),
+                            };
+                            // In gray, as the menus' icons are: the item, or the game's picture of
+                            // the slot while empty.
+                            let (icon_id, empty) = (item.as_ref().map(|i| i.0.clone()), slot.empty_picture());
+                            let chosen = ctx_menu::submenu_painted(
+                                ui,
+                                &mut slots,
+                                move |p, r, ink| {
+                                    let drawn = match &icon_id {
+                                        Some(id) => icons::item_icon_gray(p, r, id),
+                                        None => icons::pack_texture(empty).is_some_and(|f| icons::gray_image(p, r, &f)),
+                                    };
+                                    if !drawn {
+                                        p.rect_stroke(r.shrink(2.0), theme::radius(2), egui::Stroke::new(1.0_f32, ink), egui::StrokeKind::Inside);
+                                    }
+                                },
+                                &label,
+                                260.0,
+                                if stack.is_some() { 220.0 } else { 40.0 },
+                                |ui| {
+                                    let old = ctx_menu::set_row_width(ui.ctx(), 260.0);
+                                    let mut rows = ctx_menu::Cx::default();
+                                    let mut got = None;
+                                    // The item, and how many at the top of the list (the count on
+                                    // its own too).
+                                    let (now_id, now_n) = item.clone().unwrap_or_default();
+                                    let (icon, text) = if item.is_some() { (Icon::Refresh, "Change Item") } else { (Icon::Plus, "Add Item") };
+                                    let picked = ctx_menu::submenu_wide(ui, &mut rows, icon, text, crate::item_picker::WIDTH, crate::item_picker::HEIGHT + 30.0, |ui| {
+                                        crate::item_picker::show_counted(ui, &now_id, false, now_n.max(1), 99)
+                                    });
+                                    match picked {
+                                        Some((Some(id), n)) => got = Some(MobEdit::Equip(*slot, Some((id, n)))),
+                                        Some((None, n)) if !now_id.is_empty() => got = Some(MobEdit::Equip(*slot, Some((now_id.clone(), n)))),
+                                        _ => {}
+                                    }
+                                    if item.is_some() {
+                                        if ctx_menu::item(ui, Icon::Trash, "Remove", "", true) {
+                                            got = Some(MobEdit::Equip(*slot, None));
+                                        }
+                                        ctx_menu::separator(ui);
+                                    }
+                                    // What the stack has: enchantments, attributes (and the slots
+                                    // they work in), unbreakable, its name.
+                                    if let (Some(stack), Some((id, _))) = (stack, item) {
+                                        let key = format!("{}-{}", path_key(path), slot.name());
+                                        if let Some(e) = crate::item_edit::stack_menu(ui, &mut rows, &key, id, stack, m.data_version) {
+                                            got = Some(MobEdit::EquipStack(*slot, e));
+                                        }
+                                    }
+                                    ctx_menu::set_row_width(ui.ctx(), old);
+                                    got
+                                },
+                            );
+                            if chosen.is_some() {
+                                out = chosen;
+                            }
+                        }
+                        ctx_menu::set_row_width(ui.ctx(), old);
+                        out
+                    });
+                    if let Some(e) = picked {
+                        edit(&mut out, e);
+                    }
+                }
+                // What it drops when it dies (each slot's chance, its loot table) and whether it
+                // picks things up.
+                if let Some(d) = &m.drops {
+                    let rows = d.chances.len() as f32 + if d.has_loot_table { 1.0 } else { 0.0 } + 1.0;
+                    let picked = ctx_menu::submenu_painted(ui, &mut inner, ctx_menu::item_icon("bone"), "Drops", 300.0, 20.0 + rows * 32.0, |ui| {
+                        let old = ctx_menu::set_row_width(ui.ctx(), 300.0);
+                        let mut tables = ctx_menu::Cx::default();
+                        let mut got: Option<MobEdit> = None;
+                        for (slot, chance) in &d.chances {
+                            // As a percentage: 100 is always (saved above 1, so it drops as it was).
+                            let key = egui::Id::new(("drop-chance", path_key(path), *slot as u8));
+                            let now = (chance.min(1.0) * 100.0 * 100.0).round() / 100.0;
+                            let mut v: f64 = ui.ctx().data(|dd| dd.get_temp(key)).unwrap_or(now);
+                            // Pictured by what the slot holds (else the slot's own picture), in gray.
+                            let held = m.equipment.iter().find(|(s, ..)| s == slot).and_then(|(_, i, _)| i.as_ref().map(|i| i.0.clone()));
+                            let empty = slot.empty_picture();
+                            let icon = move |p: &egui::Painter, r: Rect, ink: Color32| {
+                                let drawn = match &held {
+                                    Some(id) => icons::item_icon_gray(p, r, id),
+                                    None => icons::pack_texture(empty).is_some_and(|f| icons::gray_image(p, r, &f)),
+                                };
+                                if !drawn {
+                                    icons::paint(p, r, Icon::Rename, ink);
+                                }
+                            };
+                            let (changed, done) = ctx_menu::decimal_row_painted(ui, icon, &format!("{} %", slot.name()), &mut v, 0.0..=100.0);
+                            if changed {
+                                ui.ctx().data_mut(|dd| dd.insert_temp(key, v));
+                            }
+                            if done {
+                                ui.ctx().data_mut(|dd| dd.remove_temp::<f64>(key));
+                                if (v - now).abs() > 1e-9 {
+                                    got = Some(MobEdit::DropChance(*slot, if v >= 100.0 { 2.0 } else { v / 100.0 }));
+                                }
+                            }
+                        }
+                        if d.has_loot_table {
+                            // Picked from the list of tables, the mob's own at the top.
+                            let own = format!("minecraft:entities/{}", m.id.trim_start_matches("minecraft:"));
+                            let label = match d.loot_table.as_deref() {
+                                Some(t) => format!("Loot Table: {}", crate::item_picker::loot_tables().iter().find(|x| x.id == t).map_or_else(|| t.trim_start_matches("minecraft:").to_string(), |x| x.name.clone())),
+                                None => "Loot Table: Default".to_string(),
+                            };
+                            let chosen = ctx_menu::submenu_painted(ui, &mut tables, ctx_menu::item_icon("chest"), &label, crate::item_picker::WIDTH, crate::item_picker::HEIGHT, |ui| {
+                                crate::item_picker::show_loot_tables(ui, d.loot_table.as_deref(), &own)
+                            });
+                            if let Some(t) = chosen {
+                                got = Some(MobEdit::LootTable(t));
+                            }
+                        }
+                        if ctx_menu::toggle(ui, "Can Pick Up Loot", d.pick_up) {
+                            got = Some(MobEdit::PickUp(!d.pick_up));
+                        }
+                        ctx_menu::set_row_width(ui.ctx(), old);
+                        got
+                    });
+                    if let Some(e) = picked {
+                        edit(&mut out, e);
+                    }
+                }
+                // Its status effects: each one's level and time, and adding more.
+                if let Some((effects, choices)) = &m.effects {
+                    if let Some(e) = crate::effects::menu(ui, &mut inner, &path_key(path), "Status Effects", effects, choices) {
+                        edit(&mut out, MobEdit::Effect(e));
+                    }
+                }
+                // A shulker's color.
+                if let Some(now) = m.shulker_color {
+                    let shown = if now == 16 { "shulker_box".to_string() } else { format!("{}_shulker_box", crate::mob_edit::COLORS.get(now as usize).copied().unwrap_or("purple")) };
+                    let picked = ctx_menu::submenu_painted(ui, &mut inner, ctx_menu::item_icon(&shown), "Color", 220.0, 20.0 + 17.0 * 26.0, |ui| {
+                        let old = ctx_menu::set_row_width(ui.ctx(), 220.0);
+                        let mut got = None;
+                        for (k, (cid, name)) in crate::item_edit::shulker_colors().into_iter().enumerate() {
+                            // Undyed first in the list; 16 as the shulker keeps it.
+                            let v = if k == 0 { 16 } else { k as i64 - 1 };
+                            let current = v == now;
+                            let clicked = ctx_menu::painted(ui, &name, if current { "\u{2713}" } else { "" }, true, move |p, r, ink| {
+                                if !icons::item_icon(p, r, &cid, Color32::WHITE) {
+                                    icons::paint(p, r, Icon::File, ink);
+                                }
+                            });
+                            if clicked && !current {
+                                got = Some(v);
+                            }
+                        }
+                        ctx_menu::set_row_width(ui.ctx(), old);
+                        got
+                    });
+                    if let Some(v) = picked {
+                        edit(&mut out, MobEdit::ShulkerColor(v));
+                    }
+                }
+                if let Some((at, exact)) = m.gateway {
+                    for (k, axis) in ["Exit X", "Exit Y", "Exit Z"].iter().enumerate() {
+                        let key = egui::Id::new(("gateway-exit", path_key(path), k));
+                        let mut v: i64 = ui.ctx().data(|d| d.get_temp(key)).unwrap_or(at[k]);
+                        let (changed, done) = ctx_menu::number_row(ui, Icon::Rename, axis, &mut v, -30_000_000..=30_000_000, "");
+                        if changed {
+                            ui.ctx().data_mut(|d| d.insert_temp(key, v));
+                        }
+                        if done {
+                            ui.ctx().data_mut(|d| d.remove_temp::<i64>(key));
+                            if v != at[k] {
+                                let mut to = at;
+                                to[k] = v;
+                                edit(&mut out, MobEdit::GatewayExit(to));
+                            }
+                        }
+                    }
+                    if let Some(on) = exact {
+                        if ctx_menu::toggle(ui, "Exact Teleport", on) {
+                            edit(&mut out, MobEdit::GatewayExact(!on));
+                        }
+                    }
+                }
+                if let Some((false, current)) = &extras.name {
+                    if let Some(n) = crate::item_edit::name_menu(ui, &mut inner, current) {
+                        out.push(Action::SetName(path.clone(), n));
+                    }
+                }
+                ctx_menu::set_row_width(ui.ctx(), old);
+                (!out.is_empty()).then_some(out)
+            });
+            actions.extend(chosen.into_iter().flatten());
+            ctx_menu::separator(ui);
+        } else if extras.name.as_ref().is_some_and(|(item, _)| !item) || extras.block.is_some() {
+            use crate::mob_edit::MobEdit;
+            // A spawner: the mob it spawns, from the list of mobs.
+            if let Some(spawner) = extras.block.as_ref().and_then(|b| b.spawner.as_ref()) {
+                let label = format!("Spawns: {}", spawner.as_deref().map_or_else(|| "Nothing".to_string(), item_name));
+                let egg = spawner.as_deref().map_or_else(|| "spawner".to_string(), |id| format!("{}_spawn_egg", id.trim_start_matches("minecraft:")));
+                let picked = ctx_menu::submenu_painted(ui, cx, ctx_menu::item_icon(&egg), &label, crate::item_picker::WIDTH, crate::item_picker::HEIGHT, |ui| {
+                    crate::item_picker::show_mobs(ui, spawner.as_deref())
+                });
+                if let Some(id) = picked {
+                    actions.push(Action::EditMob(path.clone(), MobEdit::SpawnerMob(id)));
+                }
+            }
+            // A container: its lock (the name of the key that opens it) and its name.
+            if let Some(key) = extras.block.as_ref().and_then(|b| b.lock.as_ref()) {
+                let label = if key.is_empty() { "Lock".to_string() } else { format!("Lock: {key}") };
+                let picked = ctx_menu::submenu_painted(ui, cx, ctx_menu::item_icon("tripwire_hook"), &label, 300.0, 80.0, |ui| {
+                    let old = ctx_menu::set_row_width(ui.ctx(), 300.0);
+                    let mut got = None;
+                    if let Some(k) = ctx_menu::text_row(ui, Icon::Rename, "Key Name", key, "Name of the key item") {
+                        if k.trim() != key {
+                            got = Some(k.trim().to_string());
+                        }
+                    }
+                    if !key.is_empty() && ctx_menu::item(ui, Icon::Trash, "Unlock", "", true) {
+                        got = Some(String::new());
+                    }
+                    ctx_menu::set_row_width(ui.ctx(), old);
+                    got
+                });
+                if let Some(k) = picked {
+                    actions.push(Action::EditMob(path.clone(), MobEdit::Lock(k)));
+                }
+            }
+            if let Some((false, current)) = &extras.name {
+                if let Some(n) = crate::item_edit::name_menu(ui, cx, current) {
+                    actions.push(Action::SetName(path.clone(), n));
+                }
             }
             ctx_menu::separator(ui);
         }
@@ -2388,26 +2970,62 @@ impl NbtTree {
                 self.open_map_request = Some(name);
                 return;
             }
-            Action::AddName(path) => {
+            Action::EditMob(path, edit) => {
                 let Some(mut c) = get_ref(&self.root.tag, &path).and_then(Tag::as_compound).cloned() else { return };
                 let version = self.root.tag.get("DataVersion").and_then(Tag::as_i64);
-                let note = if crate::naming::is_mob(&c) {
-                    crate::naming::add_mob_name(&mut c, version);
-                    "Added a custom name"
-                } else {
-                    crate::naming::add_item_name(&mut c, version);
-                    "Added a display name"
-                };
+                edit.apply(&mut c, version);
+                if get_ref(&self.root.tag, &path) == Some(&Tag::Compound(c.clone())) {
+                    return;
+                }
+                return self.apply(Action::SetValues(vec![(path, Tag::Compound(c))], edit.note()));
+            }
+            Action::EditItem(path, edit) => {
+                let Some(mut c) = get_ref(&self.root.tag, &path).and_then(Tag::as_compound).cloned() else { return };
+                let version = self.root.tag.get("DataVersion").and_then(Tag::as_i64);
+                edit.apply(&mut c, version);
+                if get_ref(&self.root.tag, &path) == Some(&Tag::Compound(c.clone())) {
+                    return;
+                }
+                return self.apply(Action::SetValues(vec![(path, Tag::Compound(c))], edit.note()));
+            }
+            Action::OpenTrades(path) => {
+                self.trades = Some(path);
+                return;
+            }
+            Action::SetUnbreakable(path, on) => {
+                let Some(mut c) = get_ref(&self.root.tag, &path).and_then(Tag::as_compound).cloned() else { return };
+                let version = self.root.tag.get("DataVersion").and_then(Tag::as_i64);
+                crate::naming::set_unbreakable(&mut c, on, version);
+                let note = if on { "Made it unbreakable" } else { "Made it breakable" };
                 return self.apply(Action::SetValues(vec![(path, Tag::Compound(c))], note.into()));
             }
-            Action::SetEnchant(path, id, level) => {
+            Action::SetName(path, name) => {
                 let Some(mut c) = get_ref(&self.root.tag, &path).and_then(Tag::as_compound).cloned() else { return };
                 let version = self.root.tag.get("DataVersion").and_then(Tag::as_i64);
-                crate::enchant::set(&mut c, &id, level, version);
-                let note = match level {
-                    Some(l) => format!("Gave {} {}", crate::enchant::name(&id), crate::enchant::level_text(l)),
-                    None => format!("Removed {}", crate::enchant::name(&id)),
+                let name = Some(name.trim()).filter(|n| !n.is_empty());
+                // An item stack keeps its name its own way; a mob or a chest in `CustomName`.
+                if item_stack(&c).is_some() {
+                    crate::naming::set_item_name(&mut c, name, version);
+                } else {
+                    crate::naming::set_mob_name(&mut c, name, version);
+                }
+                if get_ref(&self.root.tag, &path) == Some(&Tag::Compound(c.clone())) {
+                    return;
+                }
+                let note = match name {
+                    Some(n) => format!("Named it \u{201c}{n}\u{201d}"),
+                    None => "Took its name away".to_string(),
                 };
+                return self.apply(Action::SetValues(vec![(path, Tag::Compound(c))], note));
+            }
+            Action::SetEnchant(path, edit) => {
+                let Some(mut c) = get_ref(&self.root.tag, &path).and_then(Tag::as_compound).cloned() else { return };
+                let version = self.root.tag.get("DataVersion").and_then(Tag::as_i64);
+                let note = edit.note(&crate::enchant::read(&c));
+                crate::enchant::apply(&mut c, &edit, version);
+                if get_ref(&self.root.tag, &path) == Some(&Tag::Compound(c.clone())) {
+                    return;
+                }
                 return self.apply(Action::SetValues(vec![(path, Tag::Compound(c))], note));
             }
             Action::SetValues(changes, note) => {
@@ -2483,7 +3101,7 @@ impl NbtTree {
                 if let Some(t) = get_mut(&mut self.root.tag, &at) {
                     *t = new_id;
                 }
-                // The damage value is part of what the number means (dye colours, ...); a tool's
+                // The damage value is part of what the number means (dye colors, ...); a tool's
                 // wear starts again.
                 if let Some(damage) = new_damage {
                     let mut dmg = p.clone();
@@ -2691,7 +3309,23 @@ impl NbtTree {
         self.apply(Action::ChangedAt(at));
     }
 
-    /// Opens the map picture editor on this document's map colours; false when it has none.
+    /// Opens the map picture editor on this document's map colors; false when it has none.
+    /// For a player's file or record: its inventory opened as the inventory screen. False when it
+    /// has none.
+    /// Changes the document's root (a player's file) as its menu would: one step to undo.
+    pub fn edit_root(&mut self, e: crate::mob_edit::MobEdit) {
+        self.frame_start = Some(self.snap());
+        self.apply(Action::EditMob(Vec::new(), e));
+    }
+
+    pub fn open_player_inventory(&mut self) -> bool {
+        if !matches!(self.root.tag.get("Inventory"), Some(Tag::List(_))) {
+            return false;
+        }
+        self.apply(Action::OpenInventory(vec![Seg::Key("Inventory".into())]));
+        true
+    }
+
     pub fn open_map_editor(&mut self) -> bool {
         fn find(t: &Tag, at: &mut TagPath) -> bool {
             let Tag::Compound(c) = t else { return false };
@@ -2824,6 +3458,8 @@ impl NbtTree {
                 damage: durability.and(damage_of(c).map(|(d, _)| d)),
                 durability,
                 enchants: crate::enchant::read(c),
+                unbreakable: crate::naming::is_unbreakable(c),
+                stack: c.clone(),
                 id,
                 number,
                 count: count.unwrap_or(1),
@@ -2834,7 +3470,7 @@ impl NbtTree {
         out
     }
 
-    /// A Bedrock player keeps its armour and offhand in lists beside `Inventory`.
+    /// A Bedrock player keeps its armor and offhand in lists beside `Inventory`.
     fn side_path(list: &TagPath, which: u8, partner: Option<&TagPath>) -> TagPath {
         if which == 0 {
             return list.clone();
@@ -2848,7 +3484,7 @@ impl NbtTree {
         p
     }
 
-    /// The lists the inventory screen shows: this one, and for Bedrock's `Inventory` the armour
+    /// The lists the inventory screen shows: this one, and for Bedrock's `Inventory` the armor
     /// (1) and offhand (2) lists too.
     fn inventory_lists(&self, list: &TagPath) -> Vec<(u8, TagPath)> {
         let mut out = vec![(0u8, list.clone())];
@@ -2866,7 +3502,7 @@ impl NbtTree {
         out
     }
 
-    /// The slot a stack in list `which` at place `i` is in: armour and offhand by place.
+    /// The slot a stack in list `which` at place `i` is in: armor and offhand by place.
     fn slot_of_elem(which: u8, i: usize, c: &Compound) -> Option<i8> {
         match which {
             1 => (i < 4).then(|| 103 - i as i8),
@@ -2891,9 +3527,30 @@ impl NbtTree {
         }
     }
 
-    /// The type of the chest block at a place in this chunk (`single`, `left`, `right`), read from
-    /// the chunk's own block states (1.16 and later).
+    /// The type of the chest block at a place in this chunk (`single`, `left`, `right`), read
+    /// from the chunk's own block states by the Java chunk reader (every era's sections and
+    /// packing, as the world view reads them); the chunk read once per edit.
     fn chest_type_at(&self, x: i64, y: i64, z: i64) -> Option<String> {
+        let chunk = {
+            let mut cache = self.decoded.borrow_mut();
+            if cache.as_ref().map(|(g, _)| *g) != Some(self.generation) {
+                let read = self.root.tag.get("sections").or_else(|| self.root.tag.get("Level")).is_some().then(|| mctk_java::Chunk::from_nbt_read_only(self.root.clone()).ok().map(Arc::new)).flatten();
+                *cache = Some((self.generation, read));
+            }
+            cache.as_ref().and_then(|(_, c)| c.clone())
+        };
+        if let Some(chunk) = chunk {
+            let s = chunk.sections.iter().find(|s| i64::from(s.y) == y >> 4)?;
+            if let Some(mctk_java::BlockStorage::Palette(p)) = &s.blocks {
+                let b = p.get(mctk_java::block_index((x & 15) as usize, (y & 15) as usize, (z & 15) as usize));
+                return Some(b.properties.get("type").cloned().unwrap_or_else(|| "single".into()));
+            }
+        }
+        self.chest_type_raw(x, y, z)
+    }
+
+    /// As [`Self::chest_type_at`], read straight from the tags (for a chunk the reader takes not).
+    fn chest_type_raw(&self, x: i64, y: i64, z: i64) -> Option<String> {
         let root = self.root.tag.as_compound()?;
         let sections = root.get("sections").or_else(|| root.get("Level").and_then(|l| l.get("Sections")))?.as_list()?;
         for s in sections.iter().filter_map(Tag::as_compound) {
@@ -2906,12 +3563,30 @@ impl NbtTree {
             };
             let palette = palette.as_list()?;
             let index = ((y & 15) << 8 | (z & 15) << 4 | (x & 15)) as usize;
+            // Before 1.16 (data version 2526) an entry could run on into the next long.
+            let spanning = root.get("DataVersion").and_then(Tag::as_i64).is_some_and(|v| v < 2526);
             let entry = match data {
-                Some(Tag::LongArray(longs)) if palette.len() > 1 => {
-                    let bits = (usize::BITS - (palette.len() - 1).leading_zeros()).max(4) as usize;
-                    let per_long = 64 / bits;
-                    let word = *longs.get(index / per_long)? as u64;
-                    ((word >> ((index % per_long) * bits)) & ((1u64 << bits) - 1)) as usize
+                Some(Tag::LongArray(longs)) if palette.len() > 1 && !longs.is_empty() => {
+                    // How wide an entry is, from how many longs hold the 4096 (as the game reads
+                    // it): the width the palette's size gives when that fits, else what the
+                    // length says.
+                    let packed = |b: usize| if spanning { (4096 * b).div_ceil(64) } else { 4096usize.div_ceil(64 / b) };
+                    let from_palette = (usize::BITS - (palette.len() - 1).leading_zeros()).max(4) as usize;
+                    let bits = if packed(from_palette) == longs.len() { from_palette } else { (1..=16).find(|b| packed(*b) == longs.len())? };
+                    let mask = (1u64 << bits) - 1;
+                    if spanning {
+                        let bit = index * bits;
+                        let (word, off) = (bit / 64, bit % 64);
+                        let mut v = (*longs.get(word)? as u64) >> off;
+                        if off + bits > 64 {
+                            v |= (*longs.get(word + 1)? as u64) << (64 - off);
+                        }
+                        (v & mask) as usize
+                    } else {
+                        let per_long = 64 / bits;
+                        let word = *longs.get(index / per_long)? as u64;
+                        ((word >> ((index % per_long) * bits)) & mask) as usize
+                    }
                 }
                 _ => 0,
             };
@@ -2919,6 +3594,44 @@ impl NbtTree {
             return Some(state.get("Properties").and_then(|p| p.get("type")).and_then(Tag::as_str).unwrap_or("single").to_string());
         }
         None
+    }
+
+    /// Every chest in the document's block entity lists that is half of a large chest, by its
+    /// path: whether it is the right half (whose slots come first) and the place in the list of
+    /// the other half.
+    pub(crate) fn find_large_chests(&self) -> HashMap<TagPath, (bool, usize)> {
+        let mut out = HashMap::new();
+        let lists: [TagPath; 3] = [
+            vec![Seg::Key("block_entities".into())],
+            vec![Seg::Key("BlockEntities".into())],
+            vec![Seg::Key("Level".into()), Seg::Key("TileEntities".into())],
+        ];
+        for list in lists {
+            let Some(Tag::List(l)) = get_ref(&self.root.tag, &list) else { continue };
+            for i in 0..l.len() {
+                let mut chest = list.clone();
+                chest.push(Seg::Index(i));
+                if out.contains_key(&chest) {
+                    continue;
+                }
+                let mut items = chest.clone();
+                items.push(Seg::Key("Items".into()));
+                let Some((first, second)) = self.chest_pair(&items) else { continue };
+                let place = |p: &TagPath| match p.get(p.len().wrapping_sub(2)) {
+                    Some(Seg::Index(k)) => Some(*k),
+                    _ => None,
+                };
+                let (Some(a), Some(b)) = (place(&first), place(&second)) else { continue };
+                let at = |k: usize| {
+                    let mut p = list.clone();
+                    p.push(Seg::Index(k));
+                    p
+                };
+                out.insert(at(a), (true, b));
+                out.insert(at(b), (false, a));
+            }
+        }
+        out
     }
 
     /// For the `Items` of a chest that is half of a large chest: this large chest's two `Items`
@@ -2950,26 +3663,24 @@ impl NbtTree {
             let lead = num(me, "pairlead").unwrap_or(0) != 0;
             return Some(if lead { (make(me_index), make(other.0)) } else { (make(other.0), make(me_index)) });
         }
-        // Java: the neighbour in the same row of blocks, and the chunk's block states say which half.
+        // Java: the neighbor in the same row of blocks, and the chunk's block states say which half.
         let (x, y, z) = (num(me, "x")?, num(me, "y")?, num(me, "z")?);
         let mine = self.chest_type_at(x, y, z)?;
         if mine != "left" && mine != "right" {
             return None;
         }
+        // The chest beside it that is the other half (not just any chest beside it: a lone
+        // chest, or another large chest, can stand there too).
+        let want = if mine == "left" { "right" } else { "left" };
         let other = siblings.iter().enumerate().find(|(i, t)| {
             *i != me_index
                 && t.as_compound().is_some_and(|c| {
                     let near = (num(c, "x").zip(num(c, "z"))).is_some_and(|(cx, cz)| (cx - x).abs() + (cz - z).abs() == 1);
-                    near && num(c, "y") == Some(y) && c.get("id") == me.get("id")
+                    near && num(c, "y") == Some(y)
+                        && c.get("id") == me.get("id")
+                        && num(c, "x").zip(num(c, "z")).and_then(|(cx, cz)| self.chest_type_at(cx, y, cz)).as_deref() == Some(want)
                 })
         })?;
-        let theirs = {
-            let c = other.1.as_compound()?;
-            self.chest_type_at(num(c, "x")?, y, num(c, "z")?)?
-        };
-        if theirs == mine || (theirs != "left" && theirs != "right") {
-            return None;
-        }
         // The right half is the first.
         Some(if mine == "right" { (make(me_index), make(other.0)) } else { (make(other.0), make(me_index)) })
     }
@@ -3035,6 +3746,30 @@ impl NbtTree {
         self.apply(Action::SetValues(vec![(pa, na), (pb, nb)], "Moved an item".into()));
     }
 
+    /// Draws the trades screen, if one is open, and applies what the user does in it.
+    fn trades_screen(&mut self, ui: &mut Ui) {
+        let Some(path) = self.trades.clone() else { return };
+        let Some(c) = get_ref(&self.root.tag, &path).and_then(Tag::as_compound) else {
+            self.trades = None;
+            return;
+        };
+        let version = self.root.tag.get("DataVersion").and_then(Tag::as_i64);
+        let list = crate::mob_edit::trades(c, version);
+        let who = mctk_convert::view::java_entity_id(c).map_or_else(|| "Villager".to_string(), |id| item_name(&id));
+        let title = match crate::naming::mob_name(c) {
+            Some(n) if !n.is_empty() => format!("Trades \u{2014} {n} ({who})"),
+            _ => format!("Trades \u{2014} {who}"),
+        };
+        let (edits, open) = crate::trades::show(ui, &list, &title, version);
+        self.frame_start = Some(self.snap());
+        for e in edits {
+            self.apply(Action::EditMob(path.clone(), crate::mob_edit::MobEdit::Trades(e)));
+        }
+        if !open {
+            self.trades = None;
+        }
+    }
+
     /// Draws the inventory screen, if one is open, and applies what the user does in it.
     fn inventory_screen(&mut self, ui: &mut Ui) {
         let Some((list, mut state)) = self.inventory.take() else { return };
@@ -3050,7 +3785,7 @@ impl NbtTree {
         };
         let numeric = matches!(get_ref(&self.root.tag, &list), Some(Tag::List(l)) if l.iter().any(|t| matches!(t.get("id"), Some(Tag::Short(_) | Tag::Int(_)))));
         let _ = name;
-        let (edits, open) = crate::inventory::show(ui, &mut state, &slots, kind.title(), kind, numeric);
+        let (edits, open) = crate::inventory::show(ui, &mut state, &slots, kind.title(), kind, numeric, self.root.tag.get("DataVersion").and_then(Tag::as_i64));
         for edit in edits {
             self.frame_start = Some(self.snap());
             self.inventory_edit(&list, &slots, edit, &mut state);
@@ -3099,11 +3834,11 @@ impl NbtTree {
                 let Some(old) = get_ref(&self.root.tag, &path).and_then(Tag::as_compound).cloned() else { return };
                 self.apply(Action::SetValues(vec![(path, Tag::Compound(Self::bedrock_empty(&old)))], "Removed an item".into()));
             }
-            Edit::Add { slot, id } if bedrock && self.bedrock_slot_path(list, slot).is_some() => {
+            Edit::Add { slot, id, count } if bedrock && self.bedrock_slot_path(list, slot).is_some() => {
                 let Some(path) = self.bedrock_slot_path(list, slot) else { return };
                 let Some(mut c) = get_ref(&self.root.tag, &path).and_then(Tag::as_compound).cloned() else { return };
                 c.insert("Name".into(), Tag::String(id));
-                c.insert("Count".into(), Tag::Byte(1));
+                c.insert("Count".into(), Tag::Byte(count.clamp(1, 127) as i8));
                 c.insert("Damage".into(), Tag::Short(0));
                 c.entry("WasPickedUp".to_string()).or_insert(Tag::Byte(0));
                 self.apply(Action::SetValues(vec![(path, Tag::Compound(c))], "Added an item".into()));
@@ -3153,6 +3888,13 @@ impl NbtTree {
                 let v = same_type(&p, count, &self.root.tag);
                 self.apply(Action::SetValues(vec![(p, v)], format!("Set the count to {count}")));
             }
+            Edit::Stack { index, edit } => {
+                let p = stack_at(index);
+                let Some(mut c) = get_ref(&self.root.tag, &p).and_then(Tag::as_compound).cloned() else { return };
+                let version = self.root.tag.get("DataVersion").and_then(Tag::as_i64);
+                edit.apply(&mut c, version);
+                self.apply(Action::SetValues(vec![(p, Tag::Compound(c))], edit.note()));
+            }
             Edit::SetDamage { index, damage } => {
                 let Some((_, path)) = get_ref(&self.root.tag, &stack_at(index)).and_then(Tag::as_compound).and_then(damage_of) else { return };
                 let mut p = stack_at(index);
@@ -3171,9 +3913,11 @@ impl NbtTree {
                 };
                 self.apply(Action::SetValues(vec![(path, Tag::Compound(c))], note));
             }
-            Edit::Add { slot, id } => {
+            Edit::Add { slot, id, count } => {
                 let into = target(half(slot));
                 let Some(stack) = self.new_stack(&into, local(slot) as i8, &id) else { return };
+                // As many as asked, in the stack's own count.
+                let stack = if count > 1 { crate::mob_edit::with_count(&stack, count) } else { stack };
                 self.apply(Action::AddStack(into, stack));
                 state.selected = Some(slot);
             }
@@ -3243,10 +3987,10 @@ impl NbtTree {
             // The map's bar is taller: it holds the dimension buttons.
             let bar_h = if pic == array_view::Picture::Map { 56.0 } else { 40.0 };
             let bar = Rect::from_min_size(full.min, vec2(full.width(), bar_h));
-            ui.painter().rect_filled(bar, 0.0, theme::BG);
+            ui.painter().rect_filled(bar, 0.0, theme::bg());
             ui.painter().line_segment(
                 [bar.left_bottom(), bar.right_bottom()],
-                Stroke::new(1.0_f32, theme::BORDER),
+                Stroke::new(1.0_f32, theme::border()),
             );
             let mut right = ui.new_child(
                 egui::UiBuilder::new()
@@ -3321,6 +4065,10 @@ impl NbtTree {
         }
         if self.inventory.is_some() {
             self.inventory_screen(ui);
+            return;
+        }
+        if self.trades.is_some() {
+            self.trades_screen(ui);
             return;
         }
         self.toolbar(ui);
@@ -3398,6 +4146,10 @@ impl NbtTree {
         let undone = self.undone.clone();
         let stripe = Cell::new(0);
         let container = Cell::new(false);
+        if self.chests.0 != Some(self.generation) {
+            self.chests = (Some(self.generation), self.find_large_chests());
+        }
+        let chests = std::mem::take(&mut self.chests.1);
         let out = egui::ScrollArea::vertical()
             .auto_shrink(false)
             // Dragging selects rows; the wheel and scrollbar still scroll.
@@ -3426,6 +4178,8 @@ impl NbtTree {
                     stripe: &stripe,
                     k: tree_scale(ui.ctx()) / ui.ctx().zoom_factor(),
                     container: &container,
+                    chests: &chests,
+                    data_version: self.root.tag.get("DataVersion").and_then(Tag::as_i64),
                 };
                 let label = if self.root.name.is_empty() {
                     String::new()
@@ -3447,6 +4201,7 @@ impl NbtTree {
         let rows = rows.into_inner();
         self.typing = typing.get();
         self.row_order = rows.iter().map(|r| r.path.clone()).collect();
+        self.chests.1 = chests;
         self.drag_select(ui, out.inner_rect, top.get(), &rows);
         self.find_status = if find.is_empty() { String::new() } else { format!("{hits} matches") };
         for a in actions {
@@ -3459,7 +4214,7 @@ impl NbtTree {
                 Align2::RIGHT_BOTTOM,
                 &self.find_status,
                 theme::regular(12.0),
-                theme::TEXT_MUTED,
+                theme::text_muted(),
             );
         }
     }
@@ -3674,7 +4429,7 @@ mod tests {
 
         // A new item goes in the slot, written like the others; a deleted one leaves its slot empty.
         t.frame_start = Some(t.snap());
-        run(&mut t, Edit::Add { slot: 12, id: "minecraft:stick".into() });
+        run(&mut t, Edit::Add { slot: 12, id: "minecraft:stick".into(), count: 1 });
         let slots = t.inventory_slots(&list);
         let added = slots.iter().find(|s| s.slot == 12).expect("the new stack");
         assert_eq!((added.id.as_str(), added.count), ("minecraft:stick", 1));
@@ -3704,14 +4459,14 @@ mod tests {
         assert_eq!(slots[0].number, Some(358));
         let mut state = crate::inventory::State::default();
         t.frame_start = Some(t.snap());
-        t.inventory_edit(&path, &slots, Edit::Add { slot: 3, id: "minecraft:diamond".into() }, &mut state);
+        t.inventory_edit(&path, &slots, Edit::Add { slot: 3, id: "minecraft:diamond".into(), count: 1 }, &mut state);
         let slots = t.inventory_slots(&path);
         let diamond = slots.iter().find(|s| s.slot == 3).expect("added");
         assert_eq!(diamond.number, Some(264));
     }
 
     #[test]
-    fn a_bedrock_inventory_has_a_stack_in_every_slot_and_armour_beside_it() {
+    fn a_bedrock_inventory_has_a_stack_in_every_slot_and_armor_beside_it() {
         use crate::inventory::Edit;
         let empty = |slot: Option<i8>| {
             let mut c = NbtTree::bedrock_empty(&Compound::new());
@@ -3741,7 +4496,7 @@ mod tests {
         // Only the sword shows; the empty slots are not stacks.
         let slots = t.inventory_slots(&path);
         assert_eq!(slots.len(), 1);
-        // A sword on the head: armour is a list of its own, the slot's compound is filled in.
+        // A sword on the head: armor is a list of its own, the slot's compound is filled in.
         run(&mut t, Edit::Move { from: 0, to: 103 });
         let slots = t.inventory_slots(&path);
         assert_eq!(slots.len(), 1);
@@ -3755,12 +4510,177 @@ mod tests {
         run(&mut t, Edit::Enchant { index: 1 << 16, id: "minecraft:sharpness".into(), level: Some(3) });
         let slots = t.inventory_slots(&path);
         assert_eq!(slots[0].enchants, vec![("minecraft:sharpness".to_string(), 3)]);
-        run(&mut t, Edit::Add { slot: 2, id: "minecraft:apple".into() });
+        run(&mut t, Edit::Add { slot: 2, id: "minecraft:apple".into(), count: 1 });
         assert_eq!(t.inventory_slots(&path).len(), 2);
         run(&mut t, Edit::Delete(1 << 16));
         assert_eq!(t.inventory_slots(&path).len(), 1);
         let Some(Tag::List(l)) = get_ref(&t.root.tag, &[Seg::Key("Armor".into())]) else { panic!() };
         assert_eq!(l.len(), 4);
+    }
+    /// In a chunk as the game saves it (block states packed in a section, chests' halves in their
+    /// `type`), either half of a large chest opens the large chest; a lone chest opens alone.
+    /// A villager's menu (trades, flags, health, equipment) and its trades screen, drawn for
+    /// looking at (with MCTK_SNAPSHOT_WORLD and MCTK_SNAPSHOT_OUT set); trades added on the
+    /// screen land in its `Offers`.
+    #[test]
+    fn a_villager_menu_and_trades_screen() {
+        let (Ok(world), Ok(out)) = (std::env::var("MCTK_SNAPSHOT_WORLD"), std::env::var("MCTK_SNAPSHOT_OUT")) else { return };
+        let r = mctk_anvil::Region::open(std::path::Path::new(&world).join("entities").join("r.0.0.mca")).unwrap();
+        let mut t = NbtTree::new(r.read_chunk(2, 0).unwrap().unwrap());
+        let ents = t.root.tag.get("Entities").and_then(Tag::as_list).unwrap();
+        let villager = ents.iter().position(|e| e.get("id").and_then(Tag::as_str) == Some("minecraft:villager")).expect("a villager");
+        let at = vec![Seg::Key("Entities".into()), Seg::Index(villager)];
+        t.frame_start = Some(t.snap());
+        for e in [crate::mob_edit::TradeEdit::Add, crate::mob_edit::TradeEdit::Add] {
+            t.apply(Action::EditMob(at.clone(), crate::mob_edit::MobEdit::Trades(e)));
+        }
+        t.apply(Action::EditMob(at.clone(), crate::mob_edit::MobEdit::Trades(crate::mob_edit::TradeEdit::Item { n: 1, which: 2, id: Some("minecraft:bread".into()) })));
+        let made = crate::mob_edit::trades(get_ref(&t.root.tag, &at).and_then(Tag::as_compound).unwrap(), None);
+        assert_eq!(made.len(), 2);
+        t.expanded.insert(path_key(&vec![Seg::Key("Entities".into())]));
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut tex = crate::snapshot::Textures::default();
+        let mut render = |t: &mut NbtTree, name: &str, click: Option<egui::Pos2>, hover: &[egui::Pos2]| {
+            let (w, h) = (760.0, 760.0);
+            let mut last = Vec::new();
+            for frame in 0..(6 + hover.len() * 3) {
+                let mut events = Vec::new();
+                // The menu left open by the last picture is closed first.
+                if frame == 0 {
+                    events.push(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() });
+                }
+                if let (Some(at), 2) = (click, frame) {
+                    events.push(egui::Event::PointerMoved(at));
+                    for pressed in [true, false] {
+                        events.push(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
+                    }
+                }
+                // Then a click on rows of the menus, one after another, opening each sub-menu.
+                if frame >= 4 {
+                    let k = (frame - 4) / 3;
+                    if let Some(at) = hover.get(k.min(hover.len().saturating_sub(1))) {
+                        events.push(egui::Event::PointerMoved(*at));
+                        if (frame - 4) % 3 == 0 && k < hover.len() {
+                            for pressed in [true, false] {
+                                events.push(egui::Event::PointerButton { pos: *at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
+                            }
+                        }
+                    }
+                }
+                let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(w, h))), events, ..Default::default() };
+                let o = ctx.run(input, |ctx| {
+                    egui::CentralPanel::default().frame(egui::Frame::NONE.fill(theme::bg())).show(ctx, |ui| t.ui(ui, false));
+                });
+                tex.apply(&o.textures_delta);
+                last = ctx.tessellate(o.shapes, o.pixels_per_point);
+            }
+            let img = crate::snapshot::rasterize(&last, &tex, w as usize, h as usize);
+            crate::snapshot::save(&img, w as usize, h as usize, &std::path::Path::new(&out).join(name));
+        };
+        // Its row: below the root and the `Entities` row, one row (18) per entity before it.
+        render(&mut t, "villager_menu.png", Some(egui::pos2(200.0, 87.0 + 18.0 * villager as f32)), &[]);
+        let row = 87.0 + 18.0 * villager as f32;
+        render(&mut t, "villager_group.png", Some(egui::pos2(200.0, row)), &[egui::pos2(290.0, row + 92.0)]);
+        render(&mut t, "villager_equipment.png", Some(egui::pos2(200.0, row)), &[egui::pos2(290.0, row + 92.0), egui::pos2(480.0, row + 153.0)]);
+        // A slot's own menu: its item, removing it, and what the stack has (kept when the item
+        // changes).
+        t.apply(Action::EditMob(at.clone(), crate::mob_edit::MobEdit::Equip(crate::mob_edit::Slot::Head, Some(("minecraft:diamond_helmet".into(), 1)))));
+        let ench = crate::enchant::EnchantEdit::Add("minecraft:protection".into());
+        t.apply(Action::EditMob(at.clone(), crate::mob_edit::MobEdit::EquipStack(crate::mob_edit::Slot::Head, crate::item_edit::StackEdit::Enchant(ench))));
+        t.apply(Action::EditMob(at.clone(), crate::mob_edit::MobEdit::Equip(crate::mob_edit::Slot::Head, Some(("minecraft:iron_helmet".into(), 1)))));
+        let mob = get_ref(&t.root.tag, &at).and_then(Tag::as_compound).unwrap();
+        let head_stack = crate::mob_edit::slot_stack(mob, crate::mob_edit::Slot::Head, None).unwrap();
+        assert_eq!(crate::enchant::read(head_stack).len(), 1, "{head_stack:?}");
+        let head = (row + 153.0 - 6.0).min(760.0 - 20.0 - 6.0 * 32.0 - 16.0 - 8.0) + 6.0 + 13.0;
+        render(&mut t, "villager_slot.png", Some(egui::pos2(200.0, row)), &[egui::pos2(290.0, row + 92.0), egui::pos2(480.0, row + 153.0), egui::pos2(250.0, head)]);
+        render(&mut t, "villager_drops.png", Some(egui::pos2(200.0, row)), &[egui::pos2(290.0, row + 92.0), egui::pos2(480.0, row + 185.0)]);
+        render(&mut t, "villager_loot.png", Some(egui::pos2(200.0, row)), &[egui::pos2(290.0, row + 92.0), egui::pos2(480.0, row + 185.0), egui::pos2(200.0, row + 229.0)]);
+        // Its status effects, and one effect's own menu.
+        t.frame_start = Some(t.snap());
+        t.apply(Action::EditMob(at.clone(), crate::mob_edit::MobEdit::Effect(crate::effects::EffectEdit::Add("speed".into()))));
+        t.apply(Action::EditMob(at.clone(), crate::mob_edit::MobEdit::Effect(crate::effects::EffectEdit::Amplifier(0, 1))));
+        render(&mut t, "villager_effects.png", Some(egui::pos2(200.0, row)), &[egui::pos2(290.0, row + 92.0), egui::pos2(480.0, row + 217.0)]);
+        render(&mut t, "villager_effect.png", Some(egui::pos2(200.0, row)), &[egui::pos2(290.0, row + 92.0), egui::pos2(480.0, row + 217.0), egui::pos2(200.0, row + 218.0)]);
+        t.apply(Action::OpenTrades(at.clone()));
+        render(&mut t, "villager_trades.png", None, &[]);
+        // A sold stack's menu: its count, enchantments, name and the rest.
+        render(&mut t, "villager_trade_menu.png", Some(egui::pos2(284.0, 134.0)), &[]);
+    }
+    #[test]
+    fn a_large_chest_in_a_saved_chunk_opens_as_one() {
+        let Ok(world) = std::env::var("MCTK_SNAPSHOT_WORLD") else { return };
+        let r = mctk_anvil::Region::open(std::path::Path::new(&world).join("region").join("r.0.0.mca")).unwrap();
+        let mut t = NbtTree::new(r.read_chunk(1, 0).unwrap().unwrap());
+        let at = |t: &NbtTree, x: i64| {
+            let l = t.root.tag.get("block_entities").and_then(Tag::as_list).unwrap();
+            l.iter().position(|e| e.get("id").and_then(Tag::as_str) == Some("minecraft:chest") && e.get("x").and_then(Tag::as_i64) == Some(x)).expect("the chest")
+        };
+        let items = |i: usize| vec![Seg::Key("block_entities".into()), Seg::Index(i), Seg::Key("Items".into())];
+        let (lone, right, left) = (at(&t, 18), at(&t, 19), at(&t, 20));
+        for half in [right, left] {
+            t.frame_start = Some(t.snap());
+            t.apply(Action::OpenInventory(items(half)));
+            let list = t.inventory.as_ref().map(|(l, _)| l.clone()).expect("open");
+            assert_eq!((list, t.inventory_partner.clone()), (items(right), Some(items(left))), "the large chest, its right half first");
+            t.inventory = None;
+            t.inventory_partner = None;
+        }
+        t.apply(Action::OpenInventory(items(lone)));
+        assert_eq!(t.inventory_partner, None, "a lone chest alone");
+        // Marked in the tree: each half knows which it is and where the other is.
+        let chest = |i: usize| vec![Seg::Key("block_entities".into()), Seg::Index(i)];
+        let pairs = t.find_large_chests();
+        assert_eq!((pairs.get(&chest(right)), pairs.get(&chest(left)), pairs.get(&chest(lone))), (Some(&(true, left)), Some(&(false, right)), None));
+        // Drawn, for looking at (with MCTK_SNAPSHOT_OUT set).
+        if let Ok(out) = std::env::var("MCTK_SNAPSHOT_OUT") {
+            t.expanded.insert(path_key(&vec![Seg::Key("block_entities".into())]));
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            let mut tex = crate::snapshot::Textures::default();
+            let mut render = |t: &mut NbtTree, name: &str, click: Option<egui::Pos2>, hover: Option<egui::Pos2>| {
+                let (w, h) = (640.0, 460.0);
+                let mut last = Vec::new();
+                for frame in 0..9 {
+                    let mut events = Vec::new();
+                    if let (Some(at), 2) = (click, frame) {
+                        events.push(egui::Event::PointerMoved(at));
+                        for pressed in [true, false] {
+                            events.push(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
+                        }
+                    }
+                    // Then over a row of the menu, to open its sub-menu.
+                    if let (Some(at), true) = (hover, frame >= 4) {
+                        events.push(egui::Event::PointerMoved(at));
+                    }
+                    let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(w, h))), events, ..Default::default() };
+                    let o = ctx.run(input, |ctx| {
+                        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(theme::bg())).show(ctx, |ui| t.ui(ui, false));
+                    });
+                    tex.apply(&o.textures_delta);
+                    last = ctx.tessellate(o.shapes, o.pixels_per_point);
+                }
+                let img = crate::snapshot::rasterize(&last, &tex, w as usize, h as usize);
+                crate::snapshot::save(&img, w as usize, h as usize, &std::path::Path::new(&out).join(name));
+            };
+            t.inventory = None;
+            t.inventory_partner = None;
+            render(&mut t, "tree_chests.png", None, None);
+            // The lone chest's menu: its name, typed straight in.
+            render(&mut t, "tree_chest_menu.png", Some(egui::pos2(160.0, 123.0)), None);
+            // The right half's diamonds: an attribute and a block it can break, then its menu.
+            let stack = { let mut p = items(right); p.push(Seg::Index(0)); p };
+            t.apply(Action::EditItem(stack.clone(), crate::item_edit::ItemEdit::Attribute(crate::item_edit::AttrEdit::Add("attack_damage".into()))));
+            t.apply(Action::EditItem(stack.clone(), crate::item_edit::ItemEdit::Rule(crate::item_edit::Rule::Break, "minecraft:stone".into(), true)));
+            t.apply(Action::SetName(stack.clone(), "Shiny".into()));
+            t.expanded.insert(path_key(&chest(right)));
+            t.expanded.insert(path_key(&items(right)));
+            render(&mut t, "item_menu.png", Some(egui::pos2(110.0, 177.0)), None);
+            render(&mut t, "item_menu_open.png", Some(egui::pos2(110.0, 177.0)), Some(egui::pos2(200.0, 276.0)));
+            render(&mut t, "item_change.png", Some(egui::pos2(110.0, 177.0)), Some(egui::pos2(200.0, 276.0)));
+            t.apply(Action::OpenInventory(items(left)));
+            render(&mut t, "large_chest.png", None, None);
+        }
     }
     #[test]
     fn two_chests_side_by_side_open_as_one_large_chest() {
@@ -3781,8 +4701,11 @@ mod tests {
         let palette = List::from_tags(TagType::Compound, vec![state("minecraft:air", None), state("minecraft:chest", Some(prop("right"))), state("minecraft:chest", Some(prop("left")))]).unwrap();
         let mut states = Compound::new();
         states.insert("palette".into(), Tag::List(palette));
-        // Blocks 0 and 1 of the section: the right chest, then the left one (4 bits each).
-        states.insert("data".into(), Tag::LongArray(vec![0x21]));
+        // Blocks 0 and 1 of the section: the right chest, then the left one (4 bits each, 16
+        // to a long, the 4096 in 256 longs).
+        let mut data = vec![0i64; 256];
+        data[0] = 0x21;
+        states.insert("data".into(), Tag::LongArray(data));
         let mut section = Compound::new();
         section.insert("Y".into(), Tag::Byte(0));
         section.insert("block_states".into(), Tag::Compound(states));
@@ -3800,6 +4723,7 @@ mod tests {
             Tag::Compound(c)
         };
         let mut root = Compound::new();
+        root.insert("DataVersion".into(), Tag::Int(4325));
         root.insert("sections".into(), Tag::List(List::from_tags(TagType::Compound, vec![Tag::Compound(section)]).unwrap()));
         // The left chest is listed first, to show that the right one still leads.
         root.insert("block_entities".into(), Tag::List(List::from_tags(TagType::Compound, vec![chest(1, "minecraft:stick"), chest(0, "minecraft:apple")]).unwrap()));

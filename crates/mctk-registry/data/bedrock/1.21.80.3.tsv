@@ -1647,3 +1647,5 @@ D minecraft:weathered_cut_copper_stairs|minecraft:corner=s:none,upside_down_bit=
 D minecraft:weathered_cut_copper_stairs|minecraft:corner=s:none,upside_down_bit=b:0,weirdo_direction=i:1	minecraft:weathered_cut_copper_stairs|upside_down_bit=b:0,weirdo_direction=i:1
 D minecraft:weathered_cut_copper_stairs|minecraft:corner=s:none,upside_down_bit=b:0,weirdo_direction=i:2	minecraft:weathered_cut_copper_stairs|upside_down_bit=b:0,weirdo_direction=i:2
 D minecraft:weathered_cut_copper_stairs|minecraft:corner=s:none,upside_down_bit=b:0,weirdo_direction=i:3	minecraft:weathered_cut_copper_stairs|upside_down_bit=b:0,weirdo_direction=i:3
+B minecraft:end_gateway		
+B minecraft:moving_block		

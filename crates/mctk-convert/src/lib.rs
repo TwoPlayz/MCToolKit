@@ -31,6 +31,7 @@ mod options;
 mod paintings;
 mod text_codec;
 pub mod pipeline;
+pub mod view;
 
 pub use console_to_java::{
     ConvertReport, console_chunk_to_anvil, console_to_java, console_to_java_with,

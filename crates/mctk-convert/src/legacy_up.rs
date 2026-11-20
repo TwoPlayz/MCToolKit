@@ -327,7 +327,7 @@ const ENTITIES: &[(&str, &str)] = &[
     ("EnderCrystal", "end_crystal"),
 ];
 
-fn entity_id(old: &str) -> Option<String> {
+pub(crate) fn entity_id(old: &str) -> Option<String> {
     if old.starts_with("minecraft:") {
         return Some(old.to_string());
     }
@@ -616,7 +616,7 @@ const BLOCK_ENTITIES: &[(&str, &str)] = &[
     ("FlowerPot", "flower_pot"),
 ];
 
-fn block_entity_name(old: &str) -> Option<String> {
+pub(crate) fn block_entity_name(old: &str) -> Option<String> {
     if old.starts_with("minecraft:") {
         return Some(old.to_string());
     }

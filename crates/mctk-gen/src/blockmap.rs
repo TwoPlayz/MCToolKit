@@ -323,6 +323,10 @@ fn special_name(j: &JState, bedrock: &Registry) -> Option<String> {
     let has = |n: &str| bedrock.blocks.contains_key(n);
     let bare = j.0.trim_start_matches("minecraft:");
     if java(j, "type") == Some("double") && bare.ends_with("_slab") {
+        // The plain stone slab is Bedrock's "normal" one (its single slab is renamed too).
+        if bare == "stone_slab" && has("minecraft:normal_stone_double_slab") {
+            return Some("minecraft:normal_stone_double_slab".into());
+        }
         let candidates = [
             format!("minecraft:{}_double_slab", bare.trim_end_matches("_slab")),
             format!("minecraft:{}", bare.replace("_cut_copper_slab", "_double_cut_copper_slab")).replace("minecraft:cut_copper_slab", "minecraft:double_cut_copper_slab"),

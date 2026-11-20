@@ -208,6 +208,35 @@ impl BlockStorage {
         Ok(())
     }
 
+    /// Puts a block state (a `{name, states, version}` compound) at an index (XZY order, see
+    /// [`block_index`]), adding it to the palette when no entry has its name and states.
+    pub fn set(&mut self, index: usize, state: &NamedTag) {
+        let same = |p: &NamedTag| p.tag.get("name") == state.tag.get("name") && p.tag.get("states") == state.tag.get("states");
+        let slot = match self.palette.iter().position(same) {
+            Some(i) => i,
+            None => {
+                self.palette.push(state.clone());
+                self.palette.len() - 1
+            }
+        };
+        self.indices[index] = slot as u16;
+    }
+
+    /// Drops palette entries no block uses (keeping the order of first use).
+    pub fn compact(&mut self) {
+        let mut remap = vec![u16::MAX; self.palette.len()];
+        let mut palette = Vec::new();
+        for idx in &mut self.indices {
+            let old = *idx as usize;
+            if remap[old] == u16::MAX {
+                remap[old] = palette.len() as u16;
+                palette.push(self.palette[old].clone());
+            }
+            *idx = remap[old];
+        }
+        self.palette = palette;
+    }
+
     /// The block name at a palette slot.
     pub fn name(&self, slot: usize) -> Option<&str> {
         self.palette.get(slot)?.tag.get("name")?.as_str()
@@ -286,6 +315,12 @@ impl SubChunk {
             }
         }
         Ok(out)
+    }
+
+    /// A subchunk at height `y` (in sections) holding only `state` (air, for one to build in),
+    /// in the current record version.
+    pub fn filled(y: i8, state: NamedTag) -> Self {
+        SubChunk { version: 9, y: Some(y), body: SubChunkBody::Palettized(vec![BlockStorage::filled(state)]) }
     }
 
     /// The primary (non-water) block layer.

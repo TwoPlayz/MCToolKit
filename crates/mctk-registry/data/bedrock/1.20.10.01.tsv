@@ -2023,3 +2023,5 @@ D minecraft:dark_oak_slab|minecraft:vertical_half=s:top	minecraft:wooden_slab|to
 D minecraft:grass_block|	minecraft:grass|
 D minecraft:tall_grass|upper_block_bit=b:0	minecraft:double_plant|double_plant_type=s:grass,upper_block_bit=b:0
 D minecraft:large_fern|upper_block_bit=b:0	minecraft:double_plant|double_plant_type=s:fern,upper_block_bit=b:0
+B minecraft:end_gateway		
+B minecraft:moving_block		

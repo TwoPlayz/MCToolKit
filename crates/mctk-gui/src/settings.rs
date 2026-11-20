@@ -10,8 +10,10 @@ use crate::widgets;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
-    /// 0 none, 1 NBT Editor, 2 Converter, 3 Pruner.
+    /// 0 none, 1 NBT Editor, 2 Converter (3, the Pruner, was folded into the NBT Editor).
     pub default_app: usize,
+    /// The look: 0 as Windows is set (light or dark), 1 dark, 2 light.
+    pub theme: usize,
     pub remember_position: bool,
     /// Outer window position and size.
     pub window: Option<[f32; 4]>,
@@ -33,13 +35,11 @@ pub struct Settings {
     pub remember_conversion_options: bool,
     /// Last conversion options: overworld, nether, end, skip partial, game mode, difficulty.
     pub conversion: [i64; 6],
-    /// A Minecraft resource pack folder whose textures draw block and item icons.
-    pub resource_pack: String,
     /// Look for a newer release on GitHub when the app starts.
     pub check_updates: bool,
 }
 
-fn app_dir() -> PathBuf {
+pub(crate) fn app_dir() -> PathBuf {
     std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
@@ -90,6 +90,7 @@ impl Default for Settings {
             .unwrap_or_default();
         Settings {
             default_app: 0,
+            theme: 0,
             remember_position: true,
             window: None,
             scale: 0,
@@ -107,9 +108,6 @@ impl Default for Settings {
             full_precision: false,
             remember_conversion_options: true,
             conversion: [1, 1, 1, 1, 0, 0],
-            resource_pack: crate::resource_pack::default_dir(&app_dir())
-                .display()
-                .to_string(),
             check_updates: true,
         }
     }
@@ -134,7 +132,12 @@ impl Settings {
             .get("default_app")
             .and_then(Value::as_u64)
             .unwrap_or(0)
+            // (The Pruner, 3, is now part of the NBT Editor's World Explorer.)
             .min(3) as usize;
+        if s.default_app == 3 {
+            s.default_app = 1;
+        }
+        s.theme = v.get("theme").and_then(Value::as_u64).unwrap_or(0).min(2) as usize;
         s.remember_position = b("remember_position", s.remember_position);
         s.window = v.get("window").and_then(Value::as_array).and_then(|a| {
             let f: Vec<f32> = a
@@ -152,12 +155,6 @@ impl Settings {
         s.xbox_worlds = st("xbox_worlds", &s.xbox_worlds);
         s.ps3_worlds = st("ps3_worlds", &s.ps3_worlds);
         s.working_dir = st("working_dir", &s.working_dir);
-        s.resource_pack = st("resource_pack", &s.resource_pack);
-        if s.resource_pack.is_empty() {
-            s.resource_pack = crate::resource_pack::default_dir(&s.working_dir())
-                .display()
-                .to_string();
-        }
         s.check_updates = b("check_updates", s.check_updates);
         s.show_log = b("show_log", s.show_log);
         s.hide_messages = b("hide_messages", s.hide_messages);
@@ -176,6 +173,7 @@ impl Settings {
     pub fn save(&self) {
         let v = json!({
             "default_app": self.default_app,
+            "theme": self.theme,
             "remember_position": self.remember_position,
             "window": self.window,
             "scale": self.scale,
@@ -187,7 +185,6 @@ impl Settings {
             "xbox_worlds": self.xbox_worlds,
             "ps3_worlds": self.ps3_worlds,
             "working_dir": self.working_dir,
-            "resource_pack": self.resource_pack,
             "check_updates": self.check_updates,
             "show_log": self.show_log,
             "hide_messages": self.hide_messages,
@@ -209,12 +206,6 @@ impl Settings {
 
     pub fn working_dir(&self) -> PathBuf {
         PathBuf::from(&self.working_dir)
-    }
-
-    /// `<resource pack>/assets/minecraft/textures`, when the pack is set and present.
-    pub fn texture_pack(&self) -> Option<PathBuf> {
-        let p = PathBuf::from(&self.resource_pack).join(r"assets\minecraft\textures");
-        (!self.resource_pack.is_empty() && p.is_dir()).then_some(p)
     }
 
     /// A new, empty folder under `<working dir>/<app>/workspaces/`.
@@ -262,14 +253,14 @@ fn heading(ui: &mut Ui, text: &str) {
     ui.label(
         RichText::new(text)
             .font(theme::bold(26.0))
-            .color(egui::Color32::WHITE),
+            .color(theme::strong()),
     );
     ui.add_space(14.0);
 }
 
 fn describe(ui: &mut Ui, text: &str) {
     ui.add_space(2.0);
-    ui.add(egui::Label::new(RichText::new(text).size(13.5).color(theme::TEXT_MUTED)).wrap());
+    ui.add(egui::Label::new(RichText::new(text).size(13.5).color(theme::text_muted())).wrap());
     ui.add_space(20.0);
 }
 
@@ -277,7 +268,7 @@ fn titled(ui: &mut Ui, title: &str, text: &str) {
     ui.label(
         RichText::new(title)
             .font(theme::bold(16.0))
-            .color(theme::TEXT),
+            .color(theme::text()),
     );
     describe(ui, text);
 }
@@ -285,7 +276,7 @@ fn titled(ui: &mut Ui, title: &str, text: &str) {
 fn folder_row(ui: &mut Ui, settings: &mut Settings, which: usize, title: &str, text: &str) -> bool {
     ui.label(RichText::new(title).font(theme::bold(16.0)));
     ui.add(egui::Label::new(
-        RichText::new(text).size(13.5).color(theme::TEXT_MUTED),
+        RichText::new(text).size(13.5).color(theme::text_muted()),
     ));
     let mut changed = false;
     ui.horizontal(|ui| {
@@ -293,7 +284,6 @@ fn folder_row(ui: &mut Ui, settings: &mut Settings, which: usize, title: &str, t
             0 => &mut settings.java_worlds,
             1 => &mut settings.bedrock_worlds,
             2 => &mut settings.wiiu_worlds,
-            4 => &mut settings.resource_pack,
             5 => &mut settings.xbox_worlds,
             6 => &mut settings.ps3_worlds,
             _ => &mut settings.working_dir,
@@ -316,8 +306,8 @@ const LATO_LICENSE: &str = include_str!("../assets/fonts/OFL.txt");
 /// from `cargo metadata`; see `THIRD_PARTY_LICENSES.md`).
 const RUST_DEPENDENCIES: &str = include_str!("../assets/rust-dependencies.tsv");
 
-/// Non-Rust code, data and assets MCToolKit builds on: (name, what it is used for, licence,
-/// link, licence text when it ships with the app).
+/// Non-Rust code, data and assets MCToolKit builds on: (name, what it is used for, license,
+/// link, license text when it ships with the app).
 const EXTERNAL: [(&str, &str, &str, &str, Option<&str>); 1] = [(
     "Lato font",
     "The app's typeface, by \u{141}ukasz Dziedzic",
@@ -337,7 +327,7 @@ fn license_text(ui: &mut Ui, id: &str, text: &str) {
                     RichText::new(text.trim())
                         .monospace()
                         .size(11.5)
-                        .color(theme::TEXT_MUTED),
+                        .color(theme::text_muted()),
                 )
                 .wrap(),
             );
@@ -345,27 +335,27 @@ fn license_text(ui: &mut Ui, id: &str, text: &str) {
     ui.add_space(6.0);
 }
 
-/// "About & Licenses": the MCToolKit licence, then everything external it uses.
+/// "About & Licenses": the MCToolKit license, then everything external it uses.
 fn licenses(ui: &mut Ui) {
     ui.label(RichText::new("About & Licenses").font(theme::bold(16.0)));
     ui.add_space(8.0);
-    ui.label(RichText::new(format!("MCToolKit {}", env!("CARGO_PKG_VERSION"))).color(theme::TEXT));
+    ui.label(RichText::new(format!("MCToolKit {}", env!("CARGO_PKG_VERSION"))).color(theme::text()));
     ui.label(
         RichText::new("Minecraft is a trademark of Mojang Synergies AB; MCToolKit is not affiliated with Mojang or Microsoft.")
-            .color(theme::TEXT_DIM),
+            .color(theme::text_dim()),
     );
     ui.add_space(14.0);
 
     ui.label(RichText::new("MCToolKit License").font(theme::bold(14.0)));
     ui.add(
         egui::Label::new(
-            RichText::new("MCToolKit is free software under the GNU Lesser General Public License, version 3 or (at your option) any later version (LGPL-3.0-or-later). You can use, modify and share it; if you distribute a modified version of the MCToolKit code, its source must be available under the same licence.")
+            RichText::new("MCToolKit is free software under the GNU Lesser General Public License, version 3 or (at your option) any later version (LGPL-3.0-or-later). You can use, modify and share it; if you distribute a modified version of the MCToolKit code, its source must be available under the same license.")
                 .size(13.5)
-                .color(theme::TEXT_MUTED),
+                .color(theme::text_muted()),
         )
         .wrap(),
     );
-    egui::CollapsingHeader::new("Full licence text")
+    egui::CollapsingHeader::new("Full license text")
         .id_salt("license-lgpl")
         .show(ui, |ui| license_text(ui, "license-lgpl-text", LGPL_TEXT));
     ui.add_space(14.0);
@@ -373,22 +363,22 @@ fn licenses(ui: &mut Ui) {
     ui.label(RichText::new("External Licenses").font(theme::bold(14.0)));
     ui.add(
         egui::Label::new(
-            RichText::new("MCToolKit builds on the following work. Each keeps its own licence, all compatible with the LGPL.")
+            RichText::new("MCToolKit builds on the following work. Each keeps its own license, all compatible with the LGPL.")
                 .size(13.5)
-                .color(theme::TEXT_MUTED),
+                .color(theme::text_muted()),
         )
         .wrap(),
     );
     ui.add_space(6.0);
     for (name, what, license, url, text) in EXTERNAL {
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new(name).font(theme::bold(13.5)).color(theme::TEXT));
-            ui.label(RichText::new(format!("\u{2014} {license}")).size(13.5).color(theme::TEXT_MUTED));
+            ui.label(RichText::new(name).font(theme::bold(13.5)).color(theme::text()));
+            ui.label(RichText::new(format!("\u{2014} {license}")).size(13.5).color(theme::text_muted()));
             ui.hyperlink_to(RichText::new("link").size(13.0), url);
         });
-        ui.add(egui::Label::new(RichText::new(what).size(13.0).color(theme::TEXT_DIM)).wrap());
+        ui.add(egui::Label::new(RichText::new(what).size(13.0).color(theme::text_dim())).wrap());
         if let Some(text) = text {
-            egui::CollapsingHeader::new("Licence text")
+            egui::CollapsingHeader::new("License text")
                 .id_salt(("license", name))
                 .show(ui, |ui| license_text(ui, name, text));
         }
@@ -409,9 +399,9 @@ fn licenses(ui: &mut Ui) {
     .show(ui, |ui| {
         ui.add(
             egui::Label::new(
-                RichText::new("Crates compiled into MCToolKit, with the licence each one is published under (where a crate offers a choice, MCToolKit uses the permissive option). The same list is in THIRD_PARTY_LICENSES.md.")
+                RichText::new("Crates compiled into MCToolKit, with the license each one is published under (where a crate offers a choice, MCToolKit uses the permissive option). The same list is in THIRD_PARTY_LICENSES.md.")
                     .size(13.0)
-                    .color(theme::TEXT_DIM),
+                    .color(theme::text_dim()),
             )
             .wrap(),
         );
@@ -424,11 +414,11 @@ fn licenses(ui: &mut Ui) {
                     ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing.x = 6.0;
                         if repo.is_empty() {
-                            ui.label(RichText::new(format!("{name} {version}")).size(12.5).color(theme::TEXT));
+                            ui.label(RichText::new(format!("{name} {version}")).size(12.5).color(theme::text()));
                         } else {
                             ui.hyperlink_to(RichText::new(format!("{name} {version}")).size(12.5), *repo);
                         }
-                        ui.label(RichText::new(*license).size(12.5).color(theme::TEXT_MUTED));
+                        ui.label(RichText::new(*license).size(12.5).color(theme::text_muted()));
                     });
                 }
             });
@@ -445,7 +435,11 @@ pub fn page(ui: &mut Ui, settings: &mut Settings) -> bool {
             heading(ui, "General");
             titled(ui, "Default App", "Set the default app to open when the application starts.");
             ui.add_space(-12.0);
-            widgets::segmented(ui, &mut settings.default_app, &["No Default", "NBT Editor", "Converter", "Pruner"], 0.0, true);
+            widgets::segmented(ui, &mut settings.default_app, &["No Default", "NBT Editor", "Converter"], 0.0, true);
+            ui.add_space(26.0);
+            titled(ui, "Theme", "How the application looks: as Windows is set (light or dark), or always dark or light.");
+            ui.add_space(-12.0);
+            widgets::segmented(ui, &mut settings.theme, &["System", "Dark", "Light"], 0.0, true);
             ui.add_space(26.0);
             widgets::toggle_bold(ui, &mut settings.remember_position, "Remember Application Position");
             describe(ui, "Open the application at the same position that it was closed.");
@@ -461,7 +455,12 @@ pub fn page(ui: &mut Ui, settings: &mut Settings) -> bool {
             folder_row(ui, settings, 6, "PlayStation 3 Worlds Folder", "The directory (and its subfolders) the world selection dialog uses to search for PlayStation 3 saves.");
             folder_row(ui, settings, 2, "Wii U Worlds Folder", "The directory the world selection dialog uses to search for dumped Wii U worlds.");
             folder_row(ui, settings, 3, "Working Directory", "The location where temporary files are stored while working within the application.");
-            folder_row(ui, settings, 4, "Resource Pack", "A Minecraft resource pack folder whose block and item textures are used for icons and map colors. Defaults to MCToolKit's own pack, filled on first run from an installed Minecraft Java.");
+            let assets = match crate::assets::version() {
+                Some(v) => format!("Blocks, items and mobs are drawn with Minecraft {v}'s own assets, fetched from mcasset.cloud as they are needed and kept. They are fetched again only when a newer Minecraft release comes out."),
+                None => "Blocks, items and mobs are drawn with the latest Minecraft release's own assets, fetched from mcasset.cloud as they are needed and kept.".to_string(),
+            };
+            titled(ui, "Game Assets", &assets);
+            ui.add_space(20.0);
             widgets::toggle_bold(ui, &mut settings.check_updates, "Check for Updates on Startup");
             describe(ui, "Ask GitHub for the newest MCToolKit release when the application starts and show a notice in the title bar when one is available. Nothing is downloaded automatically.");
             widgets::toggle_bold(ui, &mut settings.hide_messages, "Hide Non-Warning Messages");
@@ -486,10 +485,6 @@ pub fn page(ui: &mut Ui, settings: &mut Settings) -> bool {
             heading(ui, "Converter");
             widgets::toggle_bold(ui, &mut settings.remember_conversion_options, "Remember Conversion Options");
             describe(ui, "Remembers the conversion options for the next time a world is converted. The converter never modifies the input world, so it is not copied first.");
-            ui.separator();
-
-            heading(ui, "Pruner");
-            describe(ui, "Nothing is changed on disk until you save: pruning is held in memory, and Save backs up the original as _MCTBackup before writing the pruned world.");
             ui.separator();
 
             heading(ui, "Community");

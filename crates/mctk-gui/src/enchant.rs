@@ -242,6 +242,109 @@ pub fn set(c: &mut Compound, id: &str, level: Option<i64>, data_version: Option<
     }
 }
 
+/// A change to a stack's enchantments, by their place in the list (as [`read`] gives it), so two
+/// of the same enchantment are told apart.
+#[derive(Clone, Debug, PartialEq)]
+pub enum EnchantEdit {
+    /// A new enchantment at level 1, after the others (even one the stack has: older Java,
+    /// Bedrock and the console editions keep a list, which can hold it twice; Java 1.20.5 and
+    /// later keep one level for each, so there the stack is left as it is).
+    Add(String),
+    Level(usize, i64),
+    Remove(usize),
+}
+
+impl EnchantEdit {
+    pub fn note(&self, current: &[(String, i64)]) -> String {
+        match self {
+            EnchantEdit::Add(id) => format!("Gave {} {}", name(id), level_text(1)),
+            EnchantEdit::Level(i, l) => format!("Gave {} {}", current.get(*i).map_or_else(String::new, |e| name(&e.0)), level_text(*l)),
+            EnchantEdit::Remove(i) => format!("Removed {}", current.get(*i).map_or_else(String::new, |e| name(&e.0))),
+        }
+    }
+}
+
+/// Whether the stack keeps its enchantments as one level for each (Java 1.20.5 on) rather than
+/// a list.
+fn keeps_levels(c: &Compound, data_version: Option<i64>) -> bool {
+    let bedrock = is_bedrock(c);
+    let numeric = matches!(c.get("id"), Some(Tag::Short(_) | Tag::Int(_))) || bedrock;
+    let has_components = c.get("components").is_some_and(|t| t.as_compound().is_some());
+    let has_tag_list = c.get("tag").and_then(Tag::as_compound).is_some_and(|t| t.contains_key("Enchantments") || t.contains_key("ench") || t.contains_key("StoredEnchantments"));
+    has_components || (!numeric && !has_tag_list && (c.contains_key("count") || data_version.is_some_and(|v| v >= 3837)))
+}
+
+/// Applies a change to a stack's enchantments, in the form it (or its world's version) keeps them.
+pub fn apply(c: &mut Compound, edit: &EnchantEdit, data_version: Option<i64>) {
+    let mut list = read(c);
+    let levels = keeps_levels(c, data_version);
+    match edit {
+        EnchantEdit::Add(id) => {
+            let id = if id.contains(':') { id.clone() } else { format!("minecraft:{id}") };
+            if levels && list.iter().any(|e| e.0 == id) {
+                return;
+            }
+            list.push((id, 1));
+        }
+        EnchantEdit::Level(i, l) => match list.get_mut(*i) {
+            Some(e) => e.1 = *l,
+            None => return,
+        },
+        EnchantEdit::Remove(i) => {
+            if *i >= list.len() {
+                return;
+            }
+            list.remove(*i);
+        }
+    }
+    if levels {
+        // One level for each: written one by one.
+        for (id, _) in read(c) {
+            set(c, &id, None, data_version);
+        }
+        for (id, l) in list {
+            set(c, &id, Some(l), data_version);
+        }
+        return;
+    }
+    // A list, written as it is (two of the same kept).
+    let book = is_book(c);
+    let bedrock = is_bedrock(c);
+    let numeric = matches!(c.get("id"), Some(Tag::Short(_) | Tag::Int(_))) || bedrock;
+    let key = if book {
+        "StoredEnchantments"
+    } else if numeric {
+        "ench"
+    } else {
+        "Enchantments"
+    };
+    let tag = c.entry("tag".to_string()).or_insert_with(|| Tag::Compound(Compound::new()));
+    let Some(tag) = tag.as_compound_mut() else { return };
+    if list.is_empty() {
+        tag.shift_remove(key);
+        if tag.is_empty() {
+            c.shift_remove("tag");
+        }
+        return;
+    }
+    let items: Vec<Tag> = list
+        .into_iter()
+        .filter_map(|(id, l)| {
+            let mut e = Compound::new();
+            if numeric {
+                e.insert("id".into(), Tag::Short(to_number(&id, bedrock)?));
+            } else {
+                e.insert("id".into(), Tag::String(id));
+            }
+            e.insert("lvl".into(), Tag::Short(l.clamp(-32768, 32767) as i16));
+            Some(Tag::Compound(e))
+        })
+        .collect();
+    if let Ok(l) = List::from_tags(TagType::Compound, items) {
+        tag.insert(key.into(), Tag::List(l));
+    }
+}
+
 /// What an enchanted item's picture is multiplied by.
 pub const PURPLE: egui::Color32 = egui::Color32::from_rgb(0xDC, 0xA6, 0xFF);
 
@@ -254,7 +357,7 @@ pub fn paint_icon(p: &egui::Painter, r: egui::Rect, ink: egui::Color32) {
     crate::icons::paint(p, r, crate::icons::Icon::Optimize, ink);
 }
 
-/// The same in grey, for the menu row that opens the list.
+/// The same in gray, for the menu row that opens the list.
 pub fn paint_icon_gray(p: &egui::Painter, r: egui::Rect, ink: egui::Color32) {
     if crate::icons::item_texture("enchanted_book").is_some_and(|f| crate::icons::gray_image(p, r, &f)) {
         return;
@@ -265,7 +368,7 @@ pub fn paint_icon_gray(p: &egui::Painter, r: egui::Rect, ink: egui::Color32) {
 /// The "Enchantments" rows of a right-click menu: each enchantment the item has with its level
 /// to change and a button to remove it, and "Add Enchantment" at the bottom, a list with a search
 /// box. Gives the enchantment to change (its new level, or `None` to take it off).
-pub fn menu(ui: &mut egui::Ui, cx: &mut crate::ctx_menu::Cx, current: &[(String, i64)]) -> Option<(String, Option<i64>)> {
+pub fn menu(ui: &mut egui::Ui, cx: &mut crate::ctx_menu::Cx, current: &[(String, i64)]) -> Option<EnchantEdit> {
     use crate::icons::Icon;
     const ROW: f32 = 26.0;
     // As wide as the longest name needs, and no wider.
@@ -280,13 +383,14 @@ pub fn menu(ui: &mut egui::Ui, cx: &mut crate::ctx_menu::Cx, current: &[(String,
         ui.set_min_width(w_current);
         let ctx = ui.ctx().clone();
         let old = crate::ctx_menu::set_row_width(&ctx, w_current);
-        let mut out: Option<(String, Option<i64>)> = None;
+        let mut out: Option<EnchantEdit> = None;
         if current.is_empty() {
-            ui.label(egui::RichText::new("No enchantments").color(crate::theme::TEXT_DIM));
+            ui.label(egui::RichText::new("No enchantments").color(crate::theme::text_dim()));
         }
-        for (id, level) in current {
-            // A level being dragged is kept until it is let go.
-            let key = egui::Id::new(("enchant-level", id.as_str()));
+        for (i, (id, level)) in current.iter().enumerate() {
+            // A level being dragged is kept until it is let go (each by its place: two of the
+            // same are apart).
+            let key = egui::Id::new(("enchant-level", i, id.as_str()));
             let mut shown: i64 = ctx.data(|d| d.get_temp(key)).unwrap_or(*level);
             let (changed, done, remove) = crate::ctx_menu::value_row(ui, paint_icon, &name(id), &mut shown, 1..=255);
             if changed {
@@ -295,12 +399,12 @@ pub fn menu(ui: &mut egui::Ui, cx: &mut crate::ctx_menu::Cx, current: &[(String,
             if done {
                 let v: Option<i64> = ctx.data_mut(|d| d.remove_temp(key));
                 if let Some(v) = v.filter(|v| v != level) {
-                    out = Some((id.clone(), Some(v)));
+                    out = Some(EnchantEdit::Level(i, v));
                 }
             }
             if remove {
                 ctx.data_mut(|d| d.remove_temp::<i64>(key));
-                out = Some((id.clone(), None));
+                out = Some(EnchantEdit::Remove(i));
             }
         }
         crate::ctx_menu::separator(ui);
@@ -314,12 +418,8 @@ pub fn menu(ui: &mut egui::Ui, cx: &mut crate::ctx_menu::Cx, current: &[(String,
             r
         });
         crate::ctx_menu::set_row_width(&ctx, old);
-        // One the item has already goes up a level each time it is picked.
-        let added = added.map(|(id, _)| {
-            let have = current.iter().find(|(c, _)| short(c) == short(&id)).map_or(0, |c| c.1);
-            (id, Some(have + 1))
-        });
-        added.or(out)
+        // Picked: another enchantment in the list, at level 1 (even one it has).
+        added.map(|(id, _)| EnchantEdit::Add(id)).or(out)
     })
 }
 /// The list "Add Enchantment" opens: a search box over the enchantments the item lacks.
@@ -342,7 +442,7 @@ fn add_list(ui: &mut egui::Ui, free: &[&(&str, i64, i16)], w: f32) -> Option<(St
     let words: Vec<String> = query.to_lowercase().split_whitespace().map(str::to_string).collect();
     let shown: Vec<&&(&str, i64, i16)> = free.iter().filter(|e| words.iter().all(|w| e.0.replace('_', " ").contains(w.as_str()))).collect();
     if shown.is_empty() {
-        ui.label(egui::RichText::new("No enchantment matches.").color(crate::theme::TEXT_DIM));
+        ui.label(egui::RichText::new("No enchantment matches.").color(crate::theme::text_dim()));
         return None;
     }
     let mut pick = None;
@@ -416,5 +516,28 @@ mod tests {
         assert_eq!(level_text(255), "255");
         assert_eq!(max_level("minecraft:sharpness"), 5);
         assert_eq!(name("minecraft:fire_aspect"), "Fire Aspect");
+    }
+    /// Adding an enchantment the stack has adds another to the list where the edition keeps a
+    /// list (each then changed or taken off by its place); where it keeps one level for each
+    /// (Java 1.20.5 on), the stack is left as it is.
+    #[test]
+    fn the_same_enchantment_twice_where_a_list_allows() {
+        let s = |v: &str| Tag::String(v.into());
+        let mut old = Compound::new();
+        old.insert("id".into(), s("minecraft:diamond_sword"));
+        old.insert("Count".into(), Tag::Byte(1));
+        apply(&mut old, &EnchantEdit::Add("minecraft:sharpness".into()), Some(3700));
+        apply(&mut old, &EnchantEdit::Add("minecraft:sharpness".into()), Some(3700));
+        apply(&mut old, &EnchantEdit::Level(1, 5), Some(3700));
+        assert_eq!(read(&old), vec![("minecraft:sharpness".to_string(), 1), ("minecraft:sharpness".to_string(), 5)]);
+        apply(&mut old, &EnchantEdit::Remove(0), Some(3700));
+        assert_eq!(read(&old), vec![("minecraft:sharpness".to_string(), 5)]);
+        let mut new = Compound::new();
+        new.insert("id".into(), s("minecraft:diamond_sword"));
+        new.insert("count".into(), Tag::Int(1));
+        apply(&mut new, &EnchantEdit::Add("minecraft:sharpness".into()), Some(4500));
+        apply(&mut new, &EnchantEdit::Level(0, 3), Some(4500));
+        apply(&mut new, &EnchantEdit::Add("minecraft:sharpness".into()), Some(4500));
+        assert_eq!(read(&new), vec![("minecraft:sharpness".to_string(), 3)]);
     }
 }

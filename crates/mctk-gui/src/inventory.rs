@@ -1,5 +1,5 @@
 //! "Edit Inventory": an inventory list laid out like the game's inventory screen. Each stack sits
-//! in the slot its `Slot` says, with its count and, for tools and armour, how much of it is left.
+//! in the slot its `Slot` says, with its count and, for tools and armor, how much of it is left.
 //! Stacks can be dragged to another slot (or onto another stack to swap), and a right-click
 //! offers Add Item over an empty slot, Change Item and Delete over a stack.
 //!
@@ -14,7 +14,7 @@ use crate::item_picker;
 /// One stack, as the screen needs to show it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SlotInfo {
-    /// The `Slot` tag: 0-8 the hotbar, 9-35 the rest, 100-103 armour (feet to head), -106 offhand.
+    /// The `Slot` tag: 0-8 the hotbar, 9-35 the rest, 100-103 armor (feet to head), -106 offhand.
     pub slot: i8,
     /// Where the stack is in the list.
     pub index: usize,
@@ -31,6 +31,10 @@ pub struct SlotInfo {
     pub durability: Option<i64>,
     /// Its enchantments: id and level.
     pub enchants: Vec<(String, i64)>,
+    /// Made never to wear out.
+    pub unbreakable: bool,
+    /// The stack as saved (for its menu: name, attributes...).
+    pub stack: mctk_nbt::Compound,
 }
 
 /// What the user asked for.
@@ -41,12 +45,17 @@ pub enum Edit {
     /// Trade the places of two stacks.
     Swap(i8, i8),
     Delete(usize),
-    Add { slot: i8, id: String },
+    /// A new stack of `count` of item `id` in an empty slot.
+    Add { slot: i8, id: String, count: i64 },
     Change { index: usize, id: String },
     SetCount { index: usize, count: i64 },
     SetDamage { index: usize, damage: i64 },
-    /// Give an enchantment a level, or take it off with `None`.
+    /// Give an enchantment a level, or take it off with `None` (the screen's menu now sends
+    /// [`Edit::Stack`]; kept for callers that name an enchantment).
+    #[allow(dead_code)]
     Enchant { index: usize, id: String, level: Option<i64> },
+    /// Anything else the stack's menu changes (name, attributes, adventure-mode blocks...).
+    Stack { index: usize, edit: crate::item_edit::StackEdit },
 }
 
 /// What the screen remembers between frames.
@@ -58,16 +67,24 @@ pub struct State {
     pending_damage: Option<i64>,
 }
 
-const SLOT: f32 = 44.0;
+pub(crate) const SLOT: f32 = 44.0;
 const GAP: f32 = 2.0;
 const PITCH: f32 = SLOT + GAP;
 const PANEL: f32 = 9.0 * PITCH - GAP;
 
-/// The app's colours, in the places the game has its greys.
-const SLOT_FILL: Color32 = crate::theme::TILE;
-const SHADE: Color32 = crate::theme::DEEP;
-const LIGHT: Color32 = crate::theme::SEPARATOR;
-const INK: Color32 = crate::theme::TEXT;
+/// The app's colors, in the places the game has its grays.
+fn slot_fill() -> Color32 {
+    crate::theme::tile()
+}
+fn shade() -> Color32 {
+    crate::theme::deep()
+}
+fn light() -> Color32 {
+    crate::theme::separator()
+}
+fn ink() -> Color32 {
+    crate::theme::text()
+}
 
 /// How much wear an item takes before it breaks, if it takes any.
 pub fn durability(id: &str) -> Option<i64> {
@@ -174,7 +191,7 @@ impl Kind {
     }
 }
 
-/// How tall the armour column (and the player's window) is.
+/// How tall the armor column (and the player's window) is.
 const TOP: f32 = 4.0 * PITCH - GAP;
 
 /// The dark window where the game shows the player, from the same corner as [`layout`].
@@ -217,7 +234,7 @@ fn layout(kind: Kind) -> Vec<(i8, Pos2)> {
             return out;
         }
     }
-    // Armour down the left (head first), the player's window beside it, the offhand at the
+    // Armor down the left (head first), the player's window beside it, the offhand at the
     // window's bottom right, then the 3 rows, then the hotbar.
     for (i, s) in [103i8, 102, 101, 100].into_iter().enumerate() {
         out.push((s, pos2(0.0, 26.0 + i as f32 * PITCH)));
@@ -234,14 +251,16 @@ fn layout(kind: Kind) -> Vec<(i8, Pos2)> {
     out
 }
 
-/// The outline an empty armour or offhand slot shows (a texture of the pack).
+/// The outline an empty armor or offhand slot shows (a texture of the pack).
+/// The picture an empty armor or off-hand slot shows (the game's own, under its sprites since
+/// 1.20.2).
 fn empty_picture(slot: i8) -> Option<&'static str> {
     Some(match slot {
-        103 => "empty_armor_slot_helmet",
-        102 => "empty_armor_slot_chestplate",
-        101 => "empty_armor_slot_leggings",
-        100 => "empty_armor_slot_boots",
-        -106 => "empty_armor_slot_shield",
+        103 => "gui/sprites/container/slot/helmet.png",
+        102 => "gui/sprites/container/slot/chestplate.png",
+        101 => "gui/sprites/container/slot/leggings.png",
+        100 => "gui/sprites/container/slot/boots.png",
+        -106 => "gui/sprites/container/slot/shield.png",
         _ => return None,
     })
 }
@@ -258,33 +277,33 @@ fn slot_name(slot: i8) -> String {
     }
 }
 
-/// The game's slot: grey, dark along the top and left, light along the bottom and right.
-fn paint_slot(p: &egui::Painter, r: Rect) {
-    p.rect_filled(r, 0.0, SLOT_FILL);
-    p.rect_filled(Rect::from_min_size(r.min, vec2(r.width(), 2.0)), 0.0, SHADE);
-    p.rect_filled(Rect::from_min_size(r.min, vec2(2.0, r.height())), 0.0, SHADE);
-    p.rect_filled(Rect::from_min_size(pos2(r.left(), r.bottom() - 2.0), vec2(r.width(), 2.0)), 0.0, LIGHT);
-    p.rect_filled(Rect::from_min_size(pos2(r.right() - 2.0, r.top()), vec2(2.0, r.height())), 0.0, LIGHT);
+/// The game's slot: gray, dark along the top and left, light along the bottom and right.
+pub(crate) fn paint_slot(p: &egui::Painter, r: Rect) {
+    p.rect_filled(r, 0.0, slot_fill());
+    p.rect_filled(Rect::from_min_size(r.min, vec2(r.width(), 2.0)), 0.0, shade());
+    p.rect_filled(Rect::from_min_size(r.min, vec2(2.0, r.height())), 0.0, shade());
+    p.rect_filled(Rect::from_min_size(pos2(r.left(), r.bottom() - 2.0), vec2(r.width(), 2.0)), 0.0, light());
+    p.rect_filled(Rect::from_min_size(pos2(r.right() - 2.0, r.top()), vec2(2.0, r.height())), 0.0, light());
 }
 
 /// A stack in a slot: its picture, its count and its wear bar.
-fn paint_stack(p: &egui::Painter, r: Rect, s: &SlotInfo) {
+pub(crate) fn paint_stack(p: &egui::Painter, r: Rect, s: &SlotInfo) {
     let k = r.width() / SLOT;
     let icon = r.shrink(7.0 * k);
     let tint = if s.enchants.is_empty() { Color32::WHITE } else { crate::enchant::PURPLE };
-    let drawn = icons::item_texture(&s.id).is_some_and(|f| icons::file_image_tinted(p, icon, &f, tint));
+    let drawn = icons::item_icon(p, icon, &s.id, tint);
     if !drawn {
         // No picture in the pack: the first letters of its name.
         let short: String = item_picker::display_name(&s.id).chars().take(2).collect();
-        p.text(icon.center(), Align2::CENTER_CENTER, short, crate::theme::bold(15.0 * k), INK);
+        p.text(icon.center(), Align2::CENTER_CENTER, short, crate::theme::bold(15.0 * k), ink());
     }
     if let (Some(damage), Some(max)) = (s.damage, s.durability) {
         if damage > 0 {
             let left = (1.0 - damage as f32 / max as f32).clamp(0.0, 1.0);
             let bar = Rect::from_min_size(pos2(r.left() + 7.0 * k, r.bottom() - 10.0 * k), vec2(30.0 * k, 3.0 * k));
             p.rect_filled(bar.expand2(vec2(0.0, 1.0)), 0.0, Color32::BLACK);
-            let colour = Color32::from(egui::ecolor::Hsva::new(left / 3.0, 1.0, 1.0, 1.0));
-            p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * left, bar.height())), 0.0, colour);
+            let color = Color32::from(egui::ecolor::Hsva::new(left / 3.0, 1.0, 1.0, 1.0));
+            p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * left, bar.height())), 0.0, color);
         }
     }
     if s.count != 1 {
@@ -303,6 +322,7 @@ pub fn show(
     title: &str,
     kind: Kind,
     numeric: bool,
+    data_version: Option<i64>,
 ) -> (Vec<Edit>, bool) {
     let mut edits = Vec::new();
     let mut open = true;
@@ -311,9 +331,9 @@ pub fn show(
         {
             // The bar across the top, as the hex editor has: its name, and the way back.
             let bar = Rect::from_min_size(full.min, vec2(full.width(), 40.0));
-            ui.painter().rect_filled(bar, 0.0, crate::theme::BG);
-            ui.painter().line_segment([bar.left_bottom(), bar.right_bottom()], egui::Stroke::new(1.0_f32, crate::theme::BORDER));
-            ui.painter().text(bar.left_center() + vec2(14.0, 0.0), Align2::LEFT_CENTER, title, crate::theme::bold(15.0), INK);
+            ui.painter().rect_filled(bar, 0.0, crate::theme::bg());
+            ui.painter().line_segment([bar.left_bottom(), bar.right_bottom()], egui::Stroke::new(1.0_f32, crate::theme::border()));
+            ui.painter().text(bar.left_center() + vec2(14.0, 0.0), Align2::LEFT_CENTER, title, crate::theme::bold(15.0), ink());
             let mut right = ui.new_child(
                 egui::UiBuilder::new()
                     .max_rect(bar.shrink2(vec2(8.0, 5.0)))
@@ -349,12 +369,12 @@ pub fn show(
                 let w = player_window();
                 let r = Rect::from_min_size(at(w.min), w.size() * k);
                 let p = ui.painter();
-                p.rect_filled(r, 0.0, crate::theme::FIELD);
+                p.rect_filled(r, 0.0, crate::theme::field());
                 // Dark and light the other way round to a slot: it is sunk in.
-                p.rect_filled(Rect::from_min_size(r.min, vec2(r.width(), 2.0)), 0.0, SHADE);
-                p.rect_filled(Rect::from_min_size(r.min, vec2(2.0, r.height())), 0.0, SHADE);
-                p.rect_filled(Rect::from_min_size(pos2(r.left(), r.bottom() - 2.0), vec2(r.width(), 2.0)), 0.0, LIGHT);
-                p.rect_filled(Rect::from_min_size(pos2(r.right() - 2.0, r.top()), vec2(2.0, r.height())), 0.0, LIGHT);
+                p.rect_filled(Rect::from_min_size(r.min, vec2(r.width(), 2.0)), 0.0, shade());
+                p.rect_filled(Rect::from_min_size(r.min, vec2(2.0, r.height())), 0.0, shade());
+                p.rect_filled(Rect::from_min_size(pos2(r.left(), r.bottom() - 2.0), vec2(r.width(), 2.0)), 0.0, light());
+                p.rect_filled(Rect::from_min_size(pos2(r.right() - 2.0, r.top()), vec2(2.0, r.height())), 0.0, light());
             }
             for (slot, pos) in layout(kind) {
                 let r = Rect::from_min_size(at(pos), vec2(SLOT, SLOT) * k);
@@ -363,7 +383,7 @@ pub fn show(
                 let stack = by_slot(slot);
                 if stack.is_none() {
                     if let Some(name) = empty_picture(slot) {
-                        if let Some(f) = icons::pack_texture(&format!("item/{name}.png")) {
+                        if let Some(f) = icons::pack_texture(name) {
                             icons::file_image(ui.painter(), r.shrink(6.0), &f);
                         }
                     }
@@ -397,21 +417,21 @@ pub fn show(
                     if state.dragging.is_none() && !menu_open {
                         resp.clone().on_hover_ui(|ui| {
                             ui.set_max_width(260.0);
-                            let label = |ui: &mut Ui, text: String, colour: Color32, size: f32| {
-                                ui.add(egui::Label::new(egui::RichText::new(text).color(colour).size(size)).selectable(false));
+                            let label = |ui: &mut Ui, text: String, color: Color32, size: f32| {
+                                ui.add(egui::Label::new(egui::RichText::new(text).color(color).size(size)).selectable(false));
                             };
                             match stack {
-                                None => label(ui, slot_name(slot), crate::theme::TEXT_MUTED, 12.5),
+                                None => label(ui, slot_name(slot), crate::theme::text_muted(), 12.5),
                                 Some(s) => {
                                     let enchanted = !s.enchants.is_empty();
-                                    let ink = if enchanted { Color32::from_rgb(0xCF, 0xA8, 0xFF) } else { crate::theme::TEXT };
+                                    let ink = if enchanted { Color32::from_rgb(0xCF, 0xA8, 0xFF) } else { crate::theme::text() };
                                     label(ui, item_picker::display_name(&s.id), ink, 14.0);
-                                    label(ui, format!("{}  |  {}", s.number.map_or(s.id.clone(), |n| n.to_string()), slot_name(slot)), crate::theme::TEXT_MUTED, 12.0);
+                                    label(ui, format!("{}  |  {}", s.number.map_or(s.id.clone(), |n| n.to_string()), slot_name(slot)), crate::theme::text_muted(), 12.0);
                                     let mut line = format!("Count {}", s.count);
                                     if let (Some(d), Some(max)) = (s.damage, s.durability) {
                                         line.push_str(&format!("   Durability {} / {}", max - d, max));
                                     }
-                                    label(ui, line, crate::theme::TEXT_MUTED, 12.0);
+                                    label(ui, line, crate::theme::text_muted(), 12.0);
                                     for (id, level) in &s.enchants {
                                         label(ui, format!("{} {}", crate::enchant::name(id), crate::enchant::level_text(*level)), Color32::from_rgb(0xCF, 0xA8, 0xFF), 12.0);
                                     }
@@ -430,30 +450,26 @@ pub fn show(
                 // A right-click: add over nothing; change or delete over a stack.
                 ctx_menu::context(ui, &resp, |ui, cx| match stack {
                     None => {
-                        let picked = ctx_menu::submenu_wide(ui, cx, Icon::Plus, "Add Item", item_picker::WIDTH, item_picker::HEIGHT, |ui| {
-                            item_picker::show(ui, "", numeric)
+                        // The item, and how many at the top of the list.
+                        let picked = ctx_menu::submenu_wide(ui, cx, Icon::Plus, "Add Item", item_picker::WIDTH, item_picker::HEIGHT + 30.0, |ui| {
+                            item_picker::show_counted(ui, "", numeric, 1, if numeric { 127 } else { 99 })
                         });
-                        if let Some(id) = picked {
-                            edits.push(Edit::Add { slot, id });
+                        if let Some((Some(id), count)) = picked {
+                            edits.push(Edit::Add { slot, id, count });
                         }
                     }
                     Some(s) => {
                         ctx_menu::widen(ui, 232.0);
-                        let picked = ctx_menu::submenu_wide(ui, cx, Icon::Refresh, "Change Item", item_picker::WIDTH, item_picker::HEIGHT, |ui| {
-                            item_picker::show(ui, &s.id, numeric)
+                        // The item, and how many at the top of the list (the count on its own too).
+                        let picked = ctx_menu::submenu_wide(ui, cx, Icon::Refresh, "Change Item", item_picker::WIDTH, item_picker::HEIGHT + 30.0, |ui| {
+                            item_picker::show_counted(ui, &s.id, numeric, s.count, s.max_count)
                         });
-                        if let Some(id) = picked {
-                            edits.push(Edit::Change { index: s.index, id });
-                        }
-                        // Count and wear, typed or dragged right in the menu.
-                        let mut count = state.pending_count.unwrap_or(s.count);
-                        let (changed, done) = ctx_menu::number_row(ui, Icon::Rename, "Count", &mut count, 1..=s.max_count, "");
-                        if changed {
-                            state.pending_count = Some(count);
-                        }
-                        if done {
-                            if let Some(v) = state.pending_count.take().filter(|v| *v != s.count) {
-                                edits.push(Edit::SetCount { index: s.index, count: v });
+                        if let Some((id, count)) = picked {
+                            if let Some(id) = id {
+                                edits.push(Edit::Change { index: s.index, id });
+                            }
+                            if count != s.count {
+                                edits.push(Edit::SetCount { index: s.index, count });
                             }
                         }
                         if let (Some(damage), Some(max)) = (s.damage, s.durability) {
@@ -468,10 +484,13 @@ pub fn show(
                                 }
                             }
                         }
-                        let wanted = crate::enchant::menu(ui, cx, &s.enchants);
-                        if let Some((id, level)) = wanted {
-                            edits.push(Edit::Enchant { index: s.index, id, level });
+                        // Its enchantments, unbreakable, attributes, adventure-mode blocks and name:
+                        // the same rows as in the tree.
+                        let key = format!("inv-stack-{}-{}", slot, s.index);
+                        if let Some(edit) = crate::item_edit::stack_menu(ui, cx, &key, &s.id, &s.stack, data_version) {
+                            edits.push(Edit::Stack { index: s.index, edit });
                         }
+                        ctx_menu::separator(ui);
                         if ctx_menu::item(ui, Icon::Trash, "Remove", "", true) {
                             edits.push(Edit::Delete(s.index));
                         }
@@ -482,7 +501,7 @@ pub fn show(
                 }
             }
 
-            // The outline goes over the neighbouring slots, so none of it is cut off.
+            // The outline goes over the neighboring slots, so none of it is cut off.
             if let Some(r) = outline {
                 ui.painter().rect_stroke(r.expand(1.0), 0.0, egui::Stroke::new(2.0_f32, crate::theme::EDITOR_ACCENT), egui::StrokeKind::Outside);
             }
@@ -510,8 +529,8 @@ pub fn show(
             let chosen = state.selected.and_then(by_slot);
             let tall = chosen.is_some_and(|s| !s.enchants.is_empty());
             let (card, _) = ui.allocate_exact_size(vec2(PANEL * k, if tall { 78.0 } else { 62.0 }), Sense::hover());
-            ui.painter().rect_filled(card, crate::theme::radius(4), crate::theme::CARD);
-            ui.painter().rect_stroke(card, crate::theme::radius(4), egui::Stroke::new(1.0_f32, crate::theme::BORDER), egui::StrokeKind::Inside);
+            ui.painter().rect_filled(card, crate::theme::radius(4), crate::theme::card());
+            ui.painter().rect_stroke(card, crate::theme::radius(4), egui::Stroke::new(1.0_f32, crate::theme::border()), egui::StrokeKind::Inside);
             match chosen {
                 Some(s) => {
                     let pic = Rect::from_min_size(card.min + vec2(9.0, 9.0), vec2(44.0, 44.0));
@@ -523,9 +542,9 @@ pub fn show(
                         line.push_str(&format!("   Durability {} / {}", (max - d).max(0), max));
                     }
                     let p = ui.painter();
-                    p.text(card.left_top() + vec2(64.0, 12.0), Align2::LEFT_TOP, item_picker::display_name(&s.id), crate::theme::bold(14.0), INK);
-                    p.text(card.left_top() + vec2(64.0, 31.0), Align2::LEFT_TOP, format!("{id}  |  {}", slot_name(s.slot)), crate::theme::regular(12.0), crate::theme::TEXT_MUTED);
-                    p.text(card.left_top() + vec2(64.0, 45.0), Align2::LEFT_TOP, line, crate::theme::regular(12.0), crate::theme::TEXT_MUTED);
+                    p.text(card.left_top() + vec2(64.0, 12.0), Align2::LEFT_TOP, item_picker::display_name(&s.id), crate::theme::bold(14.0), ink());
+                    p.text(card.left_top() + vec2(64.0, 31.0), Align2::LEFT_TOP, format!("{id}  |  {}", slot_name(s.slot)), crate::theme::regular(12.0), crate::theme::text_muted());
+                    p.text(card.left_top() + vec2(64.0, 45.0), Align2::LEFT_TOP, line, crate::theme::regular(12.0), crate::theme::text_muted());
                     if !s.enchants.is_empty() {
                         let text: Vec<String> = s.enchants.iter().map(|(id, l)| format!("{} {}", crate::enchant::name(id), crate::enchant::level_text(*l))).collect();
                         let font = crate::theme::regular(12.0);
@@ -539,7 +558,7 @@ pub fn show(
                         Align2::LEFT_CENTER,
                         "Click a slot. Drag a stack to move or swap it; right-click for more.",
                         crate::theme::regular(12.0),
-                        crate::theme::TEXT_MUTED,
+                        crate::theme::text_muted(),
                     );
                 }
             }
@@ -565,11 +584,13 @@ mod tests {
             damage: None,
             durability: durability(id),
             enchants: Vec::new(),
+            unbreakable: false,
+            stack: mctk_nbt::Compound::new(),
         }
     }
 
     #[test]
-    fn tools_and_armour_know_how_much_they_take() {
+    fn tools_and_armor_know_how_much_they_take() {
         assert_eq!(durability("minecraft:diamond_sword"), Some(1561));
         assert_eq!(durability("minecraft:wooden_pickaxe"), Some(59));
         assert_eq!(durability("minecraft:iron_chestplate"), Some(240));
@@ -611,7 +632,7 @@ mod tests {
                 let mut result = (Vec::new(), true);
                 let _ = ctx.run(input, |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
-                        result = show(ui, &mut state, &slots, "Inventory", ender, false);
+                        result = show(ui, &mut state, &slots, "Inventory", ender, false, None);
                     });
                 });
                 assert!(result.1 && result.0.is_empty());
@@ -642,7 +663,7 @@ mod tests {
                 };
                 let _ = ctx.run(input, |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
-                        let _ = show(ui, &mut state, &slots, "Inventory", Kind::Player, false);
+                        let _ = show(ui, &mut state, &slots, "Inventory", Kind::Player, false, None);
                     });
                 });
                 frames += 1;
@@ -657,7 +678,7 @@ mod tests {
             };
             let _ = ctx.run(input, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    let _ = show(ui, &mut state, &slots, "Inventory", Kind::Player, false);
+                    let _ = show(ui, &mut state, &slots, "Inventory", Kind::Player, false, None);
                 });
             });
         }

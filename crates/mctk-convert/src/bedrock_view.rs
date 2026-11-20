@@ -150,7 +150,9 @@ mod tests {
         let slab = &view.blocks["minecraft:black_wool_slab"];
         assert!(slab.properties["type"].contains(&"bottom".to_string()));
         assert!(!slab.properties["type"].contains(&"double".to_string()), "{:?}", slab.properties["type"]);
-        // A block that has no Bedrock id at all is not in the view.
-        assert!(!view.has_block("minecraft:moving_piston") || view.blocks["minecraft:moving_piston"].properties.is_empty());
+        // A block that has no Bedrock id at all (Java's test blocks) is not in the view.
+        assert!(!view.has_block("minecraft:test_block") || view.blocks["minecraft:test_block"].properties.is_empty());
+        // The plain stone slab is there whole, double too (Bedrock's normal stone slab).
+        assert_eq!(view.check_block("minecraft:stone_slab", [("type", "double"), ("waterlogged", "false")]), BlockCheck::Exact);
     }
 }
