@@ -184,6 +184,12 @@ impl EditorPage {
     pub fn dev_show_explorer(&mut self, preset: Option<&str>) {
         if let Some(ws) = self.workspaces.get_mut(self.current) {
             ws.show_explorer = true;
+            // MCTK_DEV_NBT: the world's level.dat open in the NBT editor instead.
+            if std::env::var("MCTK_DEV_NBT").is_ok() {
+                ws.show_explorer = false;
+                let _ = ws.open_doc(DocSource::File(ws.path.join("level.dat")));
+                return;
+            }
             if let Some(p) = preset {
                 ws.map.dev_preset(p);
             }
