@@ -193,7 +193,7 @@ pub fn era_up_entity(e: &mut Compound, notes: &mut Notes) {
 /// block entity.
 pub fn block_entity_convert(be: &mut Compound, to: Form, target: &Registry, notes: &mut Notes) -> bool {
     let id = be.get("id").and_then(Tag::as_str).unwrap_or("").to_string();
-    if !target.block_entities.iter().any(|b| *b == id) {
+    if !target.block_entities.contains(&id) {
         notes.add(format!("block entity {id} does not exist in the target version"));
         return false;
     }
@@ -347,7 +347,7 @@ fn spawner_entities(be: &mut Compound, key: &str, to: Form, target: &Registry, n
 /// Converts an entity in place. Returns `false` when the target version has no such entity.
 pub fn entity_convert(e: &mut Compound, to: Form, target: &Registry, notes: &mut Notes) -> bool {
     let id = e.get("id").and_then(Tag::as_str).unwrap_or("").to_string();
-    if !target.entities.iter().any(|x| *x == id) {
+    if !target.entities.contains(&id) {
         notes.add(format!("entity {id} does not exist in the target version"));
         return false;
     }

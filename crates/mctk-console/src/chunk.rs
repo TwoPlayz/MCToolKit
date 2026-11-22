@@ -113,6 +113,26 @@ impl ConsoleChunk {
         Ok(())
     }
 
+    /// The biome (its legacy number) of the column at x, z (0 to 15), if the chunk keeps them.
+    pub fn biome(&self, x: usize, z: usize) -> Option<u8> {
+        let a = self.array("Biomes").filter(|a| a.len() == 256)?;
+        a.get(z * 16 + x).map(|b| *b as u8)
+    }
+
+    /// Gives the column at x, z (0 to 15) a biome (its legacy number). False where the chunk keeps none.
+    pub fn set_biome(&mut self, x: usize, z: usize, id: u8) -> bool {
+        if x >= 16 || z >= 16 {
+            return false;
+        }
+        match self.array_mut("Biomes") {
+            Some(a) if a.len() == 256 => {
+                a[z * 16 + x] = id as i8;
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Highest non-air block in a column.
     pub fn top_block(&self, x: usize, z: usize) -> Option<(usize, u8)> {
         (0..self.height).rev().find_map(|y| {

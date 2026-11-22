@@ -11,11 +11,23 @@ pub fn default_dir(working_dir: &Path) -> PathBuf {
     working_dir.join("resource_packs").join("default")
 }
 
-/// Makes `pack` the folder the latest assets are kept in, checks they are current (on this
-/// thread: call it from a background one), and adds `pack.png` if it is missing.
-pub fn ensure(pack: &Path) {
+/// Makes `pack` the folder the latest assets are kept in and checks they are current (on this
+/// thread: call it from a background one). The quick part of [`ensure`], which the splash
+/// screen waits for.
+pub fn prepare(pack: &Path) {
     crate::assets::set_root(pack.to_path_buf());
     crate::assets::prepare();
+}
+
+/// All of it, in the background: [`prepare`], then the files the 3D view draws with, and
+/// `pack.png` if it is missing.
+pub fn ensure(pack: &Path) {
+    prepare(pack);
+    fetch_rest(pack);
+}
+
+/// The files fetched ahead of use (see [`ensure`]), after [`prepare`].
+pub fn fetch_rest(pack: &Path) {
     // What the 3D view draws every block and item with, ahead of first use (not in tests,
     // which fetch only what they draw).
     #[cfg(not(test))]

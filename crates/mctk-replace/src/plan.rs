@@ -64,8 +64,17 @@ pub struct Plan {
 impl Plan {
     /// The groups for the blocks of `scan` that `target` cannot represent exactly.
     pub fn build(scan: &Scan, target: &Registry, renames: &Renames) -> Plan {
+        Self::build_where(scan, target, renames, |_| false)
+    }
+
+    /// [`Plan::build`] leaving out the states `supported` accepts (what the target writes by
+    /// means the registry does not describe).
+    pub fn build_where(scan: &Scan, target: &Registry, renames: &Renames, supported: impl Fn(&BlockState) -> bool) -> Plan {
         let mut by_name: IndexMap<String, Vec<(BlockState, u64, Suggestion)>> = IndexMap::new();
         for u in scan.unsupported(target) {
+            if supported(&u.state) {
+                continue;
+            }
             let Some(g) = suggest(&u.state, target, renames) else { continue };
             by_name.entry(u.state.name.clone()).or_default().push((u.state, u.count, g));
         }

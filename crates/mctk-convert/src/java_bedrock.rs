@@ -722,7 +722,9 @@ fn int_list(values: &[i32]) -> Tag {
 
 /// The Bedrock version being written, when it is not the newest: the game version, network and
 /// storage versions of its `level.dat`. Set by [`set_bedrock_target`].
-static TARGET: std::sync::Mutex<Option<([i32; 5], i32, u32, String)>> = std::sync::Mutex::new(None);
+/// The Bedrock version being written: client version, network version, storage version, inventory version name.
+type Target = ([i32; 5], i32, u32, String);
+static TARGET: std::sync::Mutex<Option<Target>> = std::sync::Mutex::new(None);
 
 /// Chooses the Bedrock version the next conversion writes for, from the registry of that version
 /// (see `mctk-gen bedrock-finish` for the facts it carries). A registry without them (the newest
@@ -816,7 +818,7 @@ pub fn java_to_bedrock(src: &Path, out: &Path) -> Result<EditionReport, Error> {
 }
 
 /// Chunk status of a Java chunk root (`Status` at the root since 1.18, under `Level` before).
-fn java_status(root: &NamedTag) -> Option<String> {
+pub(crate) fn java_status(root: &NamedTag) -> Option<String> {
     root.tag
         .get("Status")
         .or_else(|| root.tag.get("Level")?.get("Status"))
@@ -1865,6 +1867,7 @@ pub fn bedrock_to_java_replacing(
             }
             _ => {}
         }
+        #[allow(clippy::single_match)]
         match Key::decode(k) {
             Key::Chunk(c) => {
                 let col = columns.entry((c.dimension.id(), c.x, c.z)).or_default();

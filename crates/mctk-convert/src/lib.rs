@@ -42,11 +42,27 @@ pub use java_bedrock::{
     set_bedrock_target,
 };
 pub use bedrock_view::{bedrock_view, java_view};
-pub use console_out::{ConsoleReport, java_to_console, legacy_registry};
+
+/// The number Java before 1.18 saved a biome as (plains for one it had no number for): newer biomes count as the closest old one.
+pub fn old_java_biome_id(name: &str) -> i32 {
+    java_old::biome_id(&java_old::old_biome_name(name))
+}
+
+/// The Java biome a console game's biome number stands for.
+pub fn console_biome_name(id: u8) -> String {
+    legacy_tables::LegacyTables::get().biome(id).to_string()
+}
+
+/// The number the console games save a biome as.
+pub fn console_biome_id(name: &str) -> Option<u8> {
+    let t = legacy_tables::LegacyTables::get();
+    t.console_biome(name).or_else(|| t.console_biome(&java_old::old_biome_name(name)))
+}
+pub use console_out::{ConsoleReport, classic_keeps, console_supports, current_item_text, java_to_console, legacy_registry, legacy_registry_in};
 pub use legacy_up::{LegacyReport, console_to_modern};
 pub use java_java::{JavaReport, JavaTarget, ReplacedBlock, java_to_java};
 pub use java_level::{LevelData, RuleValue};
-pub use options::{ConvertOptions, Progress};
+pub use options::{ConsoleFormat, ConvertOptions, Progress};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

@@ -47,6 +47,8 @@ pub enum Edit {
     Delete(usize),
     /// A new stack of `count` of item `id` in an empty slot.
     Add { slot: i8, id: String, count: i64 },
+    /// A copy of a stack copied from a tree (its tags as they were) put in a slot, replacing what is there.
+    Paste { slot: i8, stack: mctk_nbt::Compound },
     Change { index: usize, id: String },
     SetCount { index: usize, count: i64 },
     SetDamage { index: usize, damage: i64 },
@@ -73,14 +75,16 @@ const PITCH: f32 = SLOT + GAP;
 const PANEL: f32 = 9.0 * PITCH - GAP;
 
 /// The app's colors, in the places the game has its grays.
+// (On the light theme the page and panel are near white, so the slots are a clearly darker gray
+// with a real dark edge on the top and left, a white one on the bottom and right.)
 fn slot_fill() -> Color32 {
-    crate::theme::tile()
+    if crate::theme::is_light() { Color32::from_rgb(0xCB, 0xD0, 0xD8) } else { crate::theme::tile() }
 }
 fn shade() -> Color32 {
-    crate::theme::deep()
+    if crate::theme::is_light() { Color32::from_rgb(0x8E, 0x96, 0xA3) } else { crate::theme::deep() }
 }
 fn light() -> Color32 {
-    crate::theme::separator()
+    if crate::theme::is_light() { Color32::WHITE } else { crate::theme::separator() }
 }
 fn ink() -> Color32 {
     crate::theme::text()
@@ -439,7 +443,8 @@ pub fn show(
                             }
                         });
                     }
-                }                if resp.clicked() || resp.secondary_clicked() || resp.drag_started() {
+                }
+                if resp.clicked() || resp.secondary_clicked() || resp.drag_started() {
                     state.selected = Some(slot);
                     state.pending_count = None;
                     state.pending_damage = None;
@@ -456,6 +461,13 @@ pub fn show(
                         });
                         if let Some((Some(id), count)) = picked {
                             edits.push(Edit::Add { slot, id, count });
+                        }
+                        // What was copied in a tree, when that is an item.
+                        let copied = crate::nbt_view::clipboard_stack();
+                        if ctx_menu::item(ui, Icon::Paste, "Paste Item", "", copied.is_some()) {
+                            if let Some(stack) = copied {
+                                edits.push(Edit::Paste { slot, stack });
+                            }
                         }
                     }
                     Some(s) => {
@@ -491,6 +503,12 @@ pub fn show(
                             edits.push(Edit::Stack { index: s.index, edit });
                         }
                         ctx_menu::separator(ui);
+                        let copied = crate::nbt_view::clipboard_stack();
+                        if ctx_menu::item(ui, Icon::Paste, "Paste Item", "replaces this one", copied.is_some()) {
+                            if let Some(stack) = copied {
+                                edits.push(Edit::Paste { slot, stack });
+                            }
+                        }
                         if ctx_menu::item(ui, Icon::Trash, "Remove", "", true) {
                             edits.push(Edit::Delete(s.index));
                         }

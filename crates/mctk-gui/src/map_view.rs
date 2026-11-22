@@ -44,7 +44,6 @@ const OUTLINE_FROM: f32 = 8.0;
 enum TimeOfDay {
     World,
     /// The sun low in the west (11,500), still daylight: to see the sun.
-    Sunset,
     Day,
     Night,
 }
@@ -158,8 +157,10 @@ pub struct MapView {
     pub edits: std::sync::Arc<std::sync::RwLock<crate::edit::EditLayer>>,
     /// What Copy or Cut took, for Paste.
     pub clipboard: Option<crate::edit::tools::Clipboard>,
-    /// The block Fill and Replace put in (with its properties).
+    /// The block Fill and Replace put in (with its properties): the first of the palette.
     pub block: mctk_java::BlockState,
+    /// The blocks Fill, Replace and the brush put in, mixed evenly (one is a single block).
+    pub block_palette: Vec<mctk_java::BlockState>,
 
     /// Placing the clipboard: how it is turned and mirrored, where it would go (its lowest
     /// north-west corner, under the pointer), and how far it was nudged from there.
@@ -175,7 +176,9 @@ pub struct MapView {
     /// Painting by Alt+drag: the last block painted around (one step to undo for the stroke).
     brush_last: Option<[i32; 3]>,
     /// Where the brush would paint (the block under the pointer).
-    brush_at: Option<[i32; 3]>,
+    pub brush_at: Option<[i32; 3]>,
+    /// The biome the camera is in (it decides the sky), kept up to date by the explorer.
+    pub sky_biome: Option<String>,
     /// The selection box's face being dragged: which axis, which end, where it was, where the
     /// drag began, and how far on screen one block along the axis is.
     box_drag: Option<(usize, bool, i32, Pos2, Vec2)>,
@@ -201,6 +204,38 @@ pub struct MapView {
     find: Find,
     /// What the right-click menu is about (set when it opens).
     pub menu_target: Option<MenuTarget>,
+    /// Placing a single block, mob or item: a click puts it on the block under the pointer.
+    pub place: Option<PlaceMode>,
+    /// Set when the user clicked with the Place tool: what kind, and the block it stands in; the
+    /// page places it.
+    pub place_request: Option<(PlaceKind, [i32; 3])>,
+    /// The settings of the lingering cloud selected, being changed in the toolbar: where it is
+    /// (as a key), the cloud as the user has set it, and whether it was changed before (so the
+    /// changes are one step to undo).
+    pub cloud_edit: Option<([i64; 3], crate::cloud::Cloud, bool)>,
+    /// Picking the mob that rides this one (the mount, as selected): a click on a mob puts it on.
+    pub pick_rider: Option<Arc<mctk_nbt::Tag>>,
+    /// What the last look under the pointer was for (see `show_map`), to look again only when it changes.
+    pick_key: Option<(Camera, Option<(u32, u32)>, bool, u64, bool, bool)>,
+    /// Set when the rider was clicked: where the mount stands and where the rider does; the page
+    /// puts the one on the other.
+    pub ride_request: Option<([f64; 3], Vec<usize>, [f64; 3])>,
+    /// Placing lingering potion clouds: a click puts one on the block under the pointer.
+    pub cloud: Option<CloudMode>,
+    /// Set when the user clicked with the cloud tool: where it stands and what it is; the page
+    /// places it.
+    pub cloud_request: Option<([f64; 3], crate::cloud::Cloud)>,
+    /// Moving the selected mob or block: it follows the pointer until a click puts it down.
+    pub moving: Option<MoveMode>,
+    /// Set when what was being moved was put down; the page moves it.
+    pub move_request: Option<MoveOrder>,
+    /// The turn handle under the selected mob or block, where it was drawn, and the turn being
+    /// dragged by it. A different selection ends the turn (`turn_for` says which it was for).
+    turn_handle: Option<Pos2>,
+    turn_drag: Option<TurnDrag>,
+    turn_for: Option<[i64; 4]>,
+    /// Set while the handle is dragged: the turn to make; the page makes it.
+    pub rotate_request: Option<RotateOrder>,
     /// Chunk borders in 3D also drawn along the land (besides the box around each chunk).
     pub land_outline: bool,
     /// Set by a tool that has the pointer on one of its handles: no chunk is outlined under it.
@@ -373,7 +408,10 @@ fn lod_tile(ctx: &egui::Context, img: &MapImage, f: usize, tx: usize, ty: usize)
             let land = world::lit(alb, hy, 0, n, wst, soften);
             // The more of the cell is water, the more it takes the color of water of that depth.
             let share = c.3 as f32 / c.1 as f32;
-            let wet = if c.3 > 0 { world::lit(alb, hy, (c.4 / c.3) as i32, None, None, 1.0) } else { land };
+            let wet = match c.4.checked_div(c.3) {
+                Some(q) => world::lit(alb, hy, q as i32, None, None, 1.0),
+                None => land,
+            };
             let o = ((y - cy0) * w + (x - cx0)) * 4;
             for k in 0..3 {
                 out[o + k] = (land[k] as f32 + (wet[k] as f32 - land[k] as f32) * share) as u8;
@@ -547,6 +585,7 @@ impl MapView {
             edits: Default::default(),
             clipboard: None,
             block: mctk_java::BlockState::new("minecraft:stone"),
+            block_palette: vec![mctk_java::BlockState::new("minecraft:stone")],
             paste: None,
             paste_request: None,
             ghost_sent: None,
@@ -554,6 +593,7 @@ impl MapView {
             brush_request: None,
             brush_last: None,
             brush_at: None,
+            sky_biome: None,
             box_drag: None,
             handles: Vec::new(),
             pick_liquids: false,
@@ -565,6 +605,20 @@ impl MapView {
             fold_panel: None,
             find: Find::default(),
             menu_target: None,
+            place: None,
+            place_request: None,
+            cloud_edit: None,
+            pick_rider: None,
+            pick_key: None,
+            ride_request: None,
+            cloud: None,
+            cloud_request: None,
+            moving: None,
+            move_request: None,
+            turn_handle: None,
+            turn_drag: None,
+            turn_for: None,
+            rotate_request: None,
             land_outline: false,
             hide_hover: false,
             atlas_tiles: Default::default(),
@@ -620,7 +674,7 @@ impl MapView {
                 ("dolly", Some(n)) => self.dolly = n.clamp(0.05, TOP_MAX / ABOVE_FROM),
                 ("lens", Some(n)) => self.lens = n.clamp(1.0, 12.0),
                 ("bright", Some(n)) => self.full_bright = n > 0.5,
-                ("night", Some(n)) => self.time_of_day = if n > 1.5 { TimeOfDay::Sunset } else if n > 0.5 { TimeOfDay::Night } else { TimeOfDay::Day },
+                ("night", Some(n)) => self.time_of_day = if n > 0.5 { TimeOfDay::Night } else { TimeOfDay::Day },
                 ("slicer", Some(n)) => self.slicer_open = n > 0.5,
                 ("noclip", Some(n)) => self.noclip = n > 0.5,
                 ("overview", Some(n)) => self.overview = n > 0.5,
@@ -710,7 +764,6 @@ impl MapView {
     fn day_ticks(&mut self) -> i64 {
         match self.time_of_day {
             TimeOfDay::Day => 6000,
-            TimeOfDay::Sunset => 11500,
             TimeOfDay::Night => 18000,
             TimeOfDay::World => {
                 let (path, edition) = (self.path.clone(), self.edition);
@@ -722,7 +775,6 @@ impl MapView {
     fn daylight(&mut self) -> f32 {
         match self.time_of_day {
             TimeOfDay::Day => 1.0,
-            TimeOfDay::Sunset => crate::gpu_world::daylight(11500),
             TimeOfDay::Night => crate::gpu_world::daylight(18000),
             TimeOfDay::World => {
                 let (path, edition) = (self.path.clone(), self.edition);
@@ -856,6 +908,18 @@ impl MapView {
 
     /// Where Box Select is in making a box, for the toolbar to say what to do next.
     pub fn box_hint(&self) -> Option<&'static str> {
+        if self.moving.is_some() {
+            return Some("Click where to put it \u{b7} arrow keys and Page Up/Down nudge it \u{b7} Esc cancels");
+        }
+        if self.cloud.is_some() {
+            return Some("Click a block to put the potion cloud on it \u{b7} Esc stops");
+        }
+        if self.place.is_some() {
+            return Some("Click a block to put it on top \u{b7} Esc stops");
+        }
+        if self.pick_rider.is_some() {
+            return Some("Click the mob that will ride it \u{b7} Esc cancels");
+        }
         let in_3d = self.camera.is_some() && self.tilt > 0.0;
         match (self.box_anchor.is_some(), self.box_floor.is_some()) {
             (true, _) if in_3d => Some("Move to set the width and length, then click"),
@@ -888,6 +952,29 @@ impl MapView {
         let name = full.split(['#', '@']).next().unwrap_or(&full).to_string();
         let props = world::block_props(id).map(|p| p.to_string()).unwrap_or_default();
         Some(MenuTarget::Block([h.x, h.y, h.z], name, props))
+    }
+
+    /// What the block at a place holds in its block entity, as the 3D view has it (`None` where
+    /// the block has none or is not loaded).
+    pub fn block_entity_at(&self, p: [i32; 3]) -> Option<std::sync::Arc<mctk_nbt::Tag>> {
+        self.gpu.as_ref()?.block_entity_at(p[0], p[1], p[2])
+    }
+
+    /// The block at a place, with its properties, as the 3D view has it (`None` for air or where
+    /// it is not loaded).
+    pub fn block_state_at(&self, p: [i32; 3]) -> Option<mctk_java::BlockState> {
+        let id = self.gpu.as_ref()?.block_at(p[0], p[1], p[2])?;
+        let full = world::block_name(id)?;
+        let name = full.split(['#', '@']).next()?.to_string();
+        if name.ends_with("air") {
+            return None;
+        }
+        let recorded = world::block_props(id).map(|p| p.to_string()).unwrap_or_default();
+        let mut s = mctk_java::BlockState::new(if name.contains(':') { name.clone() } else { format!("minecraft:{name}") });
+        for (k, v) in crate::edit::states::full_properties(&name, &recorded) {
+            s = s.with(&k, &v);
+        }
+        Some(s)
     }
 
     /// The block at a place, as the 3D view has it (`None` where it is not loaded).
@@ -928,48 +1015,60 @@ impl MapView {
                 ui.style_mut().override_font_id = Some(theme::regular(14.0 * ks));
                 ui.spacing_mut().item_spacing = vec2(6.0 * ks, 6.0 * ks);
                 ui.spacing_mut().interact_size.y = 24.0 * ks;
-                // What to find, from the item list: a block, or a spawn egg for its mob.
-                let (r, pick) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0 * ks), Sense::click());
-                ui.painter().rect_filled(r, theme::radius(4), if pick.hovered() { theme::button_hover() } else { theme::button() });
-                let icon = Rect::from_center_size(pos2(r.left() + 18.0 * ks, r.center().y), Vec2::splat(22.0 * ks));
-                let (label, color) = if self.find.query.is_empty() {
-                    ("Choose a block or mob to find\u{2026}".to_string(), theme::text_muted())
-                } else {
-                    let id = self.find.query.as_str();
-                    crate::icons::item_icon(ui.painter(), icon, id, Color32::WHITE);
-                    let name = crate::item_picker::display_name(id.strip_suffix("_spawn_egg").unwrap_or(id));
-                    (name, theme::text())
-                };
-                ui.painter().text(pos2(r.left() + 36.0 * ks, r.center().y), Align2::LEFT_CENTER, label, theme::regular(14.0 * ks), color);
-                let pick = pick.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Pick a block, or a mob's spawn egg");
+                // What to find, from the one list of blocks and mobs (a mob is found by its spawn
+                // egg), and the button that finds it, on one row.
+                let row_h = 26.0 * ks;
                 let mut picked = None;
-                crate::ctx_menu::dropdown(ui, &pick, |ui, _| {
-                    picked = crate::item_picker::show(ui, &self.find.query, false);
+                ui.horizontal(|ui| {
+                    let find_w = 70.0 * ks;
+                    let (r, pick) = ui.allocate_exact_size(vec2((ui.available_width() - find_w - ui.spacing().item_spacing.x).max(60.0 * ks), row_h), Sense::click());
+                    ui.painter().rect_filled(r, theme::radius(4), if pick.hovered() { theme::button_hover() } else { theme::button() });
+                    let icon = Rect::from_center_size(pos2(r.left() + 15.0 * ks, r.center().y), Vec2::splat(18.0 * ks));
+                    let (label, color) = if self.find.query.is_empty() {
+                        ("Block or mob\u{2026}".to_string(), theme::text_muted())
+                    } else {
+                        let id = self.find.query.as_str();
+                        crate::icons::item_icon(ui.painter(), icon, id, Color32::WHITE);
+                        (crate::item_picker::display_name(id.strip_suffix("_spawn_egg").unwrap_or(id)), theme::text())
+                    };
+                    let font = theme::regular(13.5 * ks);
+                    let label = crate::widgets::elide(ui, &label, &font, r.width() - 32.0 * ks);
+                    ui.painter().text(pos2(r.left() + 30.0 * ks, r.center().y), Align2::LEFT_CENTER, label, font, color);
+                    let pick = pick.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Pick a block or a mob to find");
+                    let current = match self.find.query.strip_suffix("_spawn_egg") {
+                        Some(mob) => format!("mob:{mob}"),
+                        None => self.find.query.clone(),
+                    };
+                    crate::ctx_menu::dropdown(ui, &pick, |ui, _| {
+                        picked = crate::item_picker::show_placeable(ui, &current);
+                    });
+                    // (The panel stays open while its list is.)
+                    self.find.typing = crate::ctx_menu::is_open_for(ui.ctx(), &pick);
+                    if running {
+                        if ui.add_sized([find_w, row_h], egui::Button::new("Stop")).clicked() {
+                            self.find.stop.store(true, Ordering::Relaxed);
+                        }
+                    } else if ui.add_enabled(!self.find.query.trim().is_empty(), egui::Button::new("Find").min_size(vec2(find_w, row_h))).clicked() {
+                        start = true;
+                    }
                 });
-                // (The panel stays open while its list is.)
-                self.find.typing = crate::ctx_menu::is_open_for(ui.ctx(), &pick);
-                if let Some(id) = picked {
-                    self.find.query = id;
+                if let Some(key) = picked {
+                    // A mob's pick is marked; it is found by its spawn egg.
+                    self.find.query = match key.strip_prefix("mob:") {
+                        Some(mob) => format!("{mob}_spawn_egg"),
+                        None => key,
+                    };
                     start = true;
                 }
                 ui.horizontal(|ui| {
-                    ui.label("Within");
+                    ui.label(egui::RichText::new("Within").color(theme::text_muted()));
                     ui.add(egui::DragValue::new(&mut self.find.radius).range(16.0..=512.0).speed(2.0).suffix(" blocks"))
                         .on_hover_text("How far from the camera to look (16 to 512 blocks)");
-                });
-                ui.horizontal(|ui| {
                     if running {
                         let total = self.find.total.load(Ordering::Relaxed).max(1);
                         let done = self.find.done.load(Ordering::Relaxed);
-                        if ui.button("Stop").clicked() {
-                            self.find.stop.store(true, Ordering::Relaxed);
-                        }
                         ui.add(egui::ProgressBar::new(done as f32 / total as f32).desired_width(ui.available_width()).text(format!("{done} of {total} chunks")));
                     } else {
-                        let can = !self.find.query.trim().is_empty();
-                        if ui.add_enabled(can, egui::Button::new("\u{1F50D} Find")).clicked() {
-                            start = true;
-                        }
                         if let Some(note) = &self.find.note {
                             ui.label(egui::RichText::new(note).color(theme::text_dim()));
                         }
@@ -978,8 +1077,7 @@ impl MapView {
                             self.find.note = None;
                         }
                     }
-                });
-                if !self.find.results.is_empty() {
+                });                if !self.find.results.is_empty() {
                     egui::ScrollArea::vertical().max_height(220.0 * ks).auto_shrink([false, true]).show(ui, |ui| {
                         for f in &self.find.results {
                             let mut text = egui::text::LayoutJob::default();
@@ -1127,9 +1225,20 @@ impl MapView {
             _ => None,
         };
         let brush = match (&self.brush, self.brush_at, paste.is_none()) {
-            (Some(b), Some(at), true) => Some((b.clone(), at)),
+            (Some(b), Some(at), true) if b.biome.is_none() => Some((b.clone(), at)),
             _ => None,
         };
+        // A block being moved: the block itself, where it would go (the real one stays until it is
+        // put down).
+        let single = match self.moving.as_ref() {
+            Some(MoveMode { what: MoveWhat::Block(from), at: Some(at), .. }) => self.block_state_at(*from).map(|s| (*at, s)),
+            _ => None,
+        }
+        // Or the block about to be placed.
+        .or_else(|| match self.place.as_ref() {
+            Some(m) if m.kind() == PlaceKind::Block && m.at.is_some() => m.at.map(|at| (at, crate::edit::states::default_state(m.id()))),
+            _ => None,
+        });
         let key = if self.camera.is_none() {
             None
         } else if let Some((at, place, c)) = &paste {
@@ -1138,7 +1247,11 @@ impl MapView {
             Some(h.finish())
         } else if let Some((b, at)) = &brush {
             let mut h = std::collections::hash_map::DefaultHasher::new();
-            (1u8, at, b.radius, b.sphere, b.erase, self.block.to_string()).hash(&mut h);
+            (1u8, at, b.radius, b.sphere, self.block_palette.iter().map(|s| s.to_string()).collect::<Vec<_>>(), b.only).hash(&mut h);
+            Some(h.finish())
+        } else if let Some((at, s)) = &single {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            (2u8, at, s.to_string()).hash(&mut h);
             Some(h.finish())
         } else {
             None
@@ -1149,17 +1262,60 @@ impl MapView {
         let Some(g) = &mut self.gpu else { return };
         let chunks = match (key, paste, brush) {
             (None, ..) => Vec::new(),
+            (Some(_), None, None) => match &single {
+                Some((at, s)) => {
+                    let clip = crate::edit::tools::Clipboard { size: [1, 1, 1], palette: vec![mctk_java::BlockState::air(), s.clone()], blocks: vec![1], ..Default::default() };
+                    crate::gpu_world::ghost_chunks(&clip, *at, Default::default())
+                }
+                None => Vec::new(),
+            },
             (Some(_), Some((at, place, c)), _) => crate::gpu_world::ghost_chunks(c, at, place),
             (Some(_), None, Some((b, at))) => {
-                let state = if b.erase { mctk_java::BlockState::new("minecraft:red_stained_glass") } else { self.block.clone() };
-                let shape = crate::edit::tools::brush_shape(b.radius, b.sphere, &state);
+                let palette = if self.block_palette.is_empty() { vec![self.block.clone()] } else { self.block_palette.clone() };
+                let shape = crate::edit::tools::brush_shape(b.radius, b.sphere, &palette, b.only == crate::edit::tools::BrushOnly::TerrainBelow);
                 let r = b.radius.max(0);
                 crate::gpu_world::ghost_chunks(&shape, [at[0] - r, at[1] - r, at[2] - r], Default::default())
             }
-            _ => Vec::new(),
         };
         g.set_ghost(chunks);
         self.ghost_sent = key;
+    }
+
+    /// The block the 3D camera is in, if the view is in 3D.
+    pub fn eye_block(&self) -> Option<[i32; 3]> {
+        let (eye, ..) = self.camera.as_ref()?.basis();
+        Some([eye[0].floor() as i32, eye[1].floor() as i32, eye[2].floor() as i32])
+    }
+
+    /// The height of the ground in each column of a chunk on the flat map (row by row), if the map has drawn it.
+    pub fn chunk_surface(&self, cx: i32, cz: i32) -> Option<Vec<i32>> {
+        let (img, _) = self.image.as_ref()?;
+        if cx < img.min_x || cz < img.min_z {
+            return None;
+        }
+        let (gx, gz) = ((cx - img.min_x) as usize * 16, (cz - img.min_z) as usize * 16);
+        if gx + 16 > img.width || gz + 16 > img.height {
+            return None;
+        }
+        Some((0..256).map(|i| i32::from(img.ground[(gz + i / 16) * img.width + gx + i % 16])).collect())
+    }
+
+    /// Puts the biomes now in a chunk (a name for each column, row by row) into the flat map, so its Biomes view shows them.
+    pub fn put_chunk_biomes(&mut self, cx: i32, cz: i32, names: &[Option<String>]) {
+        let Some((img, _)) = self.image.as_mut() else { return };
+        if cx < img.min_x || cz < img.min_z {
+            return;
+        }
+        let (gx, gz) = ((cx - img.min_x) as usize * 16, (cz - img.min_z) as usize * 16);
+        if gx + 16 > img.width || gz + 16 > img.height {
+            return;
+        }
+        for (i, n) in names.iter().enumerate().take(256) {
+            if let Some(n) = n {
+                img.biome[(gz + i / 16) * img.width + gx + i % 16] = crate::world::map_biome(n);
+            }
+        }
+        self.atlas_tiles.clear();
     }
 
     /// After the editing tools (or undo) changed chunks in memory: the 3D view draws them again
@@ -1388,9 +1544,9 @@ impl MapView {
                     // On the GPU: the sky, then the chunks around the camera as real blocks.
                     Some(w) => {
                         if cam.pitch < 80f32.to_radians() {
-                            crate::street_view::sky(&clip, &cam, daylight, ticks, &self.dimension, secs);
+                            crate::street_view::sky(&clip, &cam, daylight, ticks, &self.dimension, secs, self.sky_biome.as_deref());
                             // (The clouds drift.)
-                            if self.dimension == DIMS[0] {
+                            if self.dimension == DIMS[0] || self.sky_biome.is_some() {
                                 ctx.request_repaint_after(std::time::Duration::from_millis(100));
                             }
                         }
@@ -1735,11 +1891,14 @@ impl MapView {
         }
         // Alt+drag with the brush paints instead of moving the map.
         let painting = self.brush.is_some() && self.selectable && ui.input(|i| i.modifiers.alt);
+        // A drag that begins on the turn handle turns the selected mob or block instead.
+        let turning = street_now && self.turn_input(&response, primary_pans);
         let pans = !turns
             && !turns_flat
             && !boxing
             && !grabbing
             && !painting
+            && !turning
             && ((primary_pans && response.dragged_by(egui::PointerButton::Primary))
                 || response.dragged_by(egui::PointerButton::Middle)
                 || (!street_now && response.dragged_by(egui::PointerButton::Secondary)));
@@ -1802,7 +1961,18 @@ impl MapView {
             ctx.request_repaint();
         }
         let street = self.tilt > 0.0;
+        let tool_active = self.paste.is_some() || self.brush.is_some() || self.cloud.is_some() || self.place.is_some() || self.box_mode || self.moving.is_some();
+        // What is under the pointer only changes when the pointer, the camera, the world or what
+        // is asked changes: while all stay as they were, the last answer stands.
+        let pointer = response.hover_pos().filter(|p| rect.contains(*p));
+        let pick_key = match (self.camera, self.gpu.as_ref()) {
+            (Some(cam), Some(w)) => Some((cam, pointer.map(|p| (p.x.to_bits(), p.y.to_bits())), self.pick_liquids, w.rev, turns, tool_active)),
+            _ => None,
+        };
+        let pick_again = pick_key.is_none() || pick_key != self.pick_key;
+        self.pick_key = pick_key;
         // The block under the pointer in the 3D views, found along the pointer's ray.
+        if pick_again {
         self.picked = match (self.camera, &self.image, response.hover_pos().filter(|p| rect.contains(*p))) {
             // The block under the pointer: among the real blocks on the GPU, else on the land.
             (Some(cam), Some((img, _)), Some(p)) => match self.gpu.as_mut() {
@@ -1811,14 +1981,24 @@ impl MapView {
             },
             _ => None,
         };
+        // Turning the camera (the pointer is hidden): nothing is under it, so no block, chunk or
+        // mob is lit and no details show until the drag ends.
+        if turns {
+            self.picked = None;
+        }
+        }
         // A mob (or armor stand, item...) under the pointer, in front of the block it is on.
+        // (Not while a tool has the clicks, paint, cloud, paste, box, move: mobs are not for
+        // selecting then; picking a rider is the one tool that needs them.)
+        if pick_again {
         self.hover_entity = match (self.camera, self.gpu.as_ref(), response.hover_pos().filter(|p| rect.contains(*p))) {
-            (Some(cam), Some(w), Some(p)) => {
+            (Some(cam), Some(w), Some(p)) if !tool_active && !turns => {
                 let before = self.picked.map_or(f32::INFINITY, |h| crate::gpu_world::hit_distance(&cam, p, &h));
                 w.pick_entity(&cam, p, before)
             }
             _ => None,
         };
+        }
         let mut frame = MapFrame {
             rect,
             center: self.center,
@@ -1828,7 +2008,9 @@ impl MapView {
             street,
             yaw: if street { self.yaw } else { self.map_yaw() },
         };
-        frame.hover = if street {
+        frame.hover = if turns {
+            None
+        } else if street {
             // Over a block, that block; over empty ground (the void, ungenerated chunks) the
             // point where the pointer's ray meets the height looked at, so the chunk there is
             // still highlighted (none above the horizon).
@@ -1854,7 +2036,15 @@ impl MapView {
         } else {
             frame.response.hover_pos().filter(|p| rect.contains(*p)).map(|p| frame.to_block(p))
         };
-        if self.paste.is_some() && primary_pans && self.selectable {
+        if self.moving.is_some() && primary_pans && self.selectable {
+            self.move_input(ui, &frame);
+        } else if self.pick_rider.is_some() && primary_pans && self.selectable {
+            self.rider_input(ui, &frame);
+        } else if self.cloud.is_some() && primary_pans && self.selectable {
+            self.cloud_input(ui, &frame);
+        } else if self.place.is_some() && primary_pans && self.selectable {
+            self.place_input(ui, &frame);
+        } else if self.paste.is_some() && primary_pans && self.selectable {
             self.paste_input(ui, &frame);
         } else if self.brush.is_some() && primary_pans && self.selectable {
             // The brush: a click paints around the block under the pointer; Esc stops.
@@ -1901,7 +2091,7 @@ impl MapView {
                 self.sel_box = None;
                 self.sync_box_chunks();
             }
-            if primary_pans && self.selectable && frame.response.clicked() {
+            if primary_pans && self.selectable && frame.response.clicked() && !self.pointer_on_turn_handle(&frame.response) {
                 let shift = ui.input(|i| i.modifiers.shift);
                 if let Some(e) = self.hover_entity.clone().filter(|_| !shift) {
                     let at = e.get("Pos").and_then(mctk_nbt::Tag::as_list).map(|l| (0..3).map(|i| l.get(i).and_then(mctk_nbt::Tag::as_f64).unwrap_or(0.0).floor() as i32).collect::<Vec<_>>());
@@ -1919,9 +2109,28 @@ impl MapView {
                 }
             }
         } else {
-            // The flat map picks no chunks by clicking: there the Prune shapes pick them, and
-            // zoomed in the block or box selected says which chunks Open Chunks opens.
+            // The flat map: a click picks the chunk it is on (Shift adds or takes away one; Esc
+            // clears), for Open Chunks. (While a Prune shape is being drawn the clicks are the
+            // shape's.) Zoomed in, the block or box selected says which chunks Open Chunks opens.
             self.marquee = None;
+            if self.selectable && ui.input(|i| i.key_pressed(egui::Key::Escape)) && !ui.ctx().wants_keyboard_input() {
+                self.selected.clear();
+            }
+            if primary_pans && self.selectable && frame.response.clicked() {
+                if let Some(h) = frame.hover {
+                    let chunk = ((h.x / 16.0).floor() as i32, (h.y / 16.0).floor() as i32);
+                    if ui.input(|i| i.modifiers.shift) {
+                        match self.selected.iter().position(|c| *c == chunk) {
+                            Some(i) => {
+                                self.selected.remove(i);
+                            }
+                            None => self.selected.push(chunk),
+                        }
+                    } else {
+                        self.selected = vec![chunk];
+                    }
+                }
+            }
         }
         frame
     }
@@ -1948,6 +2157,493 @@ impl MapView {
         Some([bx, self.surface_y(bx, bz)?, bz])
     }
 
+    /// Starts moving the selected mob or block (the right-click menu's Move).
+    pub fn start_move(&mut self, what: MoveWhat) {
+        self.paste = None;
+        self.brush = None;
+        self.cloud = None;
+        self.place = None;
+        self.box_mode = false;
+        self.turn_drag = None;
+        self.moving = Some(MoveMode::new(what));
+    }
+
+    /// Moving: the mob or block follows the block under the pointer (standing on top of it, so
+    /// always on the block grid); the arrow keys and Page Up/Down nudge it, a click puts it down
+    /// and Esc stops.
+    fn move_input(&mut self, ui: &Ui, frame: &MapFrame) {
+        let typing = ui.ctx().wants_keyboard_input();
+        let keys = |k: egui::Key| !typing && ui.input(|i| i.key_pressed(k));
+        if keys(egui::Key::Escape) {
+            self.moving = None;
+            return;
+        }
+        let hover = self.hover_block(frame);
+        let mut put_down = None;
+        {
+            let Some(m) = &mut self.moving else { return };
+            for (k, d) in [(egui::Key::ArrowLeft, [-1, 0, 0]), (egui::Key::ArrowRight, [1, 0, 0]), (egui::Key::ArrowUp, [0, 0, -1]), (egui::Key::ArrowDown, [0, 0, 1]), (egui::Key::PageUp, [0, 1, 0]), (egui::Key::PageDown, [0, -1, 0])] {
+                if keys(k) {
+                    for (n, dv) in m.nudge.iter_mut().zip(d) {
+                        *n += dv;
+                    }
+                }
+            }
+            if let Some(h) = hover {
+                m.at = Some([h[0] + m.nudge[0], h[1] + 1 + m.nudge[1], h[2] + m.nudge[2]]);
+            }
+            if frame.response.clicked() {
+                if let Some(at) = m.at {
+                    put_down = match &m.what {
+                        MoveWhat::Entity(e) => tag_pos(e).map(|from| MoveOrder::Entity { from, to: [at[0] as f64 + 0.5, at[1] as f64, at[2] as f64 + 0.5] }),
+                        MoveWhat::Block(from) => Some(MoveOrder::Block { from: *from, to: at }),
+                    };
+                }
+            }
+        }
+        if put_down.is_some() {
+            self.move_request = put_down;
+            self.moving = None;
+        }
+    }
+
+    /// Starts picking the mob that will ride `mount` (the right-click menu's rider pick).
+    pub fn start_pick_rider(&mut self, mount: Arc<mctk_nbt::Tag>) {
+        self.paste = None;
+        self.brush = None;
+        self.cloud = None;
+        self.place = None;
+        self.box_mode = false;
+        self.moving = None;
+        self.turn_drag = None;
+        self.pick_rider = Some(mount);
+    }
+
+    /// Picking a rider: the mobs light up under the pointer (as when selecting); a click on one
+    /// (not the mount itself) puts it on the mount; Esc stops.
+    fn rider_input(&mut self, ui: &Ui, frame: &MapFrame) {
+        let typing = ui.ctx().wants_keyboard_input();
+        if !typing && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.pick_rider = None;
+            return;
+        }
+        let Some(mount) = self.pick_rider.clone() else { return };
+        if !frame.response.clicked() {
+            return;
+        }
+        // The mount may be a rider itself: it is reached from the mob at the bottom of its stack.
+        let root = mount.get("MctkRoot").and_then(mctk_nbt::Tag::as_list).map(|l| l.iter().filter_map(mctk_nbt::Tag::as_f64).collect::<Vec<_>>()).filter(|v| v.len() == 3).map(|v| [v[0], v[1], v[2]]);
+        let seats: Vec<usize> = match mount.get("MctkPath") {
+            Some(mctk_nbt::Tag::IntArray(p)) => p.iter().map(|v| *v as usize).collect(),
+            _ => Vec::new(),
+        };
+        let (Some(from), Some(rider)) = (tag_pos(&mount), self.hover_entity.as_ref().and_then(|e| tag_pos(e))) else { return };
+        // (Not itself: nor a mob already riding something.)
+        let rides = self.hover_entity.as_ref().is_some_and(|e| crate::gpu_world::is_rider(e));
+        if from != rider && !rides {
+            self.ride_request = Some((root.unwrap_or(from), seats, rider));
+            self.pick_rider = None;
+        }
+    }
+
+    /// The selected mob was turned to face `yaw` (from the menu): what is kept of it says so.
+    pub fn selected_turned(&mut self, yaw: f32) {
+        if let Some(e) = &self.sel_entity {
+            self.sel_entity = Some(Arc::new(with_yaw(e, yaw)));
+        }
+    }
+
+    /// After the page moved what was asked: the selection follows it.
+    pub fn moved(&mut self, order: &MoveOrder) {
+        match order {
+            MoveOrder::Entity { to, .. } => {
+                if let Some(e) = &self.sel_entity {
+                    self.sel_entity = Some(Arc::new(with_pos(e, *to)));
+                }
+            }
+            MoveOrder::Block { to, .. } => {
+                self.sel_box = Some((*to, *to));
+                self.sync_box_chunks();
+            }
+        }
+    }
+
+    /// Where the moved thing would stand: its outline (a mob's model, a block's cell) in cyan.
+    fn draw_move_preview(&self, p: &egui::Painter, cam: &Camera, bounds: Rect) {
+        let Some(at) = self.moving.as_ref().and_then(|m| m.at) else { return };
+        // (A cloud is drawn with its particles and edge, where all clouds are.)
+        if matches!(self.moving.as_ref().map(|m| &m.what), Some(MoveWhat::Entity(e)) if crate::cloud::is_cloud(e)) {
+            return;
+        }
+        let cyan = Color32::from_rgb(80, 220, 255);
+        let (l, h) = ([at[0] as f32, at[1] as f32, at[2] as f32], [at[0] as f32 + 1.0, at[1] as f32 + 1.0, at[2] as f32 + 1.0]);
+        // A block is outlined where it will go (with its ghost); a mob is only its own outline.
+        if matches!(self.moving.as_ref().map(|m| &m.what), Some(MoveWhat::Block(_))) {
+            Street::selection(p, cam, l, h, cyan);
+        }
+        if let Some(MoveWhat::Entity(e)) = self.moving.as_ref().map(|m| &m.what) {
+            let moved = with_pos(e, [at[0] as f64 + 0.5, at[1] as f64, at[2] as f64 + 0.5]);
+            entity_outline(p, cam, &moved, bounds, cyan);
+        }
+    }
+
+    /// The swirls round mobs that have status effects, as the game shows them: a few of the potion
+    /// effect's particles about each, turning, drifting up and shrinking, in the mix of the
+    /// effects' colors. Not through walls. Gives whether any is drawn (the view keeps redrawing).
+    fn draw_mob_effects(&mut self, p: &egui::Painter, cam: &Camera, bounds: Rect, time: f64) -> bool {
+        let eye = cam.eye();
+        let Some(w) = self.gpu.as_mut() else { return false };
+        let mut mobs = w.effect_mobs_near(cam.target, 48.0);
+        mobs.sort_by(|a, b| {
+            let d = |m: &crate::gpu_world::MobEffectsView| (0..3).map(|k| (m.pos[k] - eye[k]).powi(2)).sum::<f32>();
+            d(a).total_cmp(&d(b))
+        });
+        mobs.truncate(24);
+        let frames = effect_frames(p.ctx());
+        let focal = cam.focal();
+        let tau = std::f32::consts::TAU;
+        for (n, m) in mobs.iter().enumerate() {
+            let mid = [m.pos[0], m.pos[1] + m.height * 0.5, m.pos[2]];
+            if !w.clear_between(eye, mid, [mid[0].floor() as i32, mid[1].floor() as i32, mid[2].floor() as i32]) {
+                continue;
+            }
+            for i in 0..8 {
+                let k = n * 8 + i;
+                let life = 1.0 + scatter(k, 3) * 0.8;
+                let age = ((time as f32 / life) + scatter(k, 4)).rem_euclid(1.0);
+                let around = m.radius.max(0.25) * (0.9 + 0.4 * scatter(k, 2));
+                let a = scatter(k, 1) * tau + age * 1.5;
+                let at = [m.pos[0] + a.cos() * around, m.pos[1] + scatter(k, 7) * m.height.max(0.5) * 0.9 + age * 0.4, m.pos[2] + a.sin() * around];
+                let Some((s, depth)) = cam.project(at) else { continue };
+                if bounds.contains(s) {
+                    stamp_particle(p, &frames, s, depth, focal, age, m.color, (1.0 - age * 0.6) * 0.85);
+                }
+            }
+        }
+        !mobs.is_empty()
+    }
+
+    /// Whether the turn handle may be shown and used (not while a tool has the clicks).
+    fn turn_free(&self, primary_pans: bool) -> bool {
+        self.paste.is_none() && self.brush.is_none() && self.cloud.is_none() && self.place.is_none() && !self.box_mode && self.moving.is_none() && self.pick_rider.is_none() && self.selectable && primary_pans
+    }
+
+    /// Placing a block, mob or item: the block under the pointer is outlined and the thing stands
+    /// on top of it; a click puts one there (as often as wanted); Esc stops.
+    fn place_input(&mut self, ui: &Ui, frame: &MapFrame) {
+        let typing = ui.ctx().wants_keyboard_input();
+        if !typing && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.place = None;
+            return;
+        }
+        let hover = self.hover_block(frame);
+        let eye = self.camera.map(|c| c.eye());
+        let Some(m) = &mut self.place else { return };
+        m.facing = None;
+        if let Some(h) = hover {
+            m.at = Some([h[0], h[1] + 1, h[2]]);
+            // An item frame hangs on the side of the block that faces the camera.
+            if m.id().ends_with("item_frame") {
+                if let Some(eye) = eye {
+                    let (dx, dz) = (eye[0] - (h[0] as f32 + 0.5), eye[2] - (h[2] as f32 + 0.5));
+                    let (step, face) = if dx.abs() > dz.abs() {
+                        if dx > 0.0 { ([1, 0], 5u8) } else { ([-1, 0], 4) }
+                    } else if dz > 0.0 {
+                        ([0, 1], 3)
+                    } else {
+                        ([0, -1], 2)
+                    };
+                    m.at = Some([h[0] + step[0], h[1], h[2] + step[1]]);
+                    m.facing = Some(face);
+                }
+            }
+        }
+        if frame.response.clicked() {
+            if let Some(at) = m.at {
+                self.place_request = Some((m.kind(), at));
+            }
+        }
+    }
+
+    /// What would be placed: the cell it goes in outlined, and for a mob or an item its outline
+    /// there (a block is a ghost, see `sync_ghost`).
+    fn draw_place_preview(&self, p: &egui::Painter, cam: &Camera, bounds: Rect) {
+        let Some((m, at)) = self.place.as_ref().and_then(|m| Some((m, m.at?))) else { return };
+        let cyan = Color32::from_rgb(80, 220, 255);
+        Street::selection(p, cam, [at[0] as f32, at[1] as f32, at[2] as f32], [at[0] as f32 + 1.0, at[1] as f32 + 1.0, at[2] as f32 + 1.0], cyan);
+        let id = match m.kind() {
+            PlaceKind::Block => return,
+            PlaceKind::Mob => m.id().to_string(),
+            PlaceKind::Entity => m.id().to_string(),
+        };
+        let mut c = mctk_nbt::Compound::new();
+        c.insert("id".into(), mctk_nbt::Tag::String(id));
+        let mut tag = mctk_nbt::Tag::Compound(c);
+        tag = with_pos(&tag, [at[0] as f64 + 0.5, at[1] as f64, at[2] as f64 + 0.5]);
+        entity_outline(p, cam, &tag, bounds, cyan);
+    }
+
+    /// Placing clouds: the block under the pointer is outlined and the cloud stands on top of it;
+    /// a click places one (as often as wanted) and Esc stops.
+    fn cloud_input(&mut self, ui: &Ui, frame: &MapFrame) {
+        let typing = ui.ctx().wants_keyboard_input();
+        if !typing && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.cloud = None;
+            return;
+        }
+        let hover = self.hover_block(frame);
+        let Some(m) = &mut self.cloud else { return };
+        if let Some(h) = hover {
+            m.at = Some([h[0], h[1] + 1, h[2]]);
+        }
+        if frame.response.clicked() {
+            if let Some(at) = m.at {
+                self.cloud_request = Some(([at[0] as f64 + 0.5, at[1] as f64, at[2] as f64 + 0.5], m.cloud.clone()));
+            }
+        }
+    }
+
+    /// Every lingering cloud in view, as the game shows them: those in the world (always their
+    /// block outlined and their particles over them, the selected one's edge too), and, as
+    /// holograms, the one being placed and where the one being moved would stand (the real one
+    /// stays where it is until it is put down). None is seen through a wall. Gives whether any
+    /// is animated (the view is kept redrawing).
+    fn draw_clouds(&mut self, p: &egui::Painter, cam: &Camera, bounds: Rect, time: f64) -> bool {
+        let eye = cam.eye();
+        let cyan = Color32::from_rgb(80, 220, 255);
+        let gold = Color32::from_rgb(255, 220, 60);
+        let same = |a: [f64; 3], b: [f32; 3]| (0..3).all(|k| (a[k] as f32 - b[k]).abs() < 0.01);
+        let selected = self.sel_entity.as_ref().filter(|e| crate::cloud::is_cloud(e)).and_then(|e| tag_pos(e));
+        let mut list: Vec<CloudDraw> = Vec::new();
+        if let Some(w) = &self.gpu {
+            for c in w.clouds_near(cam.target, 72.0) {
+                let ring = selected.filter(|s| same(*s, c.pos)).map(|_| gold);
+                list.push(CloudDraw { pos: c.pos, radius: c.radius, rgb: c.color, visible: c.visible, ring, holo: false });
+            }
+        }
+        // The one being placed: where it would stand, as a hologram.
+        if let Some((m, at)) = self.cloud.as_ref().and_then(|m| Some((m, m.at?))) {
+            let color = m.cloud.color();
+            list.push(CloudDraw { pos: [at[0] as f32 + 0.5, at[1] as f32, at[2] as f32 + 0.5], radius: m.cloud.radius, rgb: color, visible: m.cloud.particles, ring: Some(cyan), holo: true });
+        }
+        // The one being moved: the same, where it would stand.
+        if let (Some(MoveWhat::Entity(e)), Some(at)) = (self.moving.as_ref().map(|m| &m.what), self.moving.as_ref().and_then(|m| m.at)) {
+            if let Some(cl) = crate::cloud::Cloud::from_entity(e) {
+                list.push(CloudDraw { pos: [at[0] as f32 + 0.5, at[1] as f32, at[2] as f32 + 0.5], radius: cl.radius, rgb: cl.color(), visible: cl.particles, ring: Some(cyan), holo: true });
+            }
+        }
+        // The nearest few (each costs a few looks from the camera).
+        list.sort_by(|a, b| {
+            let d = |c: &CloudDraw| (0..3).map(|k| (c.pos[k] - eye[k]).powi(2)).sum::<f32>();
+            d(a).total_cmp(&d(b))
+        });
+        list.truncate(12);
+        let Some(w) = self.gpu.as_mut() else { return false };
+        for c in &list {
+            draw_cloud(p, cam, bounds, time, c, &mut |pt| w.clear_between(eye, pt, [pt[0].floor() as i32, pt[1].floor() as i32, pt[2].floor() as i32]));
+        }
+        !list.is_empty()
+    }
+    /// What the turn handle turns: the selected mob, or the one block selected when it can face
+    /// another way (a `facing` with several sides, or a sign's or banner's 16-step `rotation`).
+    fn turnable(&self) -> Option<Turnable> {
+        if let Some(e) = &self.sel_entity {
+            let pos = tag_pos(e)?;
+            let yaw = e.get("Rotation").and_then(mctk_nbt::Tag::as_list).and_then(|l| l.get(0)).and_then(mctk_nbt::Tag::as_f64).unwrap_or(0.0) as f32;
+            let (r, _) = crate::gpu_world::entity_size(e);
+            return Some(Turnable::Entity { pos, radius: r.max(0.3) + 0.5, yaw });
+        }
+        let (lo, hi) = self.sel_box?;
+        // Several blocks together: turned as one, a quarter turn at a time.
+        if lo != hi {
+            return Some(Turnable::Group { lo, hi });
+        }
+        let id = self.gpu.as_ref()?.block_at(lo[0], lo[1], lo[2])?;
+        let full = world::block_name(id)?;
+        let name = full.split(['#', '@']).next()?.to_string();
+        let props = world::block_props(id).map(|p| p.to_string()).unwrap_or_default();
+        let full = crate::edit::states::full_properties(&name, &props);
+        let prop = |k: &str| full.iter().find(|(pk, _)| pk == k).map(|(_, v)| v.clone());
+        let states = crate::edit::states::properties(&name);
+        let yaw_of = |s: &str| match s {
+            "south" => Some(0.0),
+            "west" => Some(90.0),
+            "north" => Some(180.0),
+            "east" => Some(270.0),
+            _ => None,
+        };
+        if let Some(now) = prop("facing") {
+            let faces: Vec<(String, f32)> = states.iter().find(|(k, _)| k == "facing").map(|(_, v)| v.iter().filter_map(|s| Some((s.clone(), yaw_of(s)?))).collect()).unwrap_or_default();
+            if let (true, Some(yaw)) = (faces.len() >= 2, yaw_of(&now)) {
+                return Some(Turnable::Block { at: lo, key: "facing", faces, yaw });
+            }
+        }
+        if let Some(n) = prop("rotation").and_then(|s| s.parse::<i32>().ok()) {
+            let faces: Vec<(String, f32)> = (0..16).map(|i| (i.to_string(), i as f32 * 22.5)).collect();
+            return Some(Turnable::Block { at: lo, key: "rotation", faces, yaw: n as f32 * 22.5 });
+        }
+        None
+    }
+
+    /// Which thing is selected, so a different selection can end a turn in progress.
+    fn turn_key(&self) -> Option<[i64; 4]> {
+        if let Some(p) = self.sel_entity.as_ref().and_then(|e| tag_pos(e)) {
+            return Some([1, (p[0] * 1000.0) as i64, (p[1] * 1000.0) as i64, (p[2] * 1000.0) as i64]);
+        }
+        let (lo, hi) = self.sel_box?;
+        Some([if lo == hi { 2 } else { 3 }, lo[0] as i64, lo[1] as i64, lo[2] as i64])
+    }
+
+    /// Whether the pointer is on the turn handle (so a click there selects nothing).
+    fn pointer_on_turn_handle(&self, response: &egui::Response) -> bool {
+        matches!((self.turn_handle, response.hover_pos()), (Some(h), Some(p)) if h.distance(p) < 16.0)
+    }
+
+    /// The turn handle: pressed and dragged it turns the selected mob (free, all the way round) or
+    /// block (to each way it can face); the turn is one step to undo. A different selection ends
+    /// it. Gives whether the handle has the drag (the map then stays still).
+    fn turn_input(&mut self, response: &egui::Response, primary_pans: bool) -> bool {
+        let key = self.turn_key();
+        if key != self.turn_for {
+            self.turn_drag = None;
+            self.turn_for = key;
+        }
+        if !self.turn_free(primary_pans) {
+            self.turn_drag = None;
+            return false;
+        }
+        if self.turn_drag.is_none() && response.drag_started_by(egui::PointerButton::Primary) && self.pointer_on_press(response) {
+            if let Some(t) = self.turnable() {
+                let yaw = match &t {
+                    Turnable::Entity { yaw, .. } | Turnable::Block { yaw, .. } => *yaw,
+                    Turnable::Group { .. } => 0.0,
+                };
+                self.turn_drag = Some(TurnDrag { yaw, sent: None, value: None, applied: false });
+            }
+        }
+        let Some(mut drag) = self.turn_drag.take() else { return false };
+        if !response.dragged() {
+            return false;
+        }
+        if let (Some(cam), Some(p), Some(t)) = (self.camera, response.interact_pointer_pos(), self.turnable()) {
+            // Where the pointer's ray meets the level of the thing's feet: the way from it to there.
+            let (cx, cy, cz) = match &t {
+                Turnable::Entity { pos, .. } => (pos[0] as f32, pos[1] as f32 + 0.03, pos[2] as f32),
+                Turnable::Block { at, .. } => (at[0] as f32 + 0.5, at[1] as f32 + 0.03, at[2] as f32 + 0.5),
+                Turnable::Group { lo, hi } => ((lo[0] + hi[0] + 1) as f32 / 2.0, lo[1] as f32 + 0.03, (lo[2] + hi[2] + 1) as f32 / 2.0),
+            };
+            let (eye, dir) = cam.ray(p);
+            let s = (cy - eye[1]) / if dir[1].abs() > 1e-4 { dir[1] } else { f32::NAN };
+            if s.is_finite() && s > 0.0 {
+                let (dx, dz) = (eye[0] + dir[0] * s - cx, eye[2] + dir[2] * s - cz);
+                if dx.hypot(dz) > 0.05 {
+                    let yaw = (-dx).atan2(dz).to_degrees().rem_euclid(360.0);
+                    match t {
+                        Turnable::Entity { pos, .. } => {
+                            drag.yaw = yaw;
+                            let q = (yaw.round() as i32).rem_euclid(360);
+                            if drag.sent != Some(q) {
+                                self.rotate_request = Some(RotateOrder::Entity { at: pos, yaw: q as f32, stroke: drag.sent.is_some() });
+                                if let Some(e) = &self.sel_entity {
+                                    self.sel_entity = Some(Arc::new(with_yaw(e, q as f32)));
+                                }
+                                drag.sent = Some(q);
+                            }
+                        }
+                        Turnable::Group { lo, hi } => {
+                            // Quarter turns from where it began: the handle starts facing south.
+                            let q = ((yaw / 90.0).round() as i32).rem_euclid(4);
+                            drag.yaw = q as f32 * 90.0;
+                            let delta = (q - drag.sent.unwrap_or(0)).rem_euclid(4);
+                            if delta != 0 {
+                                self.rotate_request = Some(RotateOrder::Group { from: (lo, hi), turns: delta as u8, stroke: drag.applied });
+                                // The box it is now (so the next turn is of that), and the same
+                                // selection, so the turn goes on.
+                                self.sel_box = Some(crate::edit::tools::turned_box(lo, hi, delta as u8));
+                                self.turn_for = self.turn_key();
+                                self.sync_box_chunks();
+                                drag.applied = true;
+                            }
+                            drag.sent = Some(q);
+                        }
+                        Turnable::Block { at, key, faces, yaw: now } => {
+                            if let Some((value, face_yaw)) = faces.iter().min_by(|a, b| yaw_gap(a.1, yaw).total_cmp(&yaw_gap(b.1, yaw))) {
+                                drag.yaw = *face_yaw;
+                                let current = faces.iter().find(|f| yaw_gap(f.1, now) < 0.01).map(|f| f.0.clone());
+                                if drag.value.clone().or(current).as_deref() != Some(value.as_str()) {
+                                    self.rotate_request = Some(RotateOrder::Block { at, key, value: value.clone() });
+                                }
+                                drag.value = Some(value.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        self.turn_drag = Some(drag);
+        true
+    }
+
+    /// Whether the press that began this drag was on the turn handle.
+    fn pointer_on_press(&self, response: &egui::Response) -> bool {
+        matches!((self.turn_handle, response.interact_pointer_pos()), (Some(h), Some(p)) if h.distance(p) < 16.0)
+    }
+
+    /// The turn handle: a ring on the ground under the selected mob or block with a handle on it
+    /// (a turn symbol) at the way it faces. Dragging the handle turns it (see `turn_input`).
+    fn draw_turn_handle(&mut self, p: &egui::Painter, cam: &Camera, hover: Option<Pos2>) {
+        self.turn_handle = None;
+        if !self.turn_free(true) {
+            return;
+        }
+        let Some(t) = self.turnable() else { return };
+        let (c, r, now) = match &t {
+            Turnable::Entity { pos, radius, yaw } => ([pos[0] as f32, pos[1] as f32 + 0.03, pos[2] as f32], *radius, *yaw),
+            Turnable::Block { at, yaw, .. } => ([at[0] as f32 + 0.5, at[1] as f32 + 0.03, at[2] as f32 + 0.5], 1.1, *yaw),
+            Turnable::Group { lo, hi } => {
+                let (w, d) = ((hi[0] - lo[0] + 1) as f32, (hi[2] - lo[2] + 1) as f32);
+                ([(lo[0] + hi[0] + 1) as f32 / 2.0, lo[1] as f32 + 0.03, (lo[2] + hi[2] + 1) as f32 / 2.0], w.max(d) / 2.0 + 1.2, 0.0)
+            }
+        };
+        let yaw = self.turn_drag.as_ref().map_or(now, |d| d.yaw);
+        // The ring, in runs where it can be seen.
+        let mut run: Vec<Pos2> = Vec::new();
+        let mut runs: Vec<Vec<Pos2>> = Vec::new();
+        for k in 0..=64 {
+            let a = k as f32 / 64.0 * std::f32::consts::TAU;
+            match cam.project([c[0] + r * a.cos(), c[1], c[2] + r * a.sin()]) {
+                Some((s, _)) => run.push(s),
+                None => runs.push(std::mem::take(&mut run)),
+            }
+        }
+        runs.push(run);
+        for run in runs.into_iter().filter(|r| r.len() > 1) {
+            p.add(egui::Shape::line(run.clone(), Stroke::new(3.6_f32, Color32::from_black_alpha(110))));
+            p.add(egui::Shape::line(run, Stroke::new(1.6_f32, Color32::from_white_alpha(190))));
+        }
+        let (dx, dz) = yaw_dir(yaw);
+        let Some((s, _)) = cam.project([c[0] + r * dx, c[1], c[2] + r * dz]) else { return };
+        self.turn_handle = Some(s);
+        let dragging = self.turn_drag.is_some();
+        let hot = dragging || hover.is_some_and(|h| h.distance(s) < 16.0);
+        if hot {
+            p.ctx().set_cursor_icon(if dragging { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
+        }
+        p.circle_filled(s, 12.0, if hot { theme::EDITOR_ACCENT } else { Color32::from_black_alpha(200) });
+        p.circle_stroke(s, 12.0, Stroke::new(1.5_f32, Color32::WHITE));
+        icons::paint(p, Rect::from_center_size(s, Vec2::splat(16.0)), crate::icons::Icon::Refresh, Color32::WHITE);
+        // Which way it faces: a mob's in degrees (0 south, 90 west, 180 north, 270 east), a
+        // block's as the side it faces.
+        let text = match &t {
+            Turnable::Entity { .. } | Turnable::Group { .. } => format!("{}\u{b0}", (yaw.round() as i32).rem_euclid(360)),
+            Turnable::Block { faces, .. } => faces.iter().min_by(|a, b| yaw_gap(a.1, yaw).total_cmp(&yaw_gap(b.1, yaw))).map(|f| f.0.clone()).unwrap_or_default(),
+        };
+        let galley = p.layout_no_wrap(text, theme::regular(12.5), Color32::WHITE);
+        let label = Rect::from_min_size(s + vec2(18.0, -galley.size().y / 2.0 - 2.0), galley.size() + vec2(10.0, 4.0));
+        p.rect_filled(label, theme::radius(3), Color32::from_black_alpha(190));
+        p.galley(label.min + vec2(5.0, 2.0), galley, Color32::WHITE);
+    }
+
     /// Placing the clipboard: the box follows the block under the pointer (sitting on top of
     /// it); R turns it, M mirrors it, the arrow keys and Page Up/Down nudge it, a click places
     /// it (as often as wanted) and Esc stops.
@@ -1972,8 +2668,8 @@ impl MapView {
         }
         for (k, d) in [(egui::Key::ArrowLeft, [-1, 0, 0]), (egui::Key::ArrowRight, [1, 0, 0]), (egui::Key::ArrowUp, [0, 0, -1]), (egui::Key::ArrowDown, [0, 0, 1]), (egui::Key::PageUp, [0, 1, 0]), (egui::Key::PageDown, [0, -1, 0])] {
             if keys(k) {
-                for i in 0..3 {
-                    p.nudge[i] += d[i];
+                for (n, dv) in p.nudge.iter_mut().zip(d) {
+                    *n += dv;
                 }
             }
         }
@@ -2441,13 +3137,56 @@ impl MapView {
                 w.show_barriers = self.show_barriers;
                 if self.show_barriers {
                     let f = cam.focal();
-                    for b in w.barriers_near(cam.eye(), cam.target, 48.0, 400) {
+                    let eye = cam.eye();
+                    let sub = |a: [f32; 3], b: [f32; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+                    let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+                    let fwd = {
+                        let d = sub(cam.target, eye);
+                        let n = dot(d, d).sqrt().max(1e-6);
+                        [d[0] / n, d[1] / n, d[2] / n]
+                    };
+                    for b in w.barriers_near(eye, cam.target, 48.0, 400) {
                         let c = [b[0] as f32 + 0.5, b[1] as f32 + 0.5, b[2] as f32 + 0.5];
                         if let Some((s, depth)) = cam.project(c) {
                             let size = (0.8 * f / depth.max(0.1)).clamp(4.0, 160.0);
                             let r = Rect::from_center_size(s, Vec2::splat(size));
-                            if r.intersects(frame.rect) {
+                            if !r.intersects(frame.rect) {
+                                continue;
+                            }
+                            // Where in the world a point of the icon's face is (the face is flat to
+                            // the camera, through the block's middle).
+                            let at = |u: f32, v: f32| {
+                                let q = pos2(r.left() + r.width() * u, r.top() + r.height() * v);
+                                let (o, d) = cam.ray(q);
+                                let t = dot(sub(c, o), fwd) / dot(d, fwd).max(1e-3);
+                                [o[0] + d[0] * t, o[1] + d[1] * t, o[2] + d[2] * t]
+                            };
+                            // Whole when its corners and middle are all seen (the usual case);
+                            // else only the parts of it nothing solid is in front of, as a particle
+                            // behind a wall's edge is.
+                            let whole = [(0.05, 0.05), (0.95, 0.05), (0.05, 0.95), (0.95, 0.95), (0.5, 0.5)]
+                                .iter()
+                                .all(|&(u, v)| w.clear_between(eye, at(u, v), b));
+                            if whole {
                                 icons::item_icon(&inside, r, "minecraft:barrier", Color32::WHITE);
+                                continue;
+                            }
+                            const N: usize = 4;
+                            let cell = r.width() / N as f32;
+                            for j in 0..N {
+                                let mut run: Option<usize> = None;
+                                for i in 0..=N {
+                                    let seen = i < N && w.clear_between(eye, at((i as f32 + 0.5) / N as f32, (j as f32 + 0.5) / N as f32), b);
+                                    match (seen, run) {
+                                        (true, None) => run = Some(i),
+                                        (false, Some(from)) => {
+                                            let strip = Rect::from_min_size(pos2(r.left() + from as f32 * cell, r.top() + j as f32 * cell), vec2((i - from) as f32 * cell, cell));
+                                            icons::item_icon(&inside.with_clip_rect(strip.intersect(inside.clip_rect())), r, "minecraft:barrier", Color32::WHITE);
+                                            run = None;
+                                        }
+                                        _ => {}
+                                    }
+                                }
                             }
                         }
                     }
@@ -2461,12 +3200,36 @@ impl MapView {
                 if let Some(e) = &self.sel_entity {
                     entity_outline(&inside, &cam, e, frame.rect, Color32::from_rgb(255, 220, 60));
                 }
+                // Moving: where it would stand. Else the turn handle under what is selected.
+                self.draw_move_preview(&inside, &cam, frame.rect);
+                self.draw_place_preview(&inside, &cam, frame.rect);
+                self.draw_turn_handle(&inside, &cam, frame.response.hover_pos());
+                // Lingering potion clouds, as the game shows them: particles over where they are
+                // (the world's own, and the one about to be placed).
+                let time = ui.input(|i| i.time);
+                let clouds = self.draw_clouds(&inside, &cam, frame.rect, time);
+                // And the swirls round mobs with effects.
+                let swirls = self.draw_mob_effects(&inside, &cam, frame.rect, time);
+                if clouds || swirls {
+                    ui.ctx().request_repaint();
+                }
             }
             // The brush: the block it would paint around, and how far it reaches (magenta).
             if let (Some(b), Some(at)) = (&self.brush, self.brush_at) {
                 let r = b.radius as f32;
-                let (l3, h3) = ([at[0] as f32 - r, at[1] as f32 - r, at[2] as f32 - r], [at[0] as f32 + r + 1.0, at[1] as f32 + r + 1.0, at[2] as f32 + r + 1.0]);
-                let magenta = Color32::from_rgb(240, 90, 220);
+                let (mut l3, mut h3) = ([at[0] as f32 - r, at[1] as f32 - r, at[2] as f32 - r], [at[0] as f32 + r + 1.0, at[1] as f32 + r + 1.0, at[2] as f32 + r + 1.0]);
+                // The biome tool: whole 4 x 4 x 4 cells, as many as it is sized to.
+                if let Some(bio) = &b.biome {
+                    let (lo, hi) = crate::edit::tools::biome_box(at, bio.size, bio.full);
+                    l3 = [lo[0] as f32 * 4.0, lo[1] as f32 * 4.0, lo[2] as f32 * 4.0];
+                    h3 = [hi[0] as f32 * 4.0 + 4.0, hi[1] as f32 * 4.0 + 4.0, hi[2] as f32 * 4.0 + 4.0];
+                }
+                let mut magenta = Color32::from_rgb(240, 90, 220);
+                if let Some(bio) = &b.biome {
+                    // The biome tool: the box is in the color of the biome it would paint.
+                    let c = crate::atlas::biome_color(&bio.id);
+                    magenta = Color32::from_rgb(c[0], c[1], c[2]);
+                }
                 match view3d {
                     Some(cam) => Street::selection(&inside, &cam, l3, h3, magenta),
                     None if !frame.street => {
@@ -2788,8 +3551,25 @@ impl MapView {
         let view_open = self.fold_button(ui, 1, view_icon, "View options", ks);
         icons::paint(ui.painter(), Rect::from_center_size(view_icon.center(), Vec2::splat(20.0 * ks)), Icon::Gear, theme::text());
         let mut corner_icons = vec![search_icon, view_icon];
+        // Beside View, on the GPU: Lighting (the light and how far blocks reach) and Picking (what the
+        // pointer stops at and shows), each its own button with its own panel.
+        let gpu3d = self.gpu.is_some() && self.camera.is_some();
+        let light_icon = view_icon.translate(vec2(50.0 * ks, 0.0));
+        let pick_icon = light_icon.translate(vec2(50.0 * ks, 0.0));
+        let (light_open, pick_open) = if gpu3d {
+            let light = self.fold_button(ui, 3, light_icon, "Lighting: full bright, the time of day, how far blocks are drawn", ks);
+            icons::paint(ui.painter(), Rect::from_center_size(light_icon.center(), Vec2::splat(20.0 * ks)), Icon::Sun, theme::text());
+            let pick = self.fold_button(ui, 4, pick_icon, "Picking: what the pointer shows and stops at (details, water and lava, barriers)", ks);
+            icons::paint(ui.painter(), Rect::from_center_size(pick_icon.center(), Vec2::splat(20.0 * ks)), Icon::Pointer, theme::text());
+            corner_icons.push(light_icon);
+            corner_icons.push(pick_icon);
+            (light, pick)
+        } else {
+            (false, false)
+        };
+        let last_icon = if gpu3d { pick_icon } else { view_icon };
         if frame.street {
-            let r = Rect::from_min_size(view_icon.right_top() + vec2(6.0 * ks, 0.0), vec2(124.0 * ks, 44.0 * ks));
+            let r = Rect::from_min_size(last_icon.right_top() + vec2(6.0 * ks, 0.0), vec2(124.0 * ks, 44.0 * ks));
             let resp = ui.interact(r, ui.id().with("street-back"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Back to the Top-down view (or scroll out)");
             ui.memory_mut(|m| m.surrender_focus(resp.id));
             ui.painter().rect_filled(r, theme::radius(5), if resp.hovered() { theme::button_hover() } else { theme::deep() });
@@ -2942,7 +3722,8 @@ impl MapView {
         let now = DIMS.iter().position(|d| self.dimension == *d).unwrap_or(0);
         dim_tile(ui.painter(), Rect::from_center_size(dims_icon.center(), Vec2::splat(30.0 * ks)), now);
         corner_icons.push(dims_icon);
-        let dims_rect = Rect::from_min_size(pos2(dims_icon.right() - 158.0 * ks, dims_icon.bottom() + 6.0 * ks), vec2(158.0 * ks, 44.0 * ks));
+        // (Three tiles 48 apart from 4 in: 4 of margin on each side makes it 150 wide.)
+        let dims_rect = Rect::from_min_size(pos2(dims_icon.right() - 150.0 * ks, dims_icon.bottom() + 6.0 * ks), vec2(150.0 * ks, 44.0 * ks));
         let dims_rect = if dims_open { dims_rect } else { Rect::NOTHING };
         if dims_open {
         self.fold_panel = Some(dims_rect);
@@ -3094,8 +3875,9 @@ impl MapView {
         // Laid out left to right under the Locate bar, onto a new row when the next does not fit.
         // (All in the View panel, folded out under its icon.)
         let pad = 8.0 * ks;
-        let (left, limit) = (view_icon.left() + pad, (frame.rect.right() - 12.0 * ks - pad).min(view_icon.left() + 560.0 * ks));
-        let mut cursor = (left, view_icon.bottom() + 6.0 * ks + pad);
+        let anchor = if light_open { light_icon } else if pick_open { pick_icon } else { view_icon };
+        let (left, limit) = (anchor.left() + pad, (frame.rect.right() - 12.0 * ks - pad).min(anchor.left() + 560.0 * ks));
+        let mut cursor = (left, anchor.bottom() + 6.0 * ks + pad);
         let panel_bg = ui.painter().add(egui::Shape::Noop);
         let extra_from = extra.len();
         let pill = |ui: &mut Ui, r: Rect, key: &str, on: bool, tip: &str| {
@@ -3117,15 +3899,18 @@ impl MapView {
             cursor.0 = r.right() + 6.0 * ks;
             r
         };
+        if view_open || light_open || pick_open {
+        // View: what is drawn over the map, and the camera.
         if view_open {
-        let r = place(112.0);
-        let resp = pill(ui, r, "chunk-grid", self.chunk_grid, "Show the chunk borders (as the game's F3+G)");
-        ui.painter().text(r.center(), Align2::CENTER_CENTER, "Chunk Grid", theme::regular(14.0 * ks), if self.chunk_grid { theme::text() } else { theme::text_muted() });
-        if resp.clicked() {
-            self.chunk_grid = !self.chunk_grid;
+            let r = place(112.0);
+            let resp = pill(ui, r, "chunk-grid", self.chunk_grid, "Show the chunk borders (as the game's F3+G)");
+            ui.painter().text(r.center(), Align2::CENTER_CENTER, "Chunk Grid", theme::regular(14.0 * ks), if self.chunk_grid { theme::text() } else { theme::text_muted() });
+            if resp.clicked() {
+                self.chunk_grid = !self.chunk_grid;
+            }
+            extra.push(r);
         }
-        extra.push(r);
-        if self.camera.is_some() {
+        if view_open && self.camera.is_some() {
             let r = place(128.0);
             let resp = pill(ui, r, "land-outline", self.land_outline, "Also draw each chunk's edge along the top of the land (in cyan)");
             ui.painter().text(r.center(), Align2::CENTER_CENTER, "Land Outline", theme::regular(14.0 * ks), if self.land_outline { theme::text() } else { theme::text_muted() });
@@ -3134,8 +3919,8 @@ impl MapView {
             }
             extra.push(r);
         }
-        // In 3D: the cards of what mobs and containers hold, and mobs' name tags.
-        if frame.street && self.gpu.is_some() {
+        // Picking: the cards of what mobs and containers hold, and mobs' name tags.
+        if pick_open && frame.street && self.gpu.is_some() {
             let r = place(124.0);
             let resp = pill(ui, r, "show-details", self.show_details, "Show what mobs and containers hold when pointed at, and named mobs' name tags");
             ui.painter().text(r.center(), Align2::CENTER_CENTER, "Show Details", theme::regular(14.0 * ks), if self.show_details { theme::text() } else { theme::text_muted() });
@@ -3144,9 +3929,8 @@ impl MapView {
             }
             extra.push(r);
         }
-        // On the GPU: the light (Full Bright to see into dark places) and how far the blocks reach,
-        // on a second row.
-        if self.gpu.is_some() && self.camera.is_some() {
+        // Lighting: the light (Full Bright to see into dark places) and how far the blocks reach.
+        if light_open && gpu3d {
             let r = place(116.0);
             let resp = pill(ui, r, "full-bright", self.full_bright, "Draw everything evenly lit, to see into caves and other dark places (off: lit by the sky and glowing blocks, as in the game)");
             ui.painter().text(r.center(), Align2::CENTER_CENTER, "Full Bright", theme::regular(14.0 * ks), if self.full_bright { theme::text() } else { theme::text_muted() });
@@ -3159,15 +3943,13 @@ impl MapView {
             let label = match self.time_of_day {
                 TimeOfDay::World => format!("Time: World ({})", if self.daylight() < 0.6 { "Night" } else { "Day" }),
                 TimeOfDay::Day => "Time: Day".to_string(),
-                TimeOfDay::Sunset => "Time: Sunset".to_string(),
                 TimeOfDay::Night => "Time: Night".to_string(),
             };
             ui.painter().text(r.center(), Align2::CENTER_CENTER, label, theme::regular(14.0 * ks), theme::text());
             if resp.clicked() {
                 self.time_of_day = match self.time_of_day {
                     TimeOfDay::World => TimeOfDay::Day,
-                    TimeOfDay::Day => TimeOfDay::Sunset,
-                    TimeOfDay::Sunset => TimeOfDay::Night,
+                    TimeOfDay::Day => TimeOfDay::Night,
                     TimeOfDay::Night => TimeOfDay::World,
                 };
             }
@@ -3182,8 +3964,8 @@ impl MapView {
             }
             extra.push(r);
         }
-        // In 3D: the pointer stops at water and lava too, to select them.
-        if frame.street && self.gpu.is_some() {
+        // Picking: the pointer stops at water and lava too, to select them.
+        if pick_open && frame.street && self.gpu.is_some() {
             let r = place(128.0);
             let resp = pill(ui, r, "pick-liquids", self.pick_liquids, "Let the pointer stop at water and lava, to select them (off: it goes through to what is under them)");
             ui.painter().text(r.center(), Align2::CENTER_CENTER, "Water/Lava", theme::regular(14.0 * ks), if self.pick_liquids { theme::text() } else { theme::text_muted() });
@@ -3192,8 +3974,8 @@ impl MapView {
             }
             extra.push(r);
         }
-        // With the blocks shown: barriers (by their icon, as the game shows them), or not.
-        if self.gpu.is_some() && self.camera.is_some() {
+        // Picking: barriers (by their icon, as the game shows them), or not.
+        if pick_open && gpu3d {
             let r = place(108.0);
             let resp = pill(ui, r, "barriers", self.show_barriers, "Show barrier blocks by their icon, and let the pointer select them (off: they are passed through as air)");
             ui.painter().text(r.center(), Align2::CENTER_CENTER, "Barriers", theme::regular(14.0 * ks), if self.show_barriers { theme::text() } else { theme::text_muted() });
@@ -3202,7 +3984,7 @@ impl MapView {
             }
             extra.push(r);
         }
-        if frame.street || self.camera.is_some() {
+        if view_open && (frame.street || self.camera.is_some()) {
             let r = place(128.0);
             let resp = pill(ui, r, "noclip", self.noclip, "Free camera, as in a 3D editor: goes into the 3D view up close, flies anywhere (through blocks too) and back to Top-down when turned off.\nWASD to move, Space to go up, Ctrl to go down, right-drag to look.");
             ui.painter().text(r.center(), Align2::CENTER_CENTER, "Free Camera", theme::regular(14.0 * ks), if self.noclip { theme::text() } else { theme::text_muted() });
@@ -3211,7 +3993,7 @@ impl MapView {
             }
             extra.push(r);
         }
-        if self.camera.is_some() {
+        if view_open && self.camera.is_some() {
             let r = place(150.0);
             let resp = pill(ui, r, "chunk-highlight", self.chunk_highlight, "Outline the chunk under the pointer (comes back on when you go back to the flat map)");
             ui.painter().text(r.center(), Align2::CENTER_CENTER, "Chunk Highlight", theme::regular(14.0 * ks), if self.chunk_highlight { theme::text() } else { theme::text_muted() });
@@ -3229,7 +4011,7 @@ impl MapView {
         }
         }
         // The View panel's background, behind its buttons.
-        if view_open && extra.len() > extra_from {
+        if (view_open || light_open || pick_open) && extra.len() > extra_from {
             let mut r = extra[extra_from];
             for e in &extra[extra_from..] {
                 r = r.union(*e);
@@ -3452,15 +4234,32 @@ pub struct BrushMode {
     /// Blocks from the middle to the edge.
     pub radius: i32,
     pub sphere: bool,
-    /// Paints air instead of the block chosen.
-    pub erase: bool,
     /// Its middle across is the middle of the chunk pointed at (its height, the block's).
     pub snap: bool,
+    /// What it may paint over: anything, only terrain, or only terrain below the pointer.
+    pub only: crate::edit::tools::BrushOnly,
+    /// Painting a biome and not blocks: which, and the heights it reaches.
+    pub biome: Option<BiomeBrush>,
+}
+
+/// What the biome tool paints: the biome (a Java id) and how many 4 x 4 x 4 cells across (x, height, z); `full` is every height.
+#[derive(Clone, Debug)]
+pub struct BiomeBrush {
+    pub id: String,
+    pub size: [i32; 3],
+    pub full: bool,
 }
 
 impl Default for BrushMode {
     fn default() -> Self {
-        BrushMode { radius: 2, sphere: true, erase: false, snap: false }
+        BrushMode { radius: 2, sphere: true, snap: false, only: Default::default(), biome: None }
+    }
+}
+
+impl BrushMode {
+    /// The biome tool: one cell (4 x 4 x 4 blocks) to start with.
+    pub fn for_biome() -> Self {
+        BrushMode { radius: 0, biome: Some(BiomeBrush { id: "minecraft:plains".into(), size: [1, 1, 1], full: false }), ..Default::default() }
     }
 }
 
@@ -3611,6 +4410,284 @@ pub struct PasteMode {
     pub at: Option<[i32; 3]>,
     /// Air in the clipboard is pasted too (else what is there stays).
     pub with_air: bool,
+    /// Moving a box rather than pasting a copy: the box it came from, cleared as it is placed.
+    pub move_from: Option<([i32; 3], [i32; 3])>,
+}
+
+/// Moving the selected mob or block (see `MapView::moving`): it follows the block under the
+/// pointer (on top of it, locked to the block grid), and a click puts it there.
+#[derive(Clone)]
+pub struct MoveMode {
+    pub what: MoveWhat,
+    /// How far the arrow keys moved it from on top of the block under the pointer.
+    nudge: [i32; 3],
+    /// The block it would stand in, once the pointer was over the land.
+    pub at: Option<[i32; 3]>,
+}
+
+impl MoveMode {
+    pub fn new(what: MoveWhat) -> Self {
+        MoveMode { what, nudge: [0; 3], at: None }
+    }
+}
+
+/// What is being moved.
+#[derive(Clone)]
+pub enum MoveWhat {
+    /// A mob (item, minecart...): its saved data, which says where it stands.
+    Entity(Arc<mctk_nbt::Tag>),
+    Block([i32; 3]),
+}
+
+/// What a click of the Place tool puts down.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlaceKind {
+    Block,
+    Mob,
+    /// An armor stand, an item frame, a minecart...
+    Entity,
+}
+
+/// Placing a single block, mob or item (see `MapView::place`): what was picked from the one list
+/// (`minecraft:stone`, `minecraft:diamond`, or `mob:minecraft:pig`), how many (items), and the
+/// block it would stand on.
+#[derive(Clone, Debug)]
+pub struct PlaceMode {
+    pub pick: String,
+    pub at: Option<[i32; 3]>,
+    /// For an item frame: which way it faces (the Facing byte: 2 north, 3 south, 4 west, 5 east),
+    /// from the side of the block the camera sees.
+    pub facing: Option<u8>,
+}
+
+impl Default for PlaceMode {
+    fn default() -> Self {
+        PlaceMode { pick: "minecraft:stone".into(), at: None, facing: None }
+    }
+}
+
+impl PlaceMode {
+    /// A block, a mob or an item: a mob is marked in the pick, a block is told by the game's list.
+    pub fn kind(&self) -> PlaceKind {
+        if self.pick.starts_with("mob:") {
+            PlaceKind::Mob
+        } else if self.pick.starts_with("ent:") {
+            PlaceKind::Entity
+        } else {
+            PlaceKind::Block
+        }
+    }
+
+    /// The id picked, without the mark.
+    pub fn id(&self) -> &str {
+        self.pick.strip_prefix("mob:").or_else(|| self.pick.strip_prefix("ent:")).unwrap_or(&self.pick)
+    }
+}
+
+/// Placing lingering potion clouds (see `MapView::cloud`): what the cloud is, and the block it
+/// would stand on, once the pointer was over the land.
+#[derive(Clone, Default)]
+pub struct CloudMode {
+    pub cloud: crate::cloud::Cloud,
+    pub at: Option<[i32; 3]>,
+}
+
+/// What the user asked to move, and where to (see `MapView::move_request`).
+pub enum MoveOrder {
+    Entity { from: [f64; 3], to: [f64; 3] },
+    Block { from: [i32; 3], to: [i32; 3] },
+}
+
+/// A turn asked for with the turn handle (see `MapView::rotate_request`).
+pub enum RotateOrder {
+    /// A mob to face `yaw` degrees; `stroke` once the turn is under way (one step to undo).
+    Entity { at: [f64; 3], yaw: f32, stroke: bool },
+    /// A block's `facing` or `rotation` made `value`.
+    Block { at: [i32; 3], key: &'static str, value: String },
+    /// A box of blocks turned `turns` quarter turns clockwise about its middle (`stroke`: going on
+    /// with a turn under way, one step to undo).
+    Group { from: ([i32; 3], [i32; 3]), turns: u8, stroke: bool },
+}
+
+/// What the turn handle turns.
+enum Turnable {
+    /// A mob: where it stands, the radius of its ring, and the way it faces (yaw in degrees).
+    Entity { pos: [f64; 3], radius: f32, yaw: f32 },
+    /// A block: where, the property that turns it, each value it can take with the yaw it
+    /// stands for, and the yaw it faces now.
+    Block { at: [i32; 3], key: &'static str, faces: Vec<(String, f32)>, yaw: f32 },
+    /// A box of several blocks: turned in quarter turns about its middle.
+    Group { lo: [i32; 3], hi: [i32; 3] },
+}
+
+/// A turn being dragged: the yaw the handle shows, the last one sent (entity), the value last
+/// chosen (block).
+struct TurnDrag {
+    yaw: f32,
+    sent: Option<i32>,
+    value: Option<String>,
+    /// A turn of the box has been made (the ones after it are the same step to undo).
+    applied: bool,
+}
+
+/// Which way yaw 0 faces: south (+Z); a positive yaw turns toward the west.
+fn yaw_dir(yaw: f32) -> (f32, f32) {
+    let a = yaw.to_radians();
+    (-a.sin(), a.cos())
+}
+
+/// The smallest angle between two yaws, in degrees.
+fn yaw_gap(a: f32, b: f32) -> f32 {
+    let d = (a - b).rem_euclid(360.0);
+    d.min(360.0 - d)
+}
+
+/// One lingering potion cloud to draw: where, how wide, the color of its particles, whether the
+/// game shows them, the color of its edge when it has one (selected, moved or placed), and
+/// whether it is a hologram (what a click would put there, not what is there).
+struct CloudDraw {
+    pos: [f32; 3],
+    radius: f32,
+    rgb: [u8; 3],
+    visible: bool,
+    ring: Option<Color32>,
+    holo: bool,
+}
+
+/// The pack's pictures of the potion effect's particle (`particle/effect_0` biggest to
+/// `effect_7` smallest), loaded once and kept while the pack stays the same (none: `None`s).
+fn effect_frames(ctx: &egui::Context) -> std::sync::Arc<Vec<Option<egui::TextureHandle>>> {
+    type Kept = (Option<std::path::PathBuf>, std::sync::Arc<Vec<Option<egui::TextureHandle>>>);
+    static KEPT: std::sync::Mutex<Option<Kept>> = std::sync::Mutex::new(None);
+    let first = icons::pack_texture("particle/effect_0.png");
+    let mut kept = KEPT.lock().expect("effect particle pictures");
+    if let Some((path, frames)) = kept.as_ref() {
+        if *path == first {
+            return frames.clone();
+        }
+    }
+    let frames = std::sync::Arc::new((0..8).map(|i| icons::pack_texture(&format!("particle/effect_{i}.png")).and_then(|f| icons::file_texture(ctx, &f))).collect::<Vec<_>>());
+    *kept = Some((first, frames.clone()));
+    frames
+}
+
+/// One particle of a potion effect: the pack's picture for its age (little squares where the pack
+/// has none), tinted by the effect's color.
+fn stamp_particle(p: &egui::Painter, frames: &[Option<egui::TextureHandle>], at: Pos2, depth: f32, focal: f32, age: f32, rgb: [u8; 3], alpha: f32) {
+    let tint = Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], (alpha.clamp(0.0, 1.0) * 255.0) as u8);
+    match &frames[((age * 8.0) as usize).min(7)] {
+        Some(tex) => {
+            let size = (0.26 * focal / depth.max(0.1)).clamp(3.0, 24.0);
+            p.image(tex.id(), Rect::from_center_size(at, Vec2::splat(size)), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), tint);
+        }
+        None => {
+            let size = (0.1 * focal / depth.max(0.1)).clamp(1.5, 8.0);
+            p.rect_filled(Rect::from_center_size(at, Vec2::splat(size)), 0.0, tint);
+        }
+    }
+}
+
+/// A steady scatter of numbers for particle `i` (the same each frame): 0 to 1 for each `k`.
+fn scatter(i: usize, k: u32) -> f32 {
+    let mut x = (i as u32).wrapping_mul(2_654_435_761).wrapping_add(k.wrapping_mul(97_531));
+    x ^= x >> 13;
+    x = x.wrapping_mul(0x5bd1_e995);
+    x ^= x >> 15;
+    (x & 0xFFFF) as f32 / 65_535.0
+}
+
+/// A lingering potion cloud as it looks in the game: the particles of the potion effect drifting
+/// up from the ground over the whole circle, each shrinking as it ages. Only what can be seen from
+/// the camera is drawn (`seen` says whether a point can: walls hide the rest; asked for a few
+/// spots over the circle, shared by the particles near them). A cloud whose particles the game
+/// hides still shows them, fainter, so it can be found and edited. The block it stands in is
+/// outlined as the pointer's block is; its edge too when `ring` is set. A hologram is cyan and
+/// see-through.
+fn draw_cloud(p: &egui::Painter, cam: &Camera, bounds: Rect, time: f64, c: &CloudDraw, seen: &mut dyn FnMut([f32; 3]) -> bool) {
+    let r = c.radius.max(0.2);
+    let tau = std::f32::consts::TAU;
+    let pos = c.pos;
+    let cell = [pos[0].floor(), pos[1].floor(), pos[2].floor()];
+    // The block it stands in, outlined like the block the pointer is on (not through walls); a
+    // hologram instead has the outline a cloud gets when it is pointed at or selected.
+    if seen([cell[0] + 0.5, cell[1] + 0.5, cell[2] + 0.5]) {
+        // (The outline a cloud gets when it is pointed at: white, cyan for a hologram.)
+        let mut tag = mctk_nbt::Compound::new();
+        tag.insert("id".into(), mctk_nbt::Tag::String("minecraft:area_effect_cloud".into()));
+        let tag = with_pos(&mctk_nbt::Tag::Compound(tag), [pos[0] as f64, pos[1] as f64, pos[2] as f64]);
+        let color = if c.holo { Color32::from_rgb(80, 220, 255) } else { Color32::from_rgba_unmultiplied(255, 255, 255, 220) };
+        entity_outline(p, cam, &tag, bounds, color);
+        if let Some(color) = c.ring {
+            let mut run: Vec<Pos2> = Vec::new();
+            let mut runs: Vec<Vec<Pos2>> = Vec::new();
+            for k in 0..=64 {
+                let a = k as f32 / 64.0 * tau;
+                match cam.project([pos[0] + r * a.cos(), pos[1] + 0.04, pos[2] + r * a.sin()]) {
+                    Some((s, _)) => run.push(s),
+                    None => runs.push(std::mem::take(&mut run)),
+                }
+            }
+            runs.push(run);
+            for run in runs.into_iter().filter(|r| r.len() > 1) {
+                p.add(egui::Shape::line(run, Stroke::new(1.5_f32, color)));
+            }
+        }
+    }
+    let focal = cam.focal();
+    let n = ((r * r * std::f32::consts::PI * 5.0) as usize).clamp(10, 160);
+    // A hologram is cyan and see-through; one the game hides, fainter.
+    let rgb = if c.holo { [(c.rgb[0] as u16 / 3 + 50) as u8, (c.rgb[1] as u16 / 3 + 150) as u8, (c.rgb[2] as u16 / 3 + 170) as u8] } else { c.rgb };
+    let faint = if c.holo { 0.5 } else if c.visible { 1.0 } else { 0.45 };
+    let frames = effect_frames(p.ctx());
+    // Which spots of the circle can be seen from the camera, asked when first wanted.
+    const G: usize = 5;
+    let mut view: [Option<bool>; G * G] = [None; G * G];
+    for i in 0..n {
+        let (a, d) = (scatter(i, 1) * tau, scatter(i, 2).sqrt() * r);
+        let life = 1.4 + scatter(i, 3);
+        let age = ((time as f32 / life) + scatter(i, 4)).rem_euclid(1.0);
+        let (x, z) = (pos[0] + a.cos() * d + (scatter(i, 5) - 0.5) * 0.3 * age, pos[2] + a.sin() * d + (scatter(i, 6) - 0.5) * 0.3 * age);
+        let y = pos[1] + 0.05 + age * 0.7 + scatter(i, 7) * 0.12;
+        let Some((s, depth)) = cam.project([x, y, z]) else { continue };
+        if !bounds.contains(s) {
+            continue;
+        }
+        // The spot of the circle it is over, and whether that is seen.
+        let gx = (((x - (pos[0] - r)) / (2.0 * r) * G as f32) as usize).min(G - 1);
+        let gz = (((z - (pos[2] - r)) / (2.0 * r) * G as f32) as usize).min(G - 1);
+        let spot = *view[gz * G + gx].get_or_insert_with(|| {
+            let (cx, cz) = (pos[0] - r + (gx as f32 + 0.5) * 2.0 * r / G as f32, pos[2] - r + (gz as f32 + 0.5) * 2.0 * r / G as f32);
+            seen([cx, pos[1] + 0.4, cz])
+        });
+        if !spot {
+            continue;
+        }
+        stamp_particle(p, &frames, s, depth, focal, age, rgb, (1.0 - age * 0.6) * 0.9 * faint);
+    }
+}
+/// Where a mob (item, minecart...) stands, from its saved data.
+pub fn tag_pos(e: &mctk_nbt::Tag) -> Option<[f64; 3]> {
+    let l = e.get("Pos")?.as_list()?;
+    let n = |i: usize| l.get(i).and_then(mctk_nbt::Tag::as_f64);
+    Some([n(0)?, n(1)?, n(2)?])
+}
+
+/// The saved data of a mob moved to stand at `to`.
+fn with_pos(e: &mctk_nbt::Tag, to: [f64; 3]) -> mctk_nbt::Tag {
+    let mut t = e.clone();
+    if let Some(c) = t.as_compound_mut() {
+        crate::edit::tools::set_entity_pos(c, to);
+    }
+    t
+}
+
+/// The saved data of a mob turned to face `yaw`.
+fn with_yaw(e: &mctk_nbt::Tag, yaw: f32) -> mctk_nbt::Tag {
+    let mut t = e.clone();
+    if let Some(c) = t.as_compound_mut() {
+        crate::edit::tools::set_yaw(c, yaw);
+    }
+    t
 }
 
 /// One slot of the card: what is in it, and the game's picture for it while empty.
@@ -3755,6 +4832,33 @@ impl MapView {
             }
             return Some(Card { title: "Monster Spawner".into(), named: false, kind: None, stats: None, lines, grids: Vec::new() });
         }
+        // A beacon: its two powers (the first one's level), the pyramid it was saved with and what that
+        // reaches, and its lock.
+        if crate::mob_edit::is_beacon(c) {
+            let (primary, secondary) = crate::mob_edit::beacon_powers(c);
+            let levels = crate::mob_edit::beacon_levels(c);
+            let (range, seconds, level) = crate::mob_edit::beacon_reach(levels, primary.as_deref(), secondary.as_deref());
+            let shown = |e: &str| crate::item_picker::display_name(e);
+            let mut lines = vec![
+                match &primary {
+                    Some(p) => format!("Primary: {}{}", shown(p), if level == 2 { " II" } else { "" }),
+                    None => "Primary: none".to_string(),
+                },
+                match (&secondary, &primary) {
+                    (Some(s), Some(p)) if s == p => "Secondary: the primary again (makes it level II)".to_string(),
+                    (Some(s), _) => format!("Secondary: {}", shown(s)),
+                    _ => "Secondary: none".to_string(),
+                },
+                format!("Pyramid: {levels} of 4 levels"),
+                if levels > 0 { format!("Reaches {range} blocks, each renewal lasts {seconds} s") } else { "Not active: no pyramid under it".to_string() },
+            ];
+            let key = crate::mob_edit::lock(c);
+            if !key.is_empty() {
+                lines.push(format!("Locked with \u{201c}{key}\u{201d}"));
+            }
+            let name = crate::naming::mob_name(c);
+            return Some(Card { title: name.clone().unwrap_or_else(|| "Beacon".into()), named: name.is_some(), kind: name.map(|_| "Beacon".to_string()), stats: None, lines, grids: Vec::new() });
+        }
         if !c.contains_key("Items") {
             return None;
         }
@@ -3790,7 +4894,10 @@ impl MapView {
         }
         let name = crate::naming::mob_name(&title_from);
         let kind = if double { "Large Chest".to_string() } else { pretty(&id) };
-        Some(Card { title: name.clone().unwrap_or_else(|| kind.clone()), named: name.is_some(), kind: name.map(|_| kind), stats: None, lines: Vec::new(), grids: vec![(cols, slots)] })
+        // (And the key that locks it, when it is locked.)
+        let key = crate::mob_edit::lock(c);
+        let lines = if key.is_empty() { Vec::new() } else { vec![format!("Locked with \u{201c}{key}\u{201d}")] };
+        Some(Card { title: name.clone().unwrap_or_else(|| kind.clone()), named: name.is_some(), kind: name.map(|_| kind), stats: None, lines, grids: vec![(cols, slots)] })
     }
 }
 
@@ -3831,6 +4938,10 @@ fn paint_contents(p: &egui::Painter, bounds: Rect, pointer: Pos2, card: &Card) {
     if at.y + h > bounds.bottom() - 4.0 {
         at.y = pointer.y - 18.0 - h;
     }
+    // A tall card that fits neither above nor below the pointer is kept inside the view (over the
+    // pointer if it must), not left half out of it.
+    at.x = at.x.min(bounds.right() - 4.0 - w).max(bounds.left() + 4.0);
+    at.y = at.y.min(bounds.bottom() - 4.0 - h).max(bounds.top() + 4.0);
     let r = Rect::from_min_size(at, vec2(w, h));
     p.rect_filled(r, theme::radius(5), theme::deep_alpha(240));
     p.rect_stroke(r, theme::radius(5), Stroke::new(1.0_f32, theme::wash(28)), egui::StrokeKind::Inside);
@@ -3883,7 +4994,8 @@ fn paint_contents(p: &egui::Painter, bounds: Rect, pointer: Pos2, card: &Card) {
         let cols = (*cols).max(1);
         for (i, s) in slots.iter().enumerate() {
             let cell = Rect::from_min_size(pos2(r.left() + PAD + (i % cols) as f32 * SLOT, y + (i / cols) as f32 * SLOT), vec2(SLOT, SLOT)).shrink(1.0);
-            p.rect_filled(cell, theme::radius(2), theme::tile());
+            // (On the light theme the tile is as pale as the card: a clearly darker gray there.)
+            p.rect_filled(cell, theme::radius(2), if theme::is_light() { Color32::from_rgb(0xCB, 0xD0, 0xD8) } else { theme::tile() });
             let icon = cell.shrink(2.0);
             match &s.item {
                 Some((id, count)) => {

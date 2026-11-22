@@ -3,6 +3,19 @@
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+/// Which generation of console save a conversion to PS3, Xbox 360 or Wii U writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ConsoleFormat {
+    /// The older layout, readable by older game versions: archive version 8, the older compact chunk
+    /// layout, an uncompressed PS3 `GAMEDATA`, and a world of 320 chunks.
+    #[default]
+    Legacy,
+    /// What the original converter writes for the current game versions: archive version 10, chunks in the
+    /// Version 12 layout (record bit 30 set), a compressed PS3 `GAMEDATA`, a `level.dat` with `DataVersion`
+    /// 922, and the smallest world size class (54, 64, 192 or 320 chunks) that holds the converted chunks.
+    Current,
+}
+
 /// What to convert and how to adjust the output (the Converter's "Conversion Options").
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConvertOptions {
@@ -27,6 +40,11 @@ pub struct ConvertOptions {
     pub difficulty: Option<i32>,
     /// Chunk offset added to every output chunk (moves the world's centre).
     pub offset: (i32, i32),
+    /// The generation of console save written when the target is a console (ignored otherwise).
+    pub console_format: ConsoleFormat,
+    /// With [`ConsoleFormat::Current`]: write the classic 54-chunk world (Nether 18) and leave out the
+    /// chunks beyond it, as the original converter does, instead of the smallest class that holds them all.
+    pub classic_world_size: bool,
 }
 
 impl Default for ConvertOptions {
@@ -44,6 +62,8 @@ impl Default for ConvertOptions {
             game_mode: None,
             difficulty: None,
             offset: (0, 0),
+            console_format: ConsoleFormat::default(),
+            classic_world_size: false,
         }
     }
 }

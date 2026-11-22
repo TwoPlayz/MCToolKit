@@ -71,7 +71,7 @@ impl Camera {
     }
 
     /// Eye position, the direction it looks, and the screen's right and up in the world.
-    fn basis(&self) -> (V3, V3, V3, V3) {
+    pub(crate) fn basis(&self) -> (V3, V3, V3, V3) {
         let (sy, cy) = self.yaw.sin_cos();
         let (sp, cp) = self.pitch.sin_cos();
         let fwd = [sy * cp, -sp, -cy * cp];
@@ -179,12 +179,12 @@ struct View {
 }
 
 impl View {
-    fn to_view(&self, p: V3) -> V3 {
+    fn to_view(self, p: V3) -> V3 {
         let v = sub(p, self.eye);
         [dot(v, self.right), dot(v, self.up), dot(v, self.fwd)]
     }
 
-    fn to_screen(&self, v: V3) -> Pos2 {
+    fn to_screen(self, v: V3) -> Pos2 {
         let f = self.focal / v[2];
         pos2(self.center.x + v[0] * f, self.center.y - v[1] * f)
     }
@@ -919,15 +919,17 @@ pub struct Hit {
 }
 
 impl Hit {
+    #[cfg(test)]
+    /// Whether the box is narrower than the block on any side.
+    pub fn narrow(&self) -> bool {
+        self.xz[0] > 0.0 || self.xz[1] < 1.0 || self.xz[2] > 0.0 || self.xz[3] < 1.0
+    }
+
     /// A box `inset` in from all four sides of the block.
     pub fn inset(x: i32, y: i32, z: i32, y0: f32, y1: f32, inset: f32) -> Hit {
         Hit { x, y, z, y0, y1, xz: [inset, 1.0 - inset, inset, 1.0 - inset] }
     }
 
-    /// Whether the box is narrower than the block on any side.
-    pub fn narrow(&self) -> bool {
-        self.xz[0] > 0.0 || self.xz[1] < 1.0 || self.xz[2] > 0.0 || self.xz[3] < 1.0
-    }
 }
 
 /// The street view's pictures and the last mesh built (kept while the camera stays still).
@@ -1583,7 +1585,7 @@ impl Street {
         }
     }
 
-    /// How high chunk walls are drawn: to 	op, but looking down not past just below the eye
+    /// How high chunk walls are drawn: to the top, but looking down not past just below the eye
     /// (above it they would be behind the camera).
     fn wall_top(cam: &Camera, top: f32) -> f32 {
         if cam.pitch > 70f32.to_radians() { top.min(cam.eye()[1] - 2.0) } else { top }
@@ -1784,30 +1786,71 @@ fn cross_quads(b: &mut Builder, x: f32, z: f32, y0: f32, y1: f32, s: Slot, fog: 
 /// moon where `ticks` (the time of day) puts them, stars at night and clouds drifting at
 /// height 192 (`secs` moves them); nothing below the horizon (the void). The Nether's and the
 /// End's are each one sky, whatever the time.
-pub(crate) fn sky(painter: &egui::Painter, cam: &Camera, daylight: f32, ticks: i64, dimension: &str, secs: f64) {
+pub(crate) fn sky(painter: &egui::Painter, cam: &Camera, daylight: f32, ticks: i64, dimension: &str, secs: f64, biome: Option<&str>) {
     let r = cam.rect;
+    // The biome the camera is in decides the sky (a Nether biome gives the Nether's, an End biome the End's, any other the
+    // Overworld's); where it is not known, the dimension does.
+    let b = biome.map(|b| b.trim_start_matches("minecraft:"));
+    let dimension = match b {
+        Some("nether_wastes" | "crimson_forest" | "warped_forest" | "soul_sand_valley" | "basalt_deltas" | "hell") => "minecraft:the_nether",
+        Some("the_end" | "end_highlands" | "end_midlands" | "small_end_islands" | "end_barrens") => "minecraft:the_end",
+        Some(_) => "minecraft:overworld",
+        None => dimension,
+    };
     match dimension {
-        // The Nether's fog color.
+        // The Nether's fog color, each Nether biome's own.
         "minecraft:the_nether" => {
-            painter.rect_filled(r, 0.0, Color32::from_rgb(0x33, 0x08, 0x08));
+            let c = match b {
+                Some("crimson_forest") => (0x33, 0x03, 0x03),
+                Some("warped_forest") => (0x1A, 0x05, 0x1A),
+                Some("soul_sand_valley") => (0x1B, 0x47, 0x45),
+                Some("basalt_deltas") => (0x68, 0x5F, 0x70),
+                _ => (0x33, 0x08, 0x08),
+            };
+            painter.rect_filled(r, 0.0, Color32::from_rgb(c.0, c.1, c.2));
             return;
         }
-        // The End's sky: its dark speckled texture, tiled.
+        // The End's sky as the game draws it: a cube round the camera, each face the sky picture repeated 16 times across
+        // and dimmed, fixed in the world (it turns as the camera does, never with the time).
         "minecraft:the_end" => {
             painter.rect_filled(r, 0.0, Color32::from_rgb(0x12, 0x0E, 0x18));
             if let Some(tex) = crate::icons::pack_texture("environment/end_sky.png").and_then(|f| crate::icons::file_texture(painter.ctx(), &f)) {
-                let tile = 256.0;
-                let mut y = r.top();
-                while y < r.bottom() {
-                    let mut x = r.left();
-                    while x < r.right() {
-                        painter.image(tex.id(), Rect::from_min_size(pos2(x, y), egui::vec2(tile, tile)), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::from_gray(60));
-                        x += tile;
+                let (eye, ..) = cam.basis();
+                let mut m = egui::Mesh::with_texture(tex.id());
+                const N: usize = 16;
+                const FAR: f32 = 100.0;
+                let tint = Color32::from_gray(48);
+                for axis in 0..3 {
+                    for sign in [-1.0f32, 1.0] {
+                        let (a, b) = ((axis + 1) % 3, (axis + 2) % 3);
+                        let at = |i: usize, j: usize| {
+                            let mut p = [0.0f32; 3];
+                            p[axis] = sign * FAR;
+                            p[a] = (i as f32 / N as f32 * 2.0 - 1.0) * FAR;
+                            p[b] = (j as f32 / N as f32 * 2.0 - 1.0) * FAR;
+                            cam.project([eye[0] + p[0], eye[1] + p[1], eye[2] + p[2]]).map(|(s, _)| s)
+                        };
+                        // (Each corner worked out once per face.)
+                        let grid: Vec<Option<Pos2>> = (0..=N).flat_map(|j| (0..=N).map(move |i| (i, j))).map(|(i, j)| at(i, j)).collect();
+                        for j in 0..N {
+                            for i in 0..N {
+                                let q = [grid[j * (N + 1) + i], grid[j * (N + 1) + i + 1], grid[(j + 1) * (N + 1) + i + 1], grid[(j + 1) * (N + 1) + i]];
+                                let Some(q) = q.into_iter().collect::<Option<Vec<Pos2>>>() else { continue };
+                                if !Rect::from_points(&q).intersects(r) {
+                                    continue;
+                                }
+                                let k = m.vertices.len() as u32;
+                                for (p, uv) in q.iter().zip([pos2(0.0, 0.0), pos2(1.0, 0.0), pos2(1.0, 1.0), pos2(0.0, 1.0)]) {
+                                    m.vertices.push(egui::epaint::Vertex { pos: *p, uv, color: tint });
+                                }
+                                m.add_triangle(k, k + 1, k + 2);
+                                m.add_triangle(k, k + 2, k + 3);
+                            }
+                        }
                     }
-                    y += tile;
                 }
-            }
-            return;
+                painter.with_clip_rect(r).add(egui::Shape::mesh(m));
+            }            return;
         }
         _ => {}
     }
@@ -2003,7 +2046,7 @@ mod sky_tests {
             let cam = Camera { target: [0.0, 80.0, 0.0], yaw, pitch: -0.2, dist: 0.5, rect, fov: FOV_Y };
             let out = ctx.run(egui::RawInput { screen_rect: Some(rect), ..Default::default() }, |ctx| {
                 let p = ctx.layer_painter(egui::LayerId::background());
-                sky(&p, &cam, 1.0, ticks, "minecraft:overworld", 0.0);
+                sky(&p, &cam, 1.0, ticks, "minecraft:overworld", 0.0, None);
             });
             out.shapes.iter().any(|s| matches!(&s.shape, egui::epaint::Shape::Mesh(m) if m.texture_id != egui::TextureId::default()))
         };

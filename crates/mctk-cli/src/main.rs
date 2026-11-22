@@ -57,6 +57,40 @@ enum ConvertAction {
     BedrockToJava { world: PathBuf, out: PathBuf },
     /// Legacy Console save to a Java world (upgraded by the game on first open)
     ConsoleToJava { save: PathBuf, out: PathBuf },
+    /// Java 26.x world to a console save in a folder: a signed PS3 save folder, an Xbox 360
+    /// `savegame.dat`, or a Wii U `<name>.wii` with its `.ext` companion
+    JavaToConsole {
+        world: PathBuf,
+        /// Folder to write into (created if missing)
+        out: PathBuf,
+        /// ps3, xbox360 or wiiu
+        #[arg(long, default_value = "ps3")]
+        platform: String,
+        /// current (what the original converter writes: version 10 archive, Version 12 chunks, compressed PS3
+        /// GAMEDATA, fitted world size) or legacy (version 8, readable by older game versions)
+        #[arg(long, default_value = "current")]
+        format: String,
+        /// With --format current: write the classic 54-chunk world and drop the chunks beyond it, as the
+        /// original converter does (default: the smallest size class that holds every chunk)
+        #[arg(long)]
+        classic_size: bool,
+        /// PS3 only: us-digital, us-disc, eu-digital, eu-disc, jp-digital (or a title id)
+        #[arg(long, default_value = "us-digital")]
+        region: String,
+        /// The world's name as the console shows it (default: the world folder's name)
+        #[arg(long)]
+        name: Option<String>,
+        /// PS3 ICON0.png (default: the world's icon.png)
+        #[arg(long)]
+        icon: Option<PathBuf>,
+        /// PS3 THUMB and the Wii U thumbnail, 64x64 (default: the world's icon.png)
+        #[arg(long)]
+        thumb: Option<PathBuf>,
+        /// PS3 only: write the save folder unencrypted (plain METADATA, no PARAM.PFD) for an emulator such as
+        /// RPCS3, which cannot read a console's protected files. A real console will not accept it.
+        #[arg(long)]
+        unencrypted: bool,
+    },
 }
 
 fn print_edition_report(report: &mctk_convert::EditionReport, out: &std::path::Path) {
@@ -203,6 +237,39 @@ enum ConsoleAction {
     Extract { save: PathBuf, out: PathBuf },
     /// Convert the save into a Java Edition world in a new folder
     ToJava { save: PathBuf, out: PathBuf },
+    /// Write a signed PlayStation 3 save folder (PARAM.SFO, METADATA, PARAM.PFD...) around a PS3 save
+    SignPs3 {
+        /// A PS3 save folder or its GAMEDATA file
+        save: PathBuf,
+        /// Folder to create the save folder in (on a USB drive: <drive>/PS3/SAVEDATA)
+        out: PathBuf,
+        /// us-digital, us-disc, eu-digital, eu-disc or jp-digital (or a title id such as NPUB31419)
+        #[arg(long, default_value = "us-digital")]
+        region: String,
+        /// The world's name as the console shows it
+        #[arg(long, default_value = "My Converted World")]
+        name: String,
+        /// PNG for ICON0.png, the menu icon (genuine saves: 320x176; default: the ICON0 of a save folder given as `save`)
+        #[arg(long)]
+        icon: Option<PathBuf>,
+        /// PNG for THUMB, the world thumbnail METADATA records (genuine: 64x64; default: the THUMB of a
+        /// save folder given as `save`, else the icon)
+        #[arg(long)]
+        thumb: Option<PathBuf>,
+        /// yyMMddHHmmss for the folder name (default: now, UTC)
+        #[arg(long)]
+        timestamp: Option<String>,
+        /// Write the folder unencrypted (plain METADATA, no PARAM.PFD) for an emulator such as RPCS3
+        #[arg(long)]
+        unencrypted: bool,
+    },
+    /// Make a PlayStation 3 save folder readable by an emulator such as RPCS3, in place: METADATA is decrypted
+    /// and PARAM.PFD removed (a real console will not accept the result; keep a copy)
+    UnprotectPs3 { folders: Vec<PathBuf> },
+    /// Check the signing of PlayStation 3 save folders (PFD hashes, METADATA)
+    VerifyPs3 { folders: Vec<PathBuf> },
+    /// Re-sign a PlayStation 3 save folder in place after its GAMEDATA changed
+    ResignPs3 { folder: PathBuf },
 }
 
 #[derive(Subcommand)]
@@ -403,6 +470,11 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         } => {
             let save = mctk_console::ConsoleSave::open(&save)?;
             println!("platform: {:?}", save.platform);
+            if save.platform == mctk_console::Platform::WiiU {
+                if let Some(ext) = mctk_console::read_wiiu_ext(&save.source) {
+                    println!("name:     {} (thumbnail {} bytes)", ext.name, ext.thumbnail.len());
+                }
+            }
             println!(
                 "archive:  version {} ({} files)",
                 save.archive.version,
@@ -486,6 +558,97 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 out.display()
             );
         }
+        Command::Console {
+            action:
+                ConsoleAction::SignPs3 {
+                    save,
+                    out,
+                    region,
+                    name,
+                    icon,
+                    thumb,
+                    timestamp,
+                    unencrypted,
+                },
+        } => {
+            use mctk_console::{Ps3Random, Ps3Region};
+            let region = match region.to_ascii_lowercase().as_str() {
+                "us-digital" | "us" => Ps3Region::UsDigital,
+                "us-disc" => Ps3Region::UsDisc,
+                "eu-digital" | "eu" => Ps3Region::EuDigital,
+                "eu-disc" => Ps3Region::EuDisc,
+                "jp-digital" | "jp" => Ps3Region::JpDigital,
+                other => Ps3Region::from_title_id(&other.to_ascii_uppercase())
+                    .ok_or_else(|| format!("unknown region '{other}'"))?,
+            };
+            // The save must be a PS3 one (a folder or its GAMEDATA); its file is signed byte for byte.
+            let parsed = mctk_console::ConsoleSave::open(&save)?;
+            if parsed.platform != mctk_console::Platform::Ps3 {
+                return Err(format!(
+                    "{} is a {:?} save; sign-ps3 needs a PS3 save (convert it to PS3 first)",
+                    save.display(),
+                    parsed.platform
+                )
+                .into());
+            }
+            let gamedata = std::fs::read(&parsed.source)?;
+            // Genuine saves name the icon ICON0.PNG; look for either spelling beside the save.
+            let beside = |names: &[&str]| {
+                let dir = if save.is_dir() { save.clone() } else { save.parent().map(PathBuf::from).unwrap_or_default() };
+                names.iter().find_map(|n| std::fs::read(dir.join(n)).ok())
+            };
+            let icon_bytes = match &icon {
+                Some(p) => std::fs::read(p)?,
+                None => beside(&["ICON0.png", "ICON0.PNG"]).ok_or(
+                    "no icon: pass --icon <png> (or a save folder that holds an ICON0.png)",
+                )?,
+            };
+            let thumb_bytes = match &thumb {
+                Some(p) => std::fs::read(p)?,
+                None => beside(&["THUMB"]).unwrap_or_else(|| icon_bytes.clone()),
+            };
+            let timestamp =
+                timestamp.unwrap_or_else(|| mctk_console::utc_timestamp(std::time::SystemTime::now()));
+            let folder = if unencrypted {
+                mctk_console::build_save_folder_unencrypted(gamedata, icon_bytes, thumb_bytes, region, &name, &timestamp)?
+            } else {
+                mctk_console::build_save_folder(gamedata, icon_bytes, thumb_bytes, region, &name, &timestamp, &Ps3Random::generate())?
+            };
+            let dest = mctk_console::write_save_folder(&out, &folder)?;
+            println!("wrote {} ({} files, {})", dest.display(), folder.files.len(), if unencrypted { "unencrypted, for an emulator" } else { "signed" });
+        }
+        Command::Console {
+            action: ConsoleAction::UnprotectPs3 { folders },
+        } => {
+            for f in &folders {
+                mctk_console::unprotect_save_folder(f)?;
+                println!("unprotected {} (METADATA plain, no PARAM.PFD)", f.display());
+            }
+        }
+        Command::Console {
+            action: ConsoleAction::ResignPs3 { folder },
+        } => {
+            mctk_console::resign_save_folder(&folder)?;
+            let n = mctk_console::verify_save_folder(&folder)?;
+            println!("re-signed {} (GAMEDATA {n} bytes)", folder.display());
+        }
+        Command::Console {
+            action: ConsoleAction::VerifyPs3 { folders },
+        } => {
+            let mut failures = 0;
+            for f in &folders {
+                match mctk_console::verify_save_folder(f) {
+                    Ok(n) => println!("OK    {}: signed correctly ({n} bytes GAMEDATA)", f.display()),
+                    Err(e) => {
+                        failures += 1;
+                        println!("FAIL  {}: {e}", f.display());
+                    }
+                }
+            }
+            if failures > 0 {
+                return Err(format!("{failures} save(s) failed verification").into());
+            }
+        }
         Command::Convert { action } => match action {
             ConvertAction::JavaToBedrock { world, out } => {
                 print_edition_report(&mctk_convert::java_to_bedrock(&world, &out)?, &out)
@@ -508,6 +671,101 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     "wrote {} (pre-1.9 format: open it in Java Edition to upgrade)",
                     out.display()
                 );
+            }
+            ConvertAction::JavaToConsole {
+                world,
+                out,
+                platform,
+                format,
+                classic_size,
+                region,
+                name,
+                icon,
+                thumb,
+                unencrypted,
+            } => {
+                use mctk_console::{Platform, Ps3Random, Ps3Region};
+                let platform = match platform.to_ascii_lowercase().as_str() {
+                    "ps3" => Platform::Ps3,
+                    "xbox360" | "xbox" | "x360" => Platform::Xbox360,
+                    "wiiu" | "wii-u" => Platform::WiiU,
+                    other => return Err(format!("unknown platform '{other}' (ps3, xbox360 or wiiu)").into()),
+                };
+                let console_format = match format.to_ascii_lowercase().as_str() {
+                    "current" => mctk_convert::ConsoleFormat::Current,
+                    "legacy" => mctk_convert::ConsoleFormat::Legacy,
+                    other => return Err(format!("unknown format '{other}' (current or legacy)").into()),
+                };
+                let options = mctk_convert::ConvertOptions { console_format, classic_world_size: classic_size, ..Default::default() };
+                let progress = mctk_convert::Progress::default();
+                let map = mctk_replace::ReplacementMap::default();
+                let name = name.unwrap_or_else(|| {
+                    world.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "World".into())
+                });
+                std::fs::create_dir_all(&out)?;
+                // The world's own icon (a 64x64 PNG) stands in for any image not given.
+                let world_icon = std::fs::read(world.join("icon.png")).ok();
+                let image = |given: &Option<PathBuf>| -> Result<Option<Vec<u8>>, Box<dyn std::error::Error>> {
+                    Ok(match given {
+                        Some(p) => Some(std::fs::read(p)?),
+                        None => world_icon.clone(),
+                    })
+                };
+                match platform {
+                    Platform::Xbox360 => {
+                        let file = out.join("savegame.dat");
+                        let report = mctk_convert::java_to_console(&world, &file, platform, &map, &options, &progress)?;
+                        println!("wrote {} ({} chunks, {} outside the world, {} unfinished left out)", file.display(), report.chunks, report.outside, report.partial);
+                    }
+                    Platform::WiiU => {
+                        let file = out.join(format!("{name}.wii"));
+                        let report = mctk_convert::java_to_console(&world, &file, platform, &map, &options, &progress)?;
+                        let ext = mctk_console::write_wiiu_ext(&file, &name, &image(&thumb)?.unwrap_or_default())?;
+                        println!(
+                            "wrote {} and {} ({} chunks, {} outside the world, {} unfinished left out)",
+                            file.display(),
+                            ext.display(),
+                            report.chunks,
+                            report.outside,
+                            report.partial
+                        );
+                    }
+                    _ => {
+                        let region = match region.to_ascii_lowercase().as_str() {
+                            "us-digital" | "us" => Ps3Region::UsDigital,
+                            "us-disc" => Ps3Region::UsDisc,
+                            "eu-digital" | "eu" => Ps3Region::EuDigital,
+                            "eu-disc" => Ps3Region::EuDisc,
+                            "jp-digital" | "jp" => Ps3Region::JpDigital,
+                            other => Ps3Region::from_title_id(&other.to_ascii_uppercase())
+                                .ok_or_else(|| format!("unknown region '{other}'"))?,
+                        };
+                        let icon_png = image(&icon)?.ok_or("no icon: pass --icon <png> (the world has no icon.png)")?;
+                        let thumb_png = image(&thumb)?.unwrap_or_else(|| icon_png.clone());
+                        // The converter writes the GAMEDATA file; it is then signed into a save folder.
+                        let stage = out.join(format!(".{name}.stage"));
+                        std::fs::create_dir_all(&stage)?;
+                        let gamedata = stage.join("GAMEDATA");
+                        let report = mctk_convert::java_to_console(&world, &gamedata, platform, &map, &options, &progress)?;
+                        let bytes = std::fs::read(&gamedata)?;
+                        std::fs::remove_dir_all(&stage)?;
+                        let stamp = mctk_console::utc_timestamp(std::time::SystemTime::now());
+                        let folder = if unencrypted {
+                            mctk_console::build_save_folder_unencrypted(bytes, icon_png, thumb_png, region, &name, &stamp)?
+                        } else {
+                            mctk_console::build_save_folder(bytes, icon_png, thumb_png, region, &name, &stamp, &Ps3Random::generate())?
+                        };
+                        let dest = mctk_console::write_save_folder(&out, &folder)?;
+                        println!(
+                            "wrote {} ({}; {} chunks, {} outside the world, {} unfinished left out)",
+                            dest.display(),
+                            if unencrypted { "unencrypted, for an emulator such as RPCS3" } else { "signed" },
+                            report.chunks,
+                            report.outside,
+                            report.partial
+                        );
+                    }
+                }
             }
         },
         Command::Prune(args) => {

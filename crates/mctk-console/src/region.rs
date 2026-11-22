@@ -6,11 +6,11 @@ use std::io::{Read, Write};
 
 use mctk_nbt::{Flavor, NamedTag};
 
-use crate::{Error, bad, rle_decode, rle_encode, xmem_decompress_all, xmem_store};
+use crate::{Error, bad, rle_decode, rle_encode, xmem_compress, xmem_decompress_all};
 
 const SECTOR: usize = 4096;
 const RLE_FLAG: u32 = 0x8000_0000;
-const WIIU_FLAG: u32 = 0x4000_0000;
+const V12_FLAG: u32 = 0x4000_0000;
 
 /// How a platform compresses chunk payloads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,6 +23,30 @@ pub enum ChunkCodec {
     Zlib,
 }
 
+/// Whether `p` is a chain of XMem frames (`u16 BE` block size, or `0xFF` + frame size + block size)
+/// that ends exactly at the end of `p` or just before a 5-byte zero terminator.
+fn is_xmem_chain(p: &[u8]) -> bool {
+    let mut pos = 0;
+    let mut frames = 0;
+    loop {
+        let rest = &p[pos..];
+        if rest.is_empty() || (rest.len() == crate::xmem::XMEM_TERMINATOR_LEN && rest.iter().all(|b| *b == 0)) {
+            return frames > 0;
+        }
+        let (header, block) = match rest {
+            [0xff, _, _, b0, b1, ..] => (5, u16::from_be_bytes([*b0, *b1]) as usize),
+            [0xff, ..] => return false,
+            [b0, b1, ..] => (2, u16::from_be_bytes([*b0, *b1]) as usize),
+            _ => return false,
+        };
+        if block == 0 || header + block > rest.len() {
+            return false;
+        }
+        pos += header + block;
+        frames += 1;
+    }
+}
+
 /// A chunk record as stored, still compressed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RawConsoleChunk {
@@ -31,17 +55,24 @@ pub struct RawConsoleChunk {
     pub decompressed_len: u32,
     pub payload: Vec<u8>,
     pub timestamp: u32,
-    /// The Wii U game's second record flag (bit 30), kept so a rewritten region keeps it.
-    pub wiiu_flag: bool,
+    /// Record flag bit 30: the chunk is in the Version 12 layout (it starts with `u16 BE 12`, not an NBT
+    /// compound). Measured on a genuine Wii U save, which mixes 1,770 unflagged NBT chunks with 599
+    /// flagged Version 12 ones, and on a converter's saves, where every chunk is flagged. Kept as read so
+    /// a rewritten region keeps it.
+    pub v12_layout: bool,
 }
 
 impl RawConsoleChunk {
-    /// Detects the platform codec from the payload: XMem streams begin with an `0xFF`
-    /// frame header (chunk data is shorter than a full 32 KiB frame), zlib streams with
-    /// `0x78`, while deflate payloads begin with a small big-endian length.
+    /// Detects the platform codec from the payload. XMem streams begin with an `0xFF` header when
+    /// the first frame is short; when it is a full 32 KiB frame (chunks of the Version 12 layout can
+    /// be that large) they are recognised by their frame chain instead: every frame's size lands exactly
+    /// on the end of the payload or on the 5-byte zero terminator, which a deflate or zlib stream
+    /// does not do. Zlib streams begin with a valid `0x78` header, deflate payloads with a small
+    /// big-endian length.
     pub fn codec(&self) -> ChunkCodec {
         match self.payload.first() {
             Some(&0xff) => ChunkCodec::XMemLzx,
+            _ if is_xmem_chain(&self.payload) => ChunkCodec::XMemLzx,
             Some(&0x78) if self.payload.get(1).is_some_and(|b| (0x78 * 256 + *b as usize) % 31 == 0) => {
                 ChunkCodec::Zlib
             }
@@ -110,18 +141,37 @@ impl RawConsoleChunk {
                 p.extend_from_slice(&deflated);
                 p
             }
-            ChunkCodec::XMemLzx => xmem_store(&rle),
+            ChunkCodec::XMemLzx => crate::xmem::terminated(xmem_compress(&rle)),
             ChunkCodec::Zlib => {
                 let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
                 e.write_all(&rle)?;
                 e.finish()?
             }
         };
-        Ok(RawConsoleChunk { rle: true, decompressed_len: raw.len() as u32, payload, timestamp, wiiu_flag: false })
+        Ok(RawConsoleChunk { rle: true, decompressed_len: raw.len() as u32, payload, timestamp, v12_layout: false })
+    }
+
+    /// The chunk in the Version 12 layout, if it is one (see [`ChunkV12`](crate::ChunkV12)), with every
+    /// field as stored (the liquid layer and ids above 255 included).
+    pub fn v12(&self) -> Result<Option<crate::ChunkV12>, Error> {
+        let bytes = self.decompress()?;
+        if crate::v12::is_v12(&bytes) { Ok(Some(crate::ChunkV12::parse(&bytes)?)) } else { Ok(None) }
+    }
+
+    /// A chunk of the Version 12 layout, built from a `Level` tree of 256-tall blocks and stored with
+    /// `codec` (run-length encoding first, then the codec) and record bit 30 set.
+    pub fn encode_v12(tag: &NamedTag, codec: ChunkCodec, timestamp: u32) -> Result<Self, Error> {
+        let raw = crate::ChunkV12::from_level_tree(tag)?.to_bytes()?;
+        let mut chunk = Self::from_stream(&raw, codec, timestamp)?;
+        chunk.v12_layout = true;
+        Ok(chunk)
     }
 
     pub fn nbt(&self) -> Result<NamedTag, Error> {
         let bytes = self.decompress()?;
+        if crate::v12::is_v12(&bytes) {
+            return Ok(crate::ChunkV12::parse(&bytes)?.to_level_tree());
+        }
         if crate::compressed::is_compressed(&bytes) {
             return crate::compressed::decode(&bytes);
         }
@@ -142,7 +192,7 @@ impl RawConsoleChunk {
                 p.extend_from_slice(&deflated);
                 p
             }
-            ChunkCodec::XMemLzx => xmem_store(&rle),
+            ChunkCodec::XMemLzx => crate::xmem::terminated(xmem_compress(&rle)),
             ChunkCodec::Zlib => {
                 let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
                 e.write_all(&rle)?;
@@ -154,7 +204,7 @@ impl RawConsoleChunk {
             decompressed_len: raw.len() as u32,
             payload,
             timestamp,
-            wiiu_flag: false,
+            v12_layout: false,
         })
     }
 }
@@ -214,8 +264,8 @@ impl ConsoleRegion {
             return Err(bad(format!("chunk ({lx}, {lz}) points outside the region")));
         }
         let head = word(&self.data, offset, self.little);
-        // The Wii U game sets a second flag (bit 30) on some records; it is not part of the length.
-        let len = (head & !(RLE_FLAG | WIIU_FLAG)) as usize;
+        // Bit 30 marks a Version 12 chunk; like the RLE bit it is not part of the length.
+        let len = (head & !(RLE_FLAG | V12_FLAG)) as usize;
         let payload = self
             .data
             .get(offset + 8..offset + 8 + len)
@@ -225,7 +275,7 @@ impl ConsoleRegion {
             decompressed_len: word(&self.data, offset + 4, self.little),
             payload: payload.to_vec(),
             timestamp: word(&self.data, SECTOR + 4 * i, self.little),
-            wiiu_flag: head & WIIU_FLAG != 0,
+            v12_layout: head & V12_FLAG != 0,
         }))
     }
 }
@@ -269,7 +319,7 @@ impl ConsoleRegionBuilder {
                 .ok()
                 .filter(|&l| l & RLE_FLAG == 0)
                 .ok_or_else(|| bad("chunk payload too large"))?;
-            out.extend_from_slice(&put(len | if c.rle { RLE_FLAG } else { 0 } | if c.wiiu_flag { WIIU_FLAG } else { 0 }, self.little));
+            out.extend_from_slice(&put(len | if c.rle { RLE_FLAG } else { 0 } | if c.v12_layout { V12_FLAG } else { 0 }, self.little));
             out.extend_from_slice(&put(c.decompressed_len, self.little));
             out.extend_from_slice(&c.payload);
             out.resize(out.len().div_ceil(SECTOR) * SECTOR, 0);

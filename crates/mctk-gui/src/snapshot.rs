@@ -225,8 +225,8 @@ fn snapshot_map_stages() {
         .and_then(|(a, b)| Some((a.trim().parse::<f32>().ok()?, b.trim().parse::<f32>().ok()?)))
         .unwrap_or((0.0, 0.0));
     let scenes: &[(&str, String)] = &[
-        ("01_atlas_far", format!("x=0;z=0;zoom=0.12;style=auto")),
-        ("02_atlas_blend", format!("x=0;z=0;zoom=0.32;style=auto")),
+        ("01_atlas_far", "x=0;z=0;zoom=0.12;style=auto".to_string()),
+        ("02_atlas_blend", "x=0;z=0;zoom=0.32;style=auto".to_string()),
         ("05_terrain_mid", format!("x={x};z={z};zoom=2;style=auto")),
         ("06_above_z4", format!("x={x};z={z};zoom=4;style=auto")),
         ("06b_above_z8", format!("x={x};z={z};zoom=8;style=auto")),

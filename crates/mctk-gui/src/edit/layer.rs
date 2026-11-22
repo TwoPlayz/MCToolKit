@@ -161,6 +161,11 @@ impl EditLayer {
         }
     }
 
+    /// The steps that can be undone (newest first) and redone (the next one first), by name.
+    pub fn history(&self) -> (Vec<String>, Vec<String>) {
+        (self.undo.iter().rev().map(|s| s.label.clone()).collect(), self.redo.iter().rev().map(|s| s.label.clone()).collect())
+    }
+
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty()
     }
@@ -221,6 +226,24 @@ impl EditLayer {
     /// The deleted chunks of a dimension (x, z).
     pub fn deleted_in(&self, dim: &str) -> Vec<(i32, i32)> {
         self.chunks().into_iter().filter(|c| c.0 == dim && self.is_deleted(c)).map(|(_, x, z)| (x, z)).collect()
+    }
+
+    /// A chunk was saved from a tab that showed it with these changes: the layer lets go of it (what can be
+    /// undone goes with it, when there was anything of the chunk).
+    pub fn forget(&mut self, id: &ChunkId) {
+        let had = self.has_chunk(id);
+        self.java.remove(id);
+        self.console.remove(id);
+        let keys: Vec<Vec<u8>> = self.bedrock_chunk.iter().filter(|(_, c)| *c == id).map(|(k, _)| k.clone()).collect();
+        for k in keys {
+            self.bedrock.remove(&k);
+            self.bedrock_chunk.remove(&k);
+        }
+        if had {
+            self.undo.clear();
+            self.redo.clear();
+            self.generation += 1;
+        }
     }
 
     /// After saving: nothing waits any more, and nothing can be undone.

@@ -55,10 +55,6 @@ fn short(id: &str) -> &str {
     id.rsplit(':').next().unwrap_or(id)
 }
 
-pub fn max_level(id: &str) -> i64 {
-    ALL.iter().find(|e| e.0 == short(id)).map_or(5, |e| e.1)
-}
-
 /// `minecraft:fire_aspect` as "Fire Aspect".
 pub fn name(id: &str) -> String {
     crate::item_picker::display_name(id)
@@ -461,6 +457,11 @@ fn add_list(ui: &mut egui::Ui, free: &[&(&str, i64, i16)], w: f32) -> Option<(St
             }
         });
     pick
+}
+
+#[cfg(test)]
+pub fn max_level(id: &str) -> i64 {
+    ALL.iter().find(|e| e.0 == short(id)).map_or(5, |e| e.1)
 }
 
 #[cfg(test)]

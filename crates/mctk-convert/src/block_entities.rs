@@ -2,7 +2,7 @@
 //! furnaces, hoppers, campfires, comparators, mob spawners and signs.
 //!
 //! Each conversion maps one compound to the other; the shapes were read from worlds the two games
-//! saved (see `examples/be_survey.rs`, `examples/be_dump.rs`). A kind this module does not know
+//! saved. A kind this module does not know
 //! comes back as `None` and is left to the caller.
 //!
 //! Positions are not touched here (the caller shifts them). A few kinds depend on the block they

@@ -170,12 +170,12 @@ mod tests {
             let back = crate::gpu_world::entity_places(&ws.path, we, &ws.map.edits.read().unwrap(), 2, 2);
             assert_eq!(back.len(), shown.len(), "{label}: undo brings it back");
             // The brush: a ball of glass up in the air.
-            ws.run_edit(EditTool::Brush { center: [8, 220, 8], radius: 3, sphere: true, state: mctk_java::BlockState::new("minecraft:glass"), stroke: false }).unwrap();
+            ws.run_edit(EditTool::Brush { center: [8, 220, 8], radius: 3, sphere: true, palette: vec![mctk_java::BlockState::new("minecraft:glass")], only: Default::default(), stroke: false }).unwrap();
             let ball = read(&ws, ([5, 217, 5], [11, 223, 11])).0;
             // A stroke (dragged): three balls, one step to undo.
             let line = ([0, 240, 0], [30, 242, 2]);
             for (i, x) in [3, 13, 23].into_iter().enumerate() {
-                ws.run_edit(EditTool::Brush { center: [x, 241, 1], radius: 1, sphere: false, state: mctk_java::BlockState::new("minecraft:stone"), stroke: i > 0 }).unwrap();
+                ws.run_edit(EditTool::Brush { center: [x, 241, 1], radius: 1, sphere: false, palette: vec![mctk_java::BlockState::new("minecraft:stone")], only: Default::default(), stroke: i > 0 }).unwrap();
             }
             assert_eq!(read(&ws, line).0, 81, "{label}: three cubes painted");
             ws.show_explorer = true;
@@ -210,14 +210,14 @@ mod tests {
             let solid = |ws: &Workspace, bx: ([i32; 3], [i32; 3])| crate::gpu_world::read_box(&ws.path, we, &ws.map.edits.read().unwrap(), bx.0, bx.1).0;
             assert_eq!(solid(&ws, a), 0, "{label}: the sky is empty there");
             ws.map.sel_box = Some(a);
-            ws.run_edit(EditTool::Fill(gold.clone())).unwrap();
+            ws.run_edit(EditTool::Fill(vec![gold.clone()])).unwrap();
             assert_eq!(solid(&ws, a), 64, "{label}: filled at once");
             ws.copy_box(false).unwrap();
             let place = super::transform::Placement::default();
             ws.run_edit(EditTool::Paste { origin: b_at, place, with_air: true }).unwrap();
             assert_eq!(solid(&ws, b), 64, "{label}: pasted");
             ws.map.sel_box = Some(b);
-            ws.run_edit(EditTool::Replace { from: vec!["minecraft:gold_block".into()], to: mctk_java::BlockState::new("minecraft:diamond_block"), keep: true }).unwrap();
+            ws.run_edit(EditTool::Replace { from: vec!["minecraft:gold_block".into()], to: vec![mctk_java::BlockState::new("minecraft:diamond_block")], keep: true }).unwrap();
             let names: Vec<String> = states(&ws, b).palette.iter().map(|s| s.name.clone()).collect();
             assert_eq!(names, vec!["minecraft:air".to_string(), "minecraft:diamond_block".to_string()], "{label}: replaced");
 
@@ -225,11 +225,11 @@ mod tests {
             // still facing east.
             let stair = crate::edit::states::default_state("minecraft:oak_stairs").with("facing", "north");
             ws.map.sel_box = Some(stair_at);
-            ws.run_edit(EditTool::Fill(stair)).unwrap();
+            ws.run_edit(EditTool::Fill(vec![stair])).unwrap();
             ws.copy_box(false).unwrap();
             ws.run_edit(EditTool::Paste { origin: turned.0, place: super::transform::Placement { turns: 1, mirror: false }, with_air: false }).unwrap();
             ws.map.sel_box = Some(turned);
-            ws.run_edit(EditTool::Replace { from: vec!["minecraft:oak_stairs".into()], to: crate::edit::states::default_state("minecraft:cobblestone_stairs"), keep: true }).unwrap();
+            ws.run_edit(EditTool::Replace { from: vec!["minecraft:oak_stairs".into()], to: vec![crate::edit::states::default_state("minecraft:cobblestone_stairs")], keep: true }).unwrap();
             let got = states(&ws, turned).get([0, 0, 0]).clone();
             assert_eq!((got.name.as_str(), got.properties.get("facing").map(String::as_str)), ("minecraft:cobblestone_stairs", Some("east")), "{label}: turned and kept facing");
 
@@ -282,7 +282,7 @@ mod tests {
             let one = (at, at);
             let state = |ws: &Workspace| states(ws, one).get([0, 0, 0]).clone();
             ws.run_edit(EditTool::SetBlock(at, crate::edit::states::default_state("minecraft:oak_stairs").with("facing", "north"))).unwrap();
-            ws.run_edit(EditTool::TurnBlock(at)).unwrap();
+            ws.run_edit(EditTool::BlockProps(at, vec![("facing".into(), "east".into())])).unwrap();
             let s = state(&ws);
             assert_eq!((s.name.as_str(), s.properties.get("facing").map(String::as_str)), ("minecraft:oak_stairs", Some("east")), "{label}: turned");
             if ed != UiEdition::Xbox360 {
@@ -291,8 +291,35 @@ mod tests {
             }
             ws.run_edit(EditTool::SetBlock(at, mctk_java::BlockState::new("minecraft:gold_block"))).unwrap();
             assert_eq!(state(&ws).name, "minecraft:gold_block", "{label}: changed");
-            ws.run_edit(EditTool::SetBlock(at, mctk_java::BlockState::air())).unwrap();
-            assert!(state(&ws).name.ends_with("air"), "{label}: deleted");
+            // Moved a block over: gone from where it was, there where it went.
+            let there = [at[0] + 1, at[1], at[2]];
+            ws.run_edit(EditTool::MoveBlock(at, there)).unwrap();
+            assert!(state(&ws).name.ends_with("air"), "{label}: moved away");
+            assert_eq!(states(&ws, (there, there)).get([0, 0, 0]).name, "minecraft:gold_block", "{label}: moved to");
+            ws.run_edit(EditTool::SetBlock(there, mctk_java::BlockState::air())).unwrap();
+            assert!(states(&ws, (there, there)).get([0, 0, 0]).name.ends_with("air"), "{label}: deleted");
+            // A box moved: filled, copied, then cleared from where it was as it is placed elsewhere.
+            let from = ([at[0], at[1] + 8, at[2]], [at[0] + 1, at[1] + 9, at[2] + 1]);
+            let to = [at[0] + 6, at[1] + 8, at[2]];
+            ws.map.sel_box = Some(from);
+            ws.run_edit(EditTool::Fill(vec![mctk_java::BlockState::new("minecraft:gold_block")])).unwrap();
+            ws.copy_box(false).unwrap();
+            ws.run_edit(EditTool::MoveBox { from, origin: to, place: Default::default(), with_air: true }).unwrap();
+            let solid = |ws: &Workspace, b: ([i32; 3], [i32; 3])| crate::gpu_world::read_box(&ws.path, we, &ws.map.edits.read().unwrap(), b.0, b.1).0;
+            // A group of stairs: one property set on all of them, then the whole group turned (each
+            // stair turned with it: east is south after a quarter turn clockwise).
+            let sb = ([at[0], at[1] + 12, at[2]], [at[0] + 1, at[1] + 12, at[2]]);
+            ws.map.sel_box = Some(sb);
+            ws.run_edit(EditTool::Fill(vec![crate::edit::states::default_state("minecraft:oak_stairs").with("facing", "north")])).unwrap();
+            ws.run_edit(EditTool::BoxProps { bounds: sb, props: vec![("facing".into(), "east".into())] }).unwrap();
+            let facing = |ws: &Workspace, b: ([i32; 3], [i32; 3]), x: i32| states(ws, b).get([x, 0, 0]).properties.get("facing").cloned();
+            assert_eq!((facing(&ws, sb, 0), facing(&ws, sb, 1)), (Some("east".into()), Some("east".into())), "{label}: every stair set");
+            ws.run_edit(EditTool::TurnBox { from: sb, turns: 1, stroke: false }).unwrap();
+            let turned = super::tools::turned_box(sb.0, sb.1, 1);
+            let c = states(&ws, turned);
+            assert!(c.get([0, 0, 0]).properties.get("facing").map(String::as_str) == Some("south") && c.get([0, 0, 1]).properties.get("facing").map(String::as_str) == Some("south"), "{label}: the group turned with its stairs");
+            assert_eq!(solid(&ws, from), 0, "{label}: the box left where it was");
+            assert_eq!(solid(&ws, (to, [to[0] + 1, to[1] + 1, to[2] + 1])), 8, "{label}: and is where it was put");
 
             let mobs = |ws: &Workspace| crate::gpu_world::entity_places(&ws.path, we, &ws.map.edits.read().unwrap(), 2, 0);
             let before = mobs(&ws);
@@ -302,8 +329,53 @@ mod tests {
             };
             let zombie = find(&ws, "minecraft:zombie");
             let p = zombie.first().expect("the zoo's zombie").pos;
-            ws.run_edit(EditTool::TurnEntity(p)).unwrap();
-            assert_eq!(mobs(&ws).len(), before.len(), "{label}: turned, not lost");
+            // Moved three blocks over, then turned to face a direction (free, not a quarter turn).
+            let q = [p[0] + 3.0, p[1], p[2]];
+            ws.run_edit(EditTool::MoveEntity(p, q)).unwrap();
+            assert_eq!(mobs(&ws).len(), before.len(), "{label}: moved, not lost");
+            let moved = find(&ws, "minecraft:zombie");
+            assert!((moved.first().expect("still a zombie").pos[0] - q[0]).abs() < 0.01, "{label}: the zombie is where it was put");
+            ws.run_edit(EditTool::SetYaw { at: q, yaw: 123.0, stroke: false }).unwrap();
+            ws.run_edit(EditTool::SetYaw { at: q, yaw: 200.0, stroke: true }).unwrap();
+            assert_eq!(mobs(&ws).len(), before.len(), "{label}: turned freely, not lost");
+            if ed == UiEdition::Java {
+                ws.run_edit(EditTool::Ride(q, "minecraft:chicken".into())).unwrap();
+                assert_eq!(mobs(&ws).len(), before.len(), "{label}: a rider is part of its mount");
+            }
+            // A lingering potion cloud: placed in a Java world, and said not to be in the others.
+            let said = ws.run_edit(EditTool::PlaceCloud { at: [q[0], q[1] + 1.0, q[2]], cloud: Default::default() }).unwrap();
+            assert_eq!(said.starts_with("Placed a potion cloud"), ed == UiEdition::Java, "{label}: {said}");
+            if ed == UiEdition::Java {
+                // A mob and an item put down by hand: each is another entity in the world.
+                let n = mobs(&ws).len();
+                let said = ws.run_edit(EditTool::PlaceMob { at: [q[0] + 2.5, q[1], q[2]], id: "minecraft:pig".into() }).unwrap();
+                assert!(said.starts_with("Placed"), "{label}: {said}");
+                let said = ws.run_edit(EditTool::PlaceEntity { cell: [(q[0] + 3.5).floor() as i32, q[1].floor() as i32, q[2].floor() as i32], id: "minecraft:armor_stand".into(), facing: None }).unwrap();
+                assert!(said.starts_with("Placed"), "{label}: {said}");
+                assert!(mobs(&ws).len() > n, "{label}: the new ones are in the world");
+                // An armor stand gets a helmet, an item frame its item.
+                let stand = [(q[0] + 3.5).floor() + 0.5, q[1].floor(), (q[2]).floor() + 0.5];
+                let said = ws.run_edit(EditTool::Change { at: stand, path: Vec::new(), change: crate::workspace::EntityChange::Equip(crate::mob_edit::Slot::Head, Some("minecraft:iron_helmet".into())) }).unwrap();
+                assert!(said.starts_with("Changed"), "{label}: {said}");
+                // The cloud changed: its settings are edited where it stands.
+                let changed = crate::cloud::Cloud { radius: 6.0, ..Default::default() };
+                let said = ws.run_edit(EditTool::UpdateCloud { at: [q[0], q[1] + 1.0, q[2]], cloud: changed, stroke: false }).unwrap();
+                assert!(said.starts_with("Changed the potion cloud"), "{label}: {said}");
+                // A mob put on another as its rider leaves the world's list to ride.
+                let all = mobs(&ws);
+                let others: Vec<[f64; 3]> = all.iter().copied().filter(|m| (m[0] - q[0]).abs() > 0.01 || (m[2] - q[2]).abs() > 0.01).collect();
+                if let Some(rider) = others.first().copied() {
+                    let said = ws.run_edit(EditTool::MountMob { mount: q, path: Vec::new(), rider }).unwrap();
+                    assert!(said.starts_with("Put it on as a rider"), "{label}: {said}");
+                    assert!(mobs(&ws).len() < all.len(), "{label}: the rider is saved with its mount");
+                    // Unmounted, the riders stand in the world again.
+                    let before = mobs(&ws).len();
+                    let said = ws.run_edit(EditTool::Unmount { mount: q, path: Vec::new(), seat: None, delete: false }).unwrap();
+                    assert!(said.starts_with("Took it off"), "{label}: {said}");
+                    assert!(mobs(&ws).len() > before, "{label}: the riders are back in the world");
+                }
+            }
+            let p = q;
             if matches!(ed, UiEdition::Java | UiEdition::Bedrock) {
                 let creepers = find(&ws, "minecraft:creeper").len();
                 ws.run_edit(EditTool::RetypeEntity(p, "minecraft:creeper".into())).unwrap();
@@ -327,7 +399,7 @@ mod tests {
             let we = ed.world();
             let mut ws = Workspace::open(&path, ed, &crate::settings::Settings::default(), false, false).expect("opens");
             ws.map.sel_box = Some(a);
-            ws.run_edit(EditTool::Fill(mctk_java::BlockState::new("minecraft:gold_block"))).unwrap();
+            ws.run_edit(EditTool::Fill(vec![mctk_java::BlockState::new("minecraft:gold_block")])).unwrap();
             let find = |center: [f32; 3], radius: f32, query: &str, blocks: bool, mobs: bool| {
                 let (done, total, stop) = (AtomicUsize::new(0), AtomicUsize::new(0), AtomicBool::new(false));
                 let found = crate::gpu_world::search(&ws.path, we, "minecraft:overworld", &ws.map.edits, center, radius, query, blocks, mobs, &done, &total, &stop).expect("searches");

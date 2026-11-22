@@ -79,10 +79,49 @@ impl<R: Read> Reader<'_, R> {
         }
     }
 
+    // The recursive path (payload, list, compound) is kept to small frames so that the nesting limit is
+    // reached before a small thread stack runs out; the rest lives in `leaf`.
     fn payload(&mut self, ty: TagType, depth: usize) -> Result<Tag, Error> {
         if depth > MAX_DEPTH {
             return Err(Error::TooDeep(MAX_DEPTH));
         }
+        match ty {
+            TagType::List => self.list(depth),
+            TagType::Compound => self.compound(depth),
+            _ => self.leaf(ty),
+        }
+    }
+
+    fn list(&mut self, depth: usize) -> Result<Tag, Error> {
+        let id = self.u8()?;
+        let element = TagType::from_id(id).ok_or(Error::UnknownTagType(id))?;
+        let n = self.len()?;
+        if element == TagType::End && n > 0 {
+            return Err(Error::EndInList(n));
+        }
+        let mut items = Vec::with_capacity(n.min(4096));
+        for _ in 0..n {
+            items.push(self.payload(element, depth + 1)?);
+        }
+        Ok(Tag::List(List { element, items }))
+    }
+
+    fn compound(&mut self, depth: usize) -> Result<Tag, Error> {
+        let mut map = Compound::new();
+        loop {
+            let id = self.u8()?;
+            let ty = TagType::from_id(id).ok_or(Error::UnknownTagType(id))?;
+            if ty == TagType::End {
+                break;
+            }
+            let name = self.string()?;
+            let value = self.payload(ty, depth + 1)?;
+            map.insert(name, value);
+        }
+        Ok(Tag::Compound(map))
+    }
+
+    fn leaf(&mut self, ty: TagType) -> Result<Tag, Error> {
         Ok(match ty {
             TagType::End => return Err(Error::UnknownTagType(0)),
             TagType::Byte => Tag::Byte(self.u8()? as i8),
@@ -96,33 +135,7 @@ impl<R: Read> Reader<'_, R> {
                 Tag::ByteArray(self.bytes(n)?.into_iter().map(|b| b as i8).collect())
             }
             TagType::String => Tag::String(self.string()?),
-            TagType::List => {
-                let id = self.u8()?;
-                let element = TagType::from_id(id).ok_or(Error::UnknownTagType(id))?;
-                let n = self.len()?;
-                if element == TagType::End && n > 0 {
-                    return Err(Error::EndInList(n));
-                }
-                let mut items = Vec::with_capacity(n.min(4096));
-                for _ in 0..n {
-                    items.push(self.payload(element, depth + 1)?);
-                }
-                Tag::List(List { element, items })
-            }
-            TagType::Compound => {
-                let mut map = Compound::new();
-                loop {
-                    let id = self.u8()?;
-                    let ty = TagType::from_id(id).ok_or(Error::UnknownTagType(id))?;
-                    if ty == TagType::End {
-                        break;
-                    }
-                    let name = self.string()?;
-                    let value = self.payload(ty, depth + 1)?;
-                    map.insert(name, value);
-                }
-                Tag::Compound(map)
-            }
+            TagType::List | TagType::Compound => unreachable!("handled by payload"),
             TagType::IntArray => {
                 let n = self.len()?;
                 let raw = self.bytes(n.checked_mul(4).ok_or(Error::BadLength(n as i64))?)?;

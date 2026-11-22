@@ -15,5 +15,3 @@ mctk-bedrock.workspace = true
 indexmap.workspace = true
 thiserror.workspace = true
 
-[dev-dependencies]
-flate2.workspace = true

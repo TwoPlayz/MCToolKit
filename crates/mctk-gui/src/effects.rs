@@ -306,6 +306,22 @@ fn make(style: Style, id: &str, amplifier: i64, duration: i64) -> Compound {
     e
 }
 
+/// An effect for a lingering cloud, in the layout of a Java world of `data_version`: named from
+/// 1.20.2 on, numbered before. Effects with no number in the old layout are given as speed.
+pub fn cloud_effect(data_version: i64, id: &str, amplifier: i64, duration: i64) -> Compound {
+    make(if data_version >= DV_NAMED { Style::Named } else { Style::Numbered }, id, amplifier, duration)
+}
+
+/// The name of Java's effect with a number (from 1), as worlds before 1.20.2 keep them.
+pub fn java_effect_name(n: i64) -> Option<&'static str> {
+    usize::try_from(n - 1).ok().and_then(|k| JAVA_NUMBERED.get(k)).copied()
+}
+
+/// The Java effects that can be given a cloud (named; before 1.20.2 only the first 33 have numbers).
+pub fn cloud_effect_names() -> &'static [&'static str] {
+    &JAVA_NAMED
+}
+
 /// Ticks as the game shows time left: "1:30", "1:00:00", "∞".
 pub fn time_text(ticks: i64) -> String {
     if ticks < 0 {
@@ -419,7 +435,7 @@ impl PotionEdit {
 // ---------------------------------------------------------------------------------------------
 
 /// Paints an effect's picture in gray (the menus' rows), or in color (the list to add from).
-fn paint_effect(p: &eframe::egui::Painter, r: eframe::egui::Rect, id: &str, gray: bool, ink: eframe::egui::Color32) {
+pub fn paint_effect(p: &eframe::egui::Painter, r: eframe::egui::Rect, id: &str, gray: bool, ink: eframe::egui::Color32) {
     let drawn = icon_file(id).is_some_and(|f| if gray { crate::icons::gray_image(p, r, &f) } else { crate::icons::file_image(p, r, &f) });
     if !drawn {
         p.circle_stroke(r.center(), r.width() * 0.35, eframe::egui::Stroke::new(1.3_f32, ink));

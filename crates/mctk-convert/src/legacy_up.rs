@@ -9,6 +9,9 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+
+/// One converted chunk: its position, the chunk, its entities chunk (when it has one), notes and a count.
+type ChunkResult = (ChunkPos, RawChunk, Option<RawChunk>, Notes, u64);
 use std::sync::atomic::Ordering;
 
 use indexmap::IndexMap;
@@ -162,10 +165,18 @@ fn attribute_name(n: &str) -> String {
 pub(crate) fn item(it: &Compound, notes: &mut Notes) -> Option<Compound> {
     let tables = LegacyTables::get();
     let damage = num(it, "Damage").unwrap_or(0);
-    let (name, extra): (String, Compound) = match it.get("id") {
-        Some(Tag::String(n)) => (n.clone(), Compound::new()),
-        Some(t) => {
-            let id = t.as_i64()? as i16;
+    // The current console games write the id as text: the number (`"306"`) or the 1.12 name (`minecraft:planks`).
+    let numeric = match it.get("id") {
+        Some(Tag::String(n)) => n.parse::<i16>().ok().or_else(|| {
+            let legacy = mctk_mapping::legacy::legacy();
+            (legacy.numeric_item(n).is_none()).then(|| legacy.numeric_id(n)).flatten().map(|v| v as i16)
+        }),
+        Some(t) => Some(t.as_i64()? as i16),
+        None => return None,
+    };
+    let (name, extra): (String, Compound) = match (it.get("id"), numeric) {
+        (Some(Tag::String(n)), None) => (n.clone(), Compound::new()),
+        (Some(_), Some(id)) => {
             let mut tag = Compound::new();
             if id == 373 {
                 let (item, potion) = potion(damage);
@@ -188,7 +199,7 @@ pub(crate) fn item(it: &Compound, notes: &mut Notes) -> Option<Compound> {
                 (info.name.clone(), tag)
             }
         }
-        None => return None,
+        _ => return None,
     };
     let mut tag = extra;
     if let Some(Tag::Compound(old)) = it.get("tag") {
@@ -327,9 +338,29 @@ const ENTITIES: &[(&str, &str)] = &[
     ("EnderCrystal", "end_crystal"),
 ];
 
+/// The names the current console games give mobs and objects that Java names differently (the 1.12 ones).
+const CURRENT_ENTITY_NAMES: &[(&str, &str)] = &[
+    ("zombie_pigman", "zombified_piglin"),
+    ("villager_golem", "iron_golem"),
+    ("evocation_illager", "evoker"),
+    ("vindication_illager", "vindicator"),
+    ("illusion_illager", "illusioner"),
+    ("ender_crystal", "end_crystal"),
+    ("xp_orb", "experience_orb"),
+    ("xp_bottle", "experience_bottle"),
+    ("eye_of_ender_signal", "eye_of_ender"),
+    ("fish", "cod"),
+    ("tropicalfish", "tropical_fish"),
+    ("snowman", "snow_golem"),
+    ("commandblock_minecart", "command_block_minecart"),
+    ("fireworks_rocket", "firework_rocket"),
+    ("ender_pearl", "ender_pearl"),
+];
+
 pub(crate) fn entity_id(old: &str) -> Option<String> {
-    if old.starts_with("minecraft:") {
-        return Some(old.to_string());
+    if let Some(bare) = old.strip_prefix("minecraft:") {
+        let name = CURRENT_ENTITY_NAMES.iter().find(|(c, _)| *c == bare).map_or(bare, |(_, java)| *java);
+        return Some(format!("minecraft:{name}"));
     }
     ENTITIES.iter().find(|(o, _)| *o == old).map(|(_, n)| format!("minecraft:{n}"))
 }
@@ -385,6 +416,13 @@ fn living(e: &mut Compound, notes: &mut Notes) {
         e.shift_remove("UUIDMost");
         e.shift_remove("UUIDLeast");
         e.insert("UUID".into(), uuid_tag(most, least));
+    }
+    // The current console games hold the UUID as text; what is no UUID (they fill in a placeholder) is dropped.
+    if let Some(Tag::String(text)) = e.get("UUID").cloned() {
+        e.shift_remove("UUID");
+        if let Some(u) = parse_uuid(&text) {
+            e.insert("UUID".into(), u);
+        }
     }
     if let Some(h) = e.get("HealF").and_then(Tag::as_f64).or_else(|| e.get("Health").and_then(Tag::as_f64)) {
         e.insert("Health".into(), Tag::Float(h as f32));
@@ -617,8 +655,9 @@ const BLOCK_ENTITIES: &[(&str, &str)] = &[
 ];
 
 pub(crate) fn block_entity_name(old: &str) -> Option<String> {
-    if old.starts_with("minecraft:") {
-        return Some(old.to_string());
+    if let Some(bare) = old.strip_prefix("minecraft:") {
+        // the current console games use 1.12's names: `noteblock` is Java's `note_block`
+        return Some(if bare == "noteblock" { "minecraft:note_block".to_string() } else { old.to_string() });
     }
     BLOCK_ENTITIES.iter().find(|(o, _)| *o == old).map(|(_, n)| format!("minecraft:{n}"))
 }
@@ -990,7 +1029,7 @@ pub(crate) fn chunk(c: &ConsoleChunk, dimension: i32, dv: i32, reg: &Registry, n
                     }
                     if id == 140 {
                         let item = by_pos.get(&(bx + wx, wy, bz + wz)).and_then(|te| {
-                            let item_id = te.get("Item").and_then(|i| i.as_i64().or_else(|| None));
+                            let item_id = te.get("Item").and_then(|i| i.as_i64());
                             item_id.and_then(|i| t.item(i as i16, num(te, "Data").unwrap_or(0) as i16)).map(|i| i.name.clone())
                         });
                         if let Some(name) = item {
@@ -1254,7 +1293,7 @@ pub fn console_to_modern(
         });
         // Chunks are converted on all cores, a region at a time.
         let coords: Vec<(usize, usize)> = region.chunks().collect();
-        let results: Vec<Option<(ChunkPos, RawChunk, Option<RawChunk>, Notes, u64)>> = std::thread::scope(|scope| {
+        let results: Vec<Option<ChunkResult>> = std::thread::scope(|scope| {
             let workers = std::thread::available_parallelism().map_or(4, |n| n.get());
             let per = coords.len().div_ceil(workers).max(1);
             let handles: Vec<_> = coords
@@ -1492,6 +1531,46 @@ mod tests {
         let ench = tag.get("Enchantments").and_then(Tag::as_list).unwrap();
         assert_eq!(ench.get(0).unwrap().get("id"), Some(&s("minecraft:sharpness")));
         assert!(notes.0.is_empty());
+    }
+
+    /// Saves of the current console games (and the games' own re-saves) hold item ids and mob names as text.
+    #[test]
+    fn the_current_console_dialect_is_read() {
+        let mut notes = Notes::default();
+        let stack = |id: &str, damage: i16| {
+            Compound::from([
+                ("Slot".to_string(), Tag::Byte(0)),
+                ("id".to_string(), s(id)),
+                ("Count".to_string(), Tag::Byte(1)),
+                ("Damage".to_string(), Tag::Short(damage)),
+            ])
+        };
+        let id_of = |c: Option<Compound>| c.and_then(|c| c.get("id").and_then(Tag::as_str).map(str::to_string));
+        // a number as text, and the 1.12 name, are the same item
+        assert_eq!(id_of(item(&stack("5", 4), &mut notes)).as_deref(), Some("minecraft:acacia_planks"));
+        assert_eq!(id_of(item(&stack("minecraft:planks", 4), &mut notes)).as_deref(), Some("minecraft:acacia_planks"));
+        assert_eq!(id_of(item(&stack("minecraft:apple", 0), &mut notes)).as_deref(), Some("minecraft:apple"));
+        assert_eq!(id_of(item(&stack("minecraft:log2", 0), &mut notes)).as_deref(), Some("minecraft:acacia_log"));
+        // a current Java name is kept
+        assert_eq!(id_of(item(&stack("minecraft:diamond", 0), &mut notes)).as_deref(), Some("minecraft:diamond"));
+        // mobs: 1.12 names and a text UUID
+        assert_eq!(entity_id("minecraft:zombie_pigman").as_deref(), Some("minecraft:zombified_piglin"));
+        assert_eq!(entity_id("minecraft:villager_golem").as_deref(), Some("minecraft:iron_golem"));
+        assert_eq!(entity_id("minecraft:xp_orb").as_deref(), Some("minecraft:experience_orb"));
+        assert_eq!(entity_id("minecraft:bat").as_deref(), Some("minecraft:bat"));
+        let mut mob = Compound::from([
+            ("id".to_string(), s("minecraft:zombie_pigman")),
+            ("UUID".to_string(), s("00000001000000020000000300000004")),
+            ("Health".to_string(), Tag::Float(20.0)),
+        ]);
+        assert!(entity(&mut mob, &mut notes));
+        assert_eq!(mob.get("id"), Some(&s("minecraft:zombified_piglin")));
+        assert_eq!(mob.get("UUID"), Some(&Tag::IntArray(vec![1, 2, 3, 4])));
+        let mut placeholder = Compound::from([("id".to_string(), s("minecraft:cow")), ("UUID".to_string(), s("ent00000017000012340000567800009abc"))]);
+        assert!(entity(&mut placeholder, &mut notes));
+        assert!(placeholder.get("UUID").is_none(), "a placeholder is no UUID");
+        assert_eq!(block_entity_name("minecraft:noteblock").as_deref(), Some("minecraft:note_block"));
+        assert_eq!(block_entity_name("minecraft:chest").as_deref(), Some("minecraft:chest"));
     }
 
     #[test]

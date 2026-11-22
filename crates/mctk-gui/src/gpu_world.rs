@@ -138,6 +138,8 @@ pub struct Blocks {
     /// Where its barrier blocks are (world places): never drawn as blocks, shown by their
     /// icon as the game does (see `World::barriers_near`).
     barriers: Vec<[i32; 3]>,
+    /// What the viewer asks of its entities every frame, worked out once (see [Blocks::seen]).
+    seen: std::sync::OnceLock<Seen>,
 }
 
 /// The entities in a list of them (an `Entities` tag), those within the Slicer's heights.
@@ -249,11 +251,6 @@ thread_local! {
     static IDS: std::cell::RefCell<HashMap<String, u16>> = Default::default();
 }
 
-/// The map's number for a block name (0 for air).
-fn id_of(name: &str) -> u16 {
-    id_of_state(name, "")
-}
-
 /// The map's number for a block name in a full state (`props`, see `world::intern_state`).
 fn id_of_state(name: &str, props: &str) -> u16 {
     let n = name.trim_start_matches("minecraft:");
@@ -350,7 +347,7 @@ fn java_blocks(root: mctk_nbt::NamedTag, extras: HashMap<(u8, i32, u8), Arc<mctk
         };
         sections[(sy - min) as usize] = ids;
     }
-    Some(Blocks { min_section: min, sections, extras, entities, barriers: Vec::new() })
+    Some(Blocks { min_section: min, sections, extras, entities, barriers: Vec::new(), seen: Default::default() })
 }
 
 /// Whether an entity stands at a height `keep` allows (one with no position is kept).
@@ -575,7 +572,7 @@ fn bedrock_blocks<'a>(get: &dyn Fn(&[u8]) -> Option<&'a [u8]>, dim: mctk_bedrock
         }
         sections[si] = Some(out.into_boxed_slice());
     }
-    Some(Blocks { min_section: lo, sections, extras, entities, barriers: Vec::new() })
+    Some(Blocks { min_section: lo, sections, extras, entities, barriers: Vec::new(), seen: Default::default() })
 }
 
 /// The most blocks the paste preview draws (a bigger copy shows as its box only).
@@ -600,7 +597,7 @@ pub fn ghost_chunks(clip: &crate::edit::tools::Clipboard, origin: [i32; 3], plac
                 let t = place.pos(clip.size, [x, y, z]);
                 let (wx, wy, wz) = (origin[0] + t[0], origin[1] + t[1], origin[2] + t[2]);
                 let key = (wx.div_euclid(16), wz.div_euclid(16));
-                let b = out.entry(key).or_insert_with(|| Blocks { min_section: wy.div_euclid(16), sections: Vec::new(), extras: HashMap::new(), entities: Vec::new(), barriers: Vec::new() });
+                let b = out.entry(key).or_insert_with(|| Blocks { min_section: wy.div_euclid(16), sections: Vec::new(), extras: HashMap::new(), entities: Vec::new(), barriers: Vec::new(), seen: Default::default() });
                 let sy = wy.div_euclid(16);
                 // Sections from the lowest to the highest used.
                 if sy < b.min_section {
@@ -637,6 +634,98 @@ fn ghost_meshes(chunks: &[(Key, Arc<Blocks>)], atlas: &Mutex<Atlas>) -> Vec<(Key
             (*k, m)
         })
         .collect()
+}
+
+/// A mob with status effects, for drawing the particles around it (see `World::effect_mobs_near`).
+#[derive(Clone)]
+pub struct MobEffectsView {
+    pub pos: [f32; 3],
+    pub radius: f32,
+    pub height: f32,
+    pub color: [u8; 3],
+}
+
+/// How high above its feet a mount carries its rider: where the seat is (horses, a pig's back,
+/// a strider's saddle, a boat's or minecart's floor...), else about three quarters of its height.
+pub fn seat_height(id: &str, height: f32) -> f32 {
+    let bare = id.trim_start_matches("minecraft:");
+    match bare {
+        "horse" | "donkey" | "mule" | "skeleton_horse" | "zombie_horse" => 1.1,
+        "pig" => 0.7,
+        "strider" => 1.45,
+        "camel" | "camel_husk" => 1.9,
+        "spider" | "cave_spider" => 0.5,
+        "ravager" => 2.0,
+        "chicken" => 0.4,
+        _ if bare.ends_with("boat") || bare.ends_with("raft") || bare.ends_with("minecart") => 0.2,
+        _ => height,
+    }
+}
+
+/// How many riders a mount carries: two in a boat or on a camel, else one.
+pub fn seats(id: &str) -> usize {
+    let bare = id.trim_start_matches("minecraft:");
+    if bare.ends_with("boat") || bare.ends_with("raft") || bare.starts_with("camel") { 2 } else { 1 }
+}
+
+/// Whether an entity (as the view has it) is a rider, seated on a mount (see [`with_riders`]).
+pub fn is_rider(e: &mctk_nbt::Tag) -> bool {
+    e.get("MctkMount").is_some()
+}
+
+/// The entities of a chunk and their riders: a rider is saved inside its mount's data
+/// (`Passengers`), so each is made an entity of its own standing on the mount's seat, to be drawn
+/// and pointed at. Riders of riders too. A rider is marked (`MctkMount`: where its mount stands;
+/// `MctkSeat`: which passenger it is; `MctkDepth`: 1 for a rider of something in the world), which
+/// are in the view's copy only.
+fn with_riders(list: &[Arc<mctk_nbt::Tag>]) -> std::borrow::Cow<'_, [Arc<mctk_nbt::Tag>]> {
+    // (Nothing rides, mostly: then the list is used as it is, with no copy.)
+    if !list.iter().any(|e| e.get("Passengers").is_some()) {
+        return std::borrow::Cow::Borrowed(list);
+    }
+    fn add(e: &Arc<mctk_nbt::Tag>, out: &mut Vec<Arc<mctk_nbt::Tag>>, depth: u8) {
+        out.push(e.clone());
+        if depth > 60 {
+            return;
+        }
+        let (Some(pos), Some(riders)) = (entity_pos(e), e.get("Passengers").and_then(mctk_nbt::Tag::as_list)) else { return };
+        let (_, height) = entity_size(e);
+        let mount_id = e.get("id").and_then(mctk_nbt::Tag::as_str).unwrap_or("").to_string();
+        let seat = seat_height(&mount_id, height);
+        for (i, rider) in riders.iter().enumerate() {
+            let Some(c) = rider.as_compound() else { continue };
+            let mut c = c.clone();
+            // Its feet hang below the seat (it sits, hips on it): by about the length of its legs,
+            // except in a boat or a minecart, where the seat is the floor it sits on.
+            let (_, rider_h) = entity_size(&Arc::new(mctk_nbt::Tag::Compound(c.clone())));
+            let hang = if mount_id.ends_with("boat") || mount_id.ends_with("raft") || mount_id.ends_with("minecart") { rider_h * 0.1 } else { (rider_h * 0.38).min(0.75) };
+            crate::edit::tools::set_entity_pos(&mut c, [pos[0] as f64, (pos[1] + seat - hang) as f64, pos[2] as f64]);
+            c.insert("MctkMount".into(), mctk_nbt::Tag::List(mctk_nbt::List::from_tags(mctk_nbt::TagType::Double, pos.iter().map(|v| mctk_nbt::Tag::Double(*v as f64)).collect()).expect("numbers")));
+            c.insert("MctkSeat".into(), mctk_nbt::Tag::Int(i as i32));
+            // Where the mount at the bottom of the stack stands and which seats lead from it to this rider, for editing it.
+            let root = e.get("MctkRoot").and_then(mctk_nbt::Tag::as_list).map(|l| l.iter().filter_map(mctk_nbt::Tag::as_f64).collect::<Vec<_>>()).unwrap_or_else(|| pos.iter().map(|v| *v as f64).collect());
+            let mut path: Vec<i32> = match e.get("MctkPath") { Some(mctk_nbt::Tag::IntArray(p)) => p.clone(), _ => Vec::new() };
+            path.push(i as i32);
+            c.insert("MctkRoot".into(), mctk_nbt::Tag::List(mctk_nbt::List::from_tags(mctk_nbt::TagType::Double, root.into_iter().map(mctk_nbt::Tag::Double).collect()).expect("numbers")));
+            c.insert("MctkPath".into(), mctk_nbt::Tag::IntArray(path));
+            c.insert("MctkDepth".into(), mctk_nbt::Tag::Int(i32::from(depth) + 1));
+            add(&Arc::new(mctk_nbt::Tag::Compound(c)), out, depth + 1);
+        }
+    }
+    let mut out = Vec::with_capacity(list.len());
+    for e in list {
+        add(e, &mut out, 0);
+    }
+    std::borrow::Cow::Owned(out)
+}
+
+/// A lingering potion cloud in the world, for drawing its particles (see `World::clouds_near`).
+#[derive(Clone)]
+pub struct CloudView {
+    pub pos: [f32; 3],
+    pub radius: f32,
+    pub color: [u8; 3],
+    pub visible: bool,
 }
 
 /// Something the search found: what it is, where, how far from where the search was made, and
@@ -1834,7 +1923,8 @@ fn mesh(cx: i32, cz: i32, me: &Blocks, near: &[Option<Arc<Blocks>>; 4], atlas: &
     // Its entities (item frames, armor stands, items on the ground, paintings), lit by the
     // light where each is.
     let origin = [(cx * 16) as f32, 0.0, (cz * 16) as f32];
-    for e in &me.entities {
+    // (With the riders, which are saved inside their mounts, each drawn standing on its own.)
+    for e in with_riders(&me.entities).iter() {
         let Some((quads, at)) = crate::entities::entity(e, origin) else { continue };
         let (lx, ly, lz) = (at[0].floor() as i32 - cx * 16, at[1].floor() as i32, at[2].floor() as i32 - cz * 16);
         let (sky, lamp) = grid.at(lx, ly, lz);
@@ -2041,7 +2131,7 @@ fn lod_mesh(tile: Key, cell: usize, chunks: &[Option<Arc<LodChunk>>]) -> MeshDat
         let color = [(rgb[0] as f32 * k).min(255.0) as u8, (rgb[1] as f32 * k).min(255.0) as u8, (rgb[2] as f32 * k).min(255.0) as u8, if water { 170 } else { 255 }];
         let i = out.verts.len() as u32;
         for v in p {
-            out.verts.push(Vert { pos: v, uv: white, color: color, light: [sky, 0, 255, 0] });
+            out.verts.push(Vert { pos: v, uv: white, color, light: [sky, 0, 255, 0] });
             out.lo = out.lo.min(v[1]);
             out.hi = out.hi.max(v[1]);
         }
@@ -2193,6 +2283,9 @@ pub struct World {
     tx: Option<Sender<Job>>,
     rx: Receiver<Done>,
     loaded: HashMap<Key, Arc<Blocks>>,
+    /// Counts every change to the chunks loaded (so what was worked out from them can be kept
+    /// while it stays the same).
+    pub rev: u64,
     absent: HashSet<Key>,
     loading: HashSet<Key>,
     /// Chunks waiting to be meshed (until their neighbors are read).
@@ -2287,6 +2380,7 @@ impl World {
             tx: Some(tx),
             rx,
             loaded: HashMap::new(),
+            rev: 0,
             absent: HashSet::new(),
             loading: HashSet::new(),
             pending: HashSet::new(),
@@ -2358,6 +2452,7 @@ impl World {
         }
         for k in keys {
             self.loaded.remove(k);
+            self.rev += 1;
             self.absent.remove(k);
             self.pending.remove(k);
             // A mesh of the old chunk still in the works is not taken.
@@ -2414,6 +2509,7 @@ impl World {
                 Done::Loaded(key, Some(blocks)) => {
                     self.loading.remove(&key);
                     self.loaded.insert(key, Arc::new(blocks));
+                    self.rev += 1;
                     self.pending.insert(key);
                     // Its neighbors' faces toward it may now be hidden (and their light changes).
                     for (dx, dz) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
@@ -2428,6 +2524,7 @@ impl World {
                     self.absent.insert(key);
                     // A chunk that was drawn and is gone now (deleted): its mesh goes, and its
                     // neighbors' faces toward it show again.
+                    self.rev += 1;
                     if self.shown.remove(&key).is_some() || self.loaded.remove(&key).is_some() {
                         if let Ok(mut up) = self.uploads.lock() {
                             up.remove.push(key);
@@ -2518,6 +2615,7 @@ impl World {
             }
             for k in far {
                 self.loaded.remove(&k);
+                self.rev += 1;
                 self.gens.remove(&k);
                 self.shown.remove(&k);
             }
@@ -2740,24 +2838,21 @@ impl World {
     }
 
     /// The entity under a point on the screen, nearer than `before` blocks along the pointer's
-    /// ray (the block it is on), with how far it is.
+    /// ray (the block it is on), with how far it is. (Riders are pointed at where they sit.)
     pub fn pick_entity(&self, cam: &Camera, at: Pos2, before: f32) -> Option<Arc<mctk_nbt::Tag>> {
         let (eye, dir) = cam.ray(at);
-        let mut best: Option<(f32, Arc<mctk_nbt::Tag>)> = None;
+        let mut best: Option<(f32, &Arc<mctk_nbt::Tag>)> = None;
         for b in self.loaded.values() {
-            for e in &b.entities {
-                let Some(p) = entity_pos(e) else { continue };
-                let (r, h) = entity_size(e);
+            for (e, p, r, h) in &b.seen().all {
                 if let Some(t) = ray_box_t(eye, dir, [p[0] - r, p[1], p[2] - r], [p[0] + r, p[1] + h, p[2] + r]) {
                     if t < before && best.as_ref().is_none_or(|(bt, _)| t < *bt) {
-                        best = Some((t, e.clone()));
+                        best = Some((t, e));
                     }
                 }
             }
         }
-        best.map(|(_, e)| e)
+        best.map(|(_, e)| e.clone())
     }
-
     /// The barriers within `reach` blocks of `at` that can be seen from `eye` (nothing but air,
     /// see-through blocks and other barriers between: a barrier shows through a barrier, as
     /// glass does), nearest last (so the nearest is drawn on top). At most `most`.
@@ -2794,7 +2889,7 @@ impl World {
 
     /// Whether nothing that hides what is behind it (a whole, opaque block) is between `from`
     /// and the block `to` (whose middle is `end`).
-    fn clear_between(&mut self, from: [f32; 3], end: [f32; 3], to: [i32; 3]) -> bool {
+    pub fn clear_between(&mut self, from: [f32; 3], end: [f32; 3], to: [i32; 3]) -> bool {
         let d = [end[0] - from[0], end[1] - from[1], end[2] - from[2]];
         let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
         let steps = (len * 3.0).ceil() as i32;
@@ -2815,22 +2910,114 @@ impl World {
         true
     }
 
-    /// The entities with names in view (where their names show), and the names.
-    pub fn named_entities(&self) -> Vec<([f32; 3], String)> {
+    /// The lingering potion clouds within `reach` blocks of `at` (those in loaded chunks), as
+    /// the game would show them: where, how wide, the color of their particles, and whether the
+    /// particles are shown.
+    pub fn clouds_near(&self, at: [f32; 3], reach: f32) -> Vec<CloudView> {
         let mut out = Vec::new();
-        for b in self.loaded.values() {
-            for e in &b.entities {
-                let Some(c) = e.as_compound() else { continue };
-                let Some(name) = crate::naming::mob_name(c) else { continue };
-                let Some(p) = entity_pos(e) else { continue };
-                let (_, h) = entity_size(e);
-                out.push(([p[0], p[1] + h + 0.3, p[2]], name));
+        let (cx, cz) = ((at[0] / 16.0).floor() as i32, (at[2] / 16.0).floor() as i32);
+        let r = (reach / 16.0).ceil() as i32;
+        for dz in -r..=r {
+            for dx in -r..=r {
+                let Some(b) = self.loaded.get(&(cx + dx, cz + dz)) else { continue };
+                out.extend(b.seen().clouds.iter().filter(|c| (0..3).map(|k| (c.pos[k] - at[k]).powi(2)).sum::<f32>() <= reach * reach).cloned());
             }
         }
         out
     }
+
+    /// The mobs with status effects within `reach` blocks of `at`, whose effects show particles
+    /// (as the game shows the swirls around them): where each stands, its size and the mix of
+    /// its effects' colors.
+    pub fn effect_mobs_near(&self, at: [f32; 3], reach: f32) -> Vec<MobEffectsView> {
+        let mut out = Vec::new();
+        let (cx, cz) = ((at[0] / 16.0).floor() as i32, (at[2] / 16.0).floor() as i32);
+        let r = (reach / 16.0).ceil() as i32;
+        for dz in -r..=r {
+            for dx in -r..=r {
+                let Some(b) = self.loaded.get(&(cx + dx, cz + dz)) else { continue };
+                out.extend(b.seen().effects.iter().filter(|m| (0..3).map(|k| (m.pos[k] - at[k]).powi(2)).sum::<f32>() <= reach * reach).cloned());
+            }
+        }
+        out
+    }
+
+    /// The entities with names in view (where their names show), and the names.
+    pub fn named_entities(&self) -> Vec<([f32; 3], String)> {
+        self.loaded.values().flat_map(|b| b.seen().named.iter().cloned()).collect()
+    }
 }
 
+/// What the viewer asks of a chunk's entities every frame, worked out once from the chunk's
+/// (riders included): each entity with where it stands and its size (for pointing at), the named
+/// ones, the potion clouds and the mobs with effect particles.
+#[derive(Default)]
+struct Seen {
+    all: Vec<(Arc<mctk_nbt::Tag>, [f32; 3], f32, f32)>,
+    named: Vec<([f32; 3], String)>,
+    clouds: Vec<CloudView>,
+    effects: Vec<MobEffectsView>,
+}
+
+impl Blocks {
+    /// Its entities as the viewer uses them (see [`Seen`]), worked out when first wanted.
+    fn seen(&self) -> &Seen {
+        self.seen.get_or_init(|| {
+            let mut s = Seen::default();
+            for e in with_riders(&self.entities).iter() {
+                let Some(pos) = entity_pos(e) else { continue };
+                let (radius, height) = entity_size(e);
+                s.all.push((e.clone(), pos, radius, height));
+                let Some(c) = e.as_compound() else { continue };
+                if let Some(name) = crate::naming::mob_name(c) {
+                    s.named.push(([pos[0], pos[1] + height + 0.3, pos[2]], name));
+                }
+                if c.get("id").and_then(mctk_nbt::Tag::as_str) == Some("minecraft:area_effect_cloud") {
+                    let rad = e.get("Radius").and_then(mctk_nbt::Tag::as_f64).unwrap_or(3.0) as f32;
+                    // Its effects, in either layout (named or numbered).
+                    let list = e.get("potion_contents").and_then(|c| c.get("custom_effects")).or_else(|| e.get("Effects")).and_then(mctk_nbt::Tag::as_list);
+                    let effects: Vec<(String, i64)> = list
+                        .map(|l| {
+                            l.iter()
+                                .filter_map(|t| {
+                                    let id = match t.get("id").or_else(|| t.get("Id"))? {
+                                        mctk_nbt::Tag::String(s) => s.clone(),
+                                        n => crate::effects::java_effect_name(n.as_i64()?)?.to_string(),
+                                    };
+                                    let amp = t.get("amplifier").or_else(|| t.get("Amplifier")).and_then(mctk_nbt::Tag::as_i64).unwrap_or(0);
+                                    Some((id, amp + 1))
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let color = crate::cloud::mixed_color(effects.iter().map(|(id, level)| (id.as_str(), *level)));
+                    s.clouds.push(CloudView { pos, radius: rad, color, visible: !crate::cloud::particles_hidden(e) });
+                    continue;
+                }
+                let effects = crate::effects::read(c, crate::effects::Holder::Mob);
+                if effects.is_empty() {
+                    continue;
+                }
+                // The stored list, to see which effects show particles (one that does not says so;
+                // ambient ones are the beacon's, faint, and left out too).
+                let raw = ["active_effects", "ActiveEffects", "mobEffects"].iter().find_map(|k| c.get(*k).and_then(mctk_nbt::Tag::as_list));
+                let shown: Vec<(&str, i64)> = effects
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| {
+                        let flag = raw.and_then(|l| l.get(*i)).and_then(|t| t.get("show_particles").or_else(|| t.get("ShowParticles"))).and_then(mctk_nbt::Tag::as_i64);
+                        flag != Some(0)
+                    })
+                    .map(|(_, e)| (e.id.as_str(), e.amplifier + 1))
+                    .collect();
+                if !shown.is_empty() {
+                    s.effects.push(MobEffectsView { pos, radius, height, color: crate::cloud::mixed_color(shown.into_iter()) });
+                }
+            }
+            s
+        })
+    }
+}
 /// Where an entity stands (its `Pos`).
 fn entity_pos(e: &mctk_nbt::Tag) -> Option<[f32; 3]> {
     let l = e.get("Pos")?.as_list()?;
@@ -2870,7 +3057,13 @@ impl World {
                     // Outlined around the block's own shape, which the pointer must be on (past
                     // a button or a head on a wall, the ray goes on to what is behind); water
                     // and lava as whole blocks when they are to be picked too.
-                    let liquid = liquids && matches!(self.infos.entry(id).or_insert_with(|| info_of(id)).shape, Shape::Liquid { .. });
+                    // Kelp and seagrass are liquid-shaped too, but they are blocks to select even when
+                    // water itself is gone through.
+                    let (is_liquid, sea_plant) = {
+                        let info = self.infos.entry(id).or_insert_with(|| info_of(id));
+                        (matches!(info.shape, Shape::Liquid { .. }), info.sea_plant)
+                    };
+                    let liquid = is_liquid && (liquids || sea_plant);
                     // A barrier, a whole block while barriers are shown.
                     let barrier = is_barrier(id);
                     let shape = if liquid || (barrier && self.show_barriers) {
@@ -3086,7 +3279,7 @@ impl Res {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("gpu-world"),
                 layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState { module: &module, entry_point: Some("vs"), buffers: &[vertex.clone()], compilation_options: Default::default() },
+                vertex: wgpu::VertexState { module: &module, entry_point: Some("vs"), buffers: std::slice::from_ref(&vertex), compilation_options: Default::default() },
                 // Faces seen from behind are left out (the land's tops seen from under it, from
                 // a camera in a cave); see-through water and lines are seen from both sides.
                 primitive: wgpu::PrimitiveState {
@@ -3206,10 +3399,10 @@ fn mip_levels(px: &[u8], w: usize, h: usize) -> Vec<(usize, usize, Vec<u8>)> {
                     // pictures: mixed in, leaves darkened to black at a distance).
                     let alpha: u32 = four.iter().map(|o| level[o + 3] as u32).sum();
                     for c in 0..3 {
-                        next[(j * nw + i) * 4 + c] = if alpha > 0 {
-                            (four.iter().map(|o| level[o + c] as u32 * level[o + 3] as u32).sum::<u32>() / alpha) as u8
-                        } else {
-                            (four.iter().map(|o| level[o + c] as u32).sum::<u32>() / 4) as u8
+                        let weighted = four.iter().map(|o| level[o + c] as u32 * level[o + 3] as u32).sum::<u32>();
+                        next[(j * nw + i) * 4 + c] = match weighted.checked_div(alpha) {
+                            Some(v) => v as u8,
+                            None => (four.iter().map(|o| level[o + c] as u32).sum::<u32>() / 4) as u8,
                         };
                     }
                     next[(j * nw + i) * 4 + 3] = (alpha / 4) as u8;
@@ -3375,7 +3568,7 @@ impl egui_wgpu::CallbackTrait for Paint {
                     .filter(|(_, _, c)| (*c == INVERT_LINE) == invert)
                     .flat_map(|(a, b, c)| {
                         let color = if invert { [255, 255, 255, 255] } else { c.to_srgba_unmultiplied() };
-                        [Vert { pos: *a, uv, color: color, light: LIT }, Vert { pos: *b, uv, color: color, light: LIT }]
+                        [Vert { pos: *a, uv, color, light: LIT }, Vert { pos: *b, uv, color, light: LIT }]
                     })
                     .collect();
                 if verts.is_empty() {
@@ -3483,7 +3676,7 @@ mod tests {
                 Some(b)
             })
             .collect();
-        Blocks { min_section: lo, sections, extras: HashMap::new(), entities: Vec::new(), barriers: Vec::new() }
+        Blocks { min_section: lo, sections, extras: HashMap::new(), entities: Vec::new(), barriers: Vec::new(), seen: Default::default() }
     }
 
     /// A cliff face on a chunk's east edge, under a tree's canopy over the border in the chunk

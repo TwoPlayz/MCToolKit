@@ -19,8 +19,7 @@ pub fn finish(registry: &Path, world: &Path, exe_ids: &Path, block_version: i64,
         .lines()
         .map(str::to_string)
         .collect();
-    let keep = |names: &[String]| -> Vec<String> { names.iter().filter(|n| present.contains(*n)).cloned().collect() };
-    reg.entities = keep(&latest.entities);
+    reg.entities = latest.entities.iter().filter(|n| present.contains(*n)).cloned().collect();
     // Items are built into the server and cannot be listed; the newest version's are kept.
     reg.items = latest.items.clone();
     reg.block_entities = latest.block_entities.clone();

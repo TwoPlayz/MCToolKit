@@ -45,6 +45,36 @@ pub enum DocSource {
     },
 }
 
+/// One change to an entity (see `EditTool::Change`).
+#[derive(Clone, Debug, PartialEq)]
+pub enum EntityChange {
+    /// Which way it faces, in degrees.
+    Yaw(f32),
+    /// Another kind of mob (a Java id).
+    Retype(String),
+    /// Puts a new mob (a Java id) on it, to ride it (a rider carrying a rider).
+    AddRider(String),
+    /// Any change the mob menus make to a mob's own data (a villager's job...).
+    Mob(crate::mob_edit::MobEdit),
+    /// Puts an item (a Java id) on a slot of an armor stand or mob, or empties it.
+    #[cfg_attr(not(test), allow(dead_code))]
+    Equip(crate::mob_edit::Slot, Option<String>),
+    /// The item in an item frame (or none).
+    FrameItem(Option<String>),
+    /// Turns the item in a frame an eighth of a turn.
+    FrameTurn,
+    /// Whether it is invisible.
+    Invisible(bool),
+    /// Empties every slot of an armor stand.
+    #[cfg_attr(not(test), allow(dead_code))]
+    ClearGear,
+    /// A byte flag of the entity on or off (an armor stand's `Small`, `ShowArms`, `NoBasePlate`; a
+    /// frame's `Fixed`).
+    Flag(String, bool),
+    /// An armor stand put in a pose (one of `tools::STAND_POSES`, by name).
+    StandPose(String),
+}
+
 /// One of the World Explorer's editing tools.
 #[derive(Clone, Debug, PartialEq)]
 pub enum EditTool {
@@ -54,30 +84,63 @@ pub enum EditTool {
     DeleteEntities,
     /// Deletes the selected chunks.
     DeleteChunks,
-    /// Fills the box with a block.
-    Fill(mctk_java::BlockState),
+    /// Fills the box with a block, or a palette of blocks mixed evenly.
+    Fill(Vec<mctk_java::BlockState>),
     /// In the box, makes the blocks named `from` the block `to` (keeping the properties both
     /// have when `keep` is set).
-    Replace { from: Vec<String>, to: mctk_java::BlockState, keep: bool },
+    Replace { from: Vec<String>, to: Vec<mctk_java::BlockState>, keep: bool },
     /// Clears the box after it was copied.
     Cut,
     /// Places the copied box with its lowest north-west corner at `origin`.
     Paste { origin: [i32; 3], place: crate::edit::transform::Placement, with_air: bool },
     /// Paints a ball (or cube) of a block (air erases) around a block.
     /// `stroke`: going on with the brush stroke before (dragged), one step to undo with it.
-    Brush { center: [i32; 3], radius: i32, sphere: bool, state: mctk_java::BlockState, stroke: bool },
+    /// `palette`: the blocks mixed evenly (one is a single block); `only`: what it may paint over.
+    Brush { center: [i32; 3], radius: i32, sphere: bool, palette: Vec<mctk_java::BlockState>, only: crate::edit::tools::BrushOnly, stroke: bool },
     /// Removes the one entity (mob, item...) standing at a place (the one selected).
     DeleteEntity([f64; 3]),
     /// Makes one block another (air removes it).
     SetBlock([i32; 3], mctk_java::BlockState),
-    /// Turns one block a quarter turn, keeping what it holds.
-    TurnBlock([i32; 3]),
     /// Sets properties of one block (waterlogged...), keeping what it holds.
     BlockProps([i32; 3], Vec<(String, String)>),
-    /// Turns the entity standing at a place a quarter turn.
-    TurnEntity([f64; 3]),
+    /// Paints a biome (a Java id) on the 4 x 4 x 4 block cells from `lo` to `hi` (inclusive, in cells). `stroke`: going on with the
+    /// strokes before (dragged), one step to undo.
+    BiomeBrush { lo: [i32; 3], hi: [i32; 3], biome: String, stroke: bool },
+    /// Changes what a block holds in its block entity: a container's lock, a beacon's powers.
+    BlockEntity([i32; 3], crate::mob_edit::MobEdit),
     /// Makes the entity standing at a place another kind (a Java id).
     RetypeEntity([f64; 3], String),
+    /// Moves the entity standing at a place to another.
+    MoveEntity([f64; 3], [f64; 3]),
+    /// Moves one block, with what it holds, to another place (air is left behind).
+    MoveBlock([i32; 3], [i32; 3]),
+    /// Turns the entity standing at a place to face a direction (yaw in degrees). `stroke`: going
+    /// on with a turn begun before (dragged), one step to undo with it.
+    SetYaw { at: [f64; 3], yaw: f32, stroke: bool },
+    /// Puts a new mob (a Java id) on the entity standing at a place, to ride it.
+    Ride([f64; 3], String),
+    /// Turns a box of blocks `turns` quarter turns clockwise about its middle, in place. `stroke`:
+    /// going on with a turn begun before (dragged), one step to undo.
+    TurnBox { from: ([i32; 3], [i32; 3]), turns: u8, stroke: bool },
+    /// Sets properties of every block in a box that has them (facing...), keeping the rest.
+    BoxProps { bounds: ([i32; 3], [i32; 3]), props: Vec<(String, String)> },
+    /// Moves a box (what was copied from it): it is cleared, and placed at `origin` as Paste would.
+    MoveBox { from: ([i32; 3], [i32; 3]), origin: [i32; 3], place: crate::edit::transform::Placement, with_air: bool },
+    /// Puts a new mob (a Java id) at a place (Java worlds).
+    PlaceMob { at: [f64; 3], id: String },
+    /// Puts a lingering potion cloud at a place (Java worlds).
+    PlaceCloud { at: [f64; 3], cloud: crate::cloud::Cloud },
+    /// Changes the cloud standing at a place to this one. `stroke`: going on with changes made
+    /// before to it (one step to undo).
+    UpdateCloud { at: [f64; 3], cloud: crate::cloud::Cloud, stroke: bool },
+    /// Puts the mob standing at the second place on the one at the first, to ride it (Java).
+    MountMob { mount: [f64; 3], path: Vec<usize>, rider: [f64; 3] },
+    /// Puts a thing that stands on its own (armor stand, item frame, minecart...) in a block.
+    PlaceEntity { cell: [i32; 3], id: String, facing: Option<u8> },
+    /// Changes the entity standing at `at` (or the rider in `seat` of the mount there).
+    Change { at: [f64; 3], path: Vec<usize>, change: EntityChange },
+    /// Takes the rider in `seat` (or every one) off the mount at `mount`; with `delete`, removes them.
+    Unmount { mount: [f64; 3], path: Vec<usize>, seat: Option<usize>, delete: bool },
 }
 
 impl EditTool {
@@ -93,10 +156,25 @@ impl EditTool {
             EditTool::Brush { .. } => "Brush",
             EditTool::DeleteEntity(_) => "Delete Entity",
             EditTool::SetBlock(..) => "Change Block",
-            EditTool::TurnBlock(_) => "Turn Block",
             EditTool::BlockProps(..) => "Change Block",
-            EditTool::TurnEntity(_) => "Turn Entity",
+            EditTool::BlockEntity(..) => "Change Block",
+            EditTool::BiomeBrush { .. } => "Paint Biome",
             EditTool::RetypeEntity(..) => "Change Entity",
+            EditTool::MoveEntity(..) => "Move Entity",
+            EditTool::MoveBlock(..) => "Move Block",
+            EditTool::SetYaw { .. } => "Turn Entity",
+            EditTool::Ride(..) => "Add Rider",
+            EditTool::MoveBox { .. } => "Move",
+            EditTool::TurnBox { .. } => "Turn",
+            EditTool::BoxProps { .. } => "Change Blocks",
+            EditTool::PlaceMob { .. } => "Place Mob",
+            EditTool::PlaceCloud { .. } => "Place Potion Cloud",
+            EditTool::UpdateCloud { .. } => "Change Potion Cloud",
+            EditTool::MountMob { .. } => "Add Rider",
+            EditTool::PlaceEntity { .. } => "Place",
+            EditTool::Change { .. } => "Change Entity",
+            EditTool::Unmount { delete: false, .. } => "Unmount",
+            EditTool::Unmount { .. } => "Delete Rider",
         }
     }
 }
@@ -272,6 +350,8 @@ pub struct Workspace {
     pub docs: Vec<Doc>,
     pub active: Option<usize>,
     pub map: MapView,
+    /// Where the camera's biome was last read (cell and edits generation), see `update_sky_biome`.
+    sky_key: Option<([i32; 3], u64)>,
     pub show_explorer: bool,
     /// The working copy differs from the original (e.g. after pruning).
     pub world_changed: bool,
@@ -446,6 +526,7 @@ impl Workspace {
             docs: Vec::new(),
             active: None,
             map: MapView::new(path.to_path_buf(), we),
+            sky_key: None,
             show_explorer: false,
             world_changed: false,
             optimize_on_save: false,
@@ -537,6 +618,7 @@ impl Workspace {
             docs: Vec::new(),
             active: None,
             map: MapView::new(dir, crate::world::Edition::Java),
+            sky_key: None,
             show_explorer: false,
             world_changed: false,
             optimize_on_save: false,
@@ -1207,11 +1289,6 @@ impl Workspace {
     fn load(&self, source: &DocSource) -> Result<(String, Option<Format>, NamedTag, bool), String> {
         // A chunk the World Explorer's tools changed opens once those changes are saved (the
         // tab would show it as it was).
-        if let Some(id) = self.tab_chunk(source) {
-            if self.map.edits.read().is_ok_and(|l| l.has_chunk(&id)) {
-                return Err(format!("Chunk {}, {} has unsaved changes from the World Explorer: save the world first", id.1, id.2));
-            }
-        }
         match source {
             DocSource::File(p) => {
                 let name = p.file_name().unwrap_or_default().to_string_lossy();
@@ -1230,10 +1307,7 @@ impl Workspace {
             DocSource::JavaChunk { region, x, z } => {
                 let r = Region::open(region).map_err(|e| e.to_string())?;
                 let (lx, lz) = ChunkPos::new(*x, *z).local();
-                let mut root = r
-                    .read_chunk(lx, lz)
-                    .map_err(|e| e.to_string())?
-                    .ok_or("that chunk is not stored")?;
+                let mut root = r.read_chunk(lx, lz).map_err(|e| e.to_string())?.ok_or("that chunk is not stored")?;
                 // The same kind of file holds a chunk's entities (in `entities/`).
                 let entities = region.parent().and_then(|d| d.file_name()).is_some_and(|n| n == "entities");
                 let title = if entities { format!("Entities {x}, {z}") } else { format!("Chunk {x}, {z}") };
@@ -1261,70 +1335,9 @@ impl Workspace {
                 ))
             }
             DocSource::BedrockChunk { dim, x, z } => {
-                let w = self.bedrock.as_ref().ok_or("world not loaded")?;
-                let d = mctk_bedrock::Dimension::from_id(*dim).ok_or("bad dimension")?;
-                let mut root = Compound::new();
-                let mut push = |name: &str, bytes: Option<&[u8]>| {
-                    let mut list = List::new(TagType::Compound);
-                    let mut s = bytes.unwrap_or_default();
-                    while !s.is_empty() {
-                        match mctk_nbt::read_root(&mut s, Flavor::Bedrock) {
-                            Ok(t) => {
-                                let _ = list.push(t.tag);
-                            }
-                            Err(_) => break,
-                        }
-                    }
-                    root.insert(name.into(), Tag::List(list));
-                };
-                let key = |tag| {
-                    ChunkKey {
-                        x: *x,
-                        z: *z,
-                        dimension: d,
-                        tag,
-                        subchunk: None,
-                    }
-                    .encode()
-                };
-                push("BlockEntities", w.db.get(&key(ChunkTag::BlockEntity)));
-                push("PendingTicks", w.db.get(&key(ChunkTag::PendingTicks)));
-                let digp = Key::ActorDigest {
-                    x: *x,
-                    z: *z,
-                    dimension: d,
-                }
-                .encode();
-                let mut actors = List::new(TagType::Compound);
-                for uid in w.db.get(&digp).unwrap_or_default().chunks_exact(8) {
-                    if let Some(t) =
-                        w.db.get(&Key::Actor(uid.to_vec()).encode())
-                            .and_then(bedrock_nbt)
-                    {
-                        let _ = actors.push(t.tag);
-                    }
-                }
-                // Before 1.18.30 a chunk kept its entities in a record of its own.
-                let mut s = w.db.get(&key(ChunkTag::Entity)).unwrap_or_default();
-                while !s.is_empty() {
-                    match mctk_nbt::read_root(&mut s, Flavor::Bedrock) {
-                        Ok(t) => {
-                            let _ = actors.push(t.tag);
-                        }
-                        Err(_) => break,
-                    }
-                }
-                root.insert("Entities".into(), Tag::List(actors));
+                let root = self.bedrock_chunk_root(*dim, *x, *z, false)?;
                 // Editable: saving puts each part back (see `save_bedrock_chunk`).
-                Ok((
-                    format!("Chunk {x}, {z}"),
-                    None,
-                    NamedTag {
-                        name: String::new(),
-                        tag: Tag::Compound(root),
-                    },
-                    false,
-                ))
+                Ok((format!("Chunk {x}, {z}"), None, root, false))
             }
             DocSource::ConsoleEntry(name) => {
                 let s = self.console.as_ref().ok_or("save not loaded")?;
@@ -1357,6 +1370,93 @@ impl Workspace {
         }
     }
 
+    /// A Bedrock chunk's records (block entities, ticks, entities) as one document root: as the database has them,
+    /// or (`layered`) as the World Explorer's unsaved edits leave them.
+    fn bedrock_chunk_root(&self, dim: i32, x: i32, z: i32, layered: bool) -> Result<NamedTag, String> {
+        let w = self.bedrock.as_ref().ok_or("world not loaded")?;
+        let d = mctk_bedrock::Dimension::from_id(dim).ok_or("bad dimension")?;
+        let layer = if layered { self.map.edits.read().ok() } else { None };
+        let get = |k: &Vec<u8>| -> Option<Vec<u8>> {
+            if let Some(l) = &layer {
+                if let Some(v) = l.bedrock.get(k) {
+                    return v.clone();
+                }
+            }
+            w.db.get(k).map(<[u8]>::to_vec)
+        };
+        let mut root = Compound::new();
+        let mut push = |name: &str, bytes: Option<Vec<u8>>| {
+            let mut list = List::new(TagType::Compound);
+            let owned = bytes.unwrap_or_default();
+            let mut s: &[u8] = &owned;
+            while !s.is_empty() {
+                match mctk_nbt::read_root(&mut s, Flavor::Bedrock) {
+                    Ok(t) => {
+                        let _ = list.push(t.tag);
+                    }
+                    Err(_) => break,
+                }
+            }
+            root.insert(name.into(), Tag::List(list));
+        };
+        let key = |tag| ChunkKey { x, z, dimension: d, tag, subchunk: None }.encode();
+        push("BlockEntities", get(&key(ChunkTag::BlockEntity)));
+        push("PendingTicks", get(&key(ChunkTag::PendingTicks)));
+        let digp = Key::ActorDigest { x, z, dimension: d }.encode();
+        let mut actors = List::new(TagType::Compound);
+        for uid in get(&digp).unwrap_or_default().chunks_exact(8) {
+            if let Some(t) = get(&Key::Actor(uid.to_vec()).encode()).as_deref().and_then(bedrock_nbt) {
+                let _ = actors.push(t.tag);
+            }
+        }
+        // Before 1.18.30 a chunk kept its entities in a record of its own.
+        let owned = get(&key(ChunkTag::Entity)).unwrap_or_default();
+        let mut s: &[u8] = &owned;
+        while !s.is_empty() {
+            match mctk_nbt::read_root(&mut s, Flavor::Bedrock) {
+                Ok(t) => {
+                    let _ = actors.push(t.tag);
+                }
+                Err(_) => break,
+            }
+        }
+        root.insert("Entities".into(), Tag::List(actors));
+        Ok(NamedTag { name: String::new(), tag: Tag::Compound(root) })
+    }
+
+    /// What a chunk tab would show with the World Explorer's unsaved changes in it (`None` when it has none
+    /// there), in any edition: opened over the saved chunk, so each change shows as one in the tree.
+    fn layered_root(&self, source: &DocSource) -> Option<NamedTag> {
+        let id = self.tab_chunk(source)?;
+        match source {
+            DocSource::JavaChunk { region, x, z } => {
+                let jc = self.layer_java(source)?;
+                let mut root = jc.root.clone()?;
+                // The World Explorer's own record of the entities, if it changed them (they are among the
+                // chunk's tags here).
+                let entities = region.parent().and_then(|d| d.file_name()).is_some_and(|n| n == "entities");
+                if !entities {
+                    let own = jc.entities.clone().map(|rec| rec.and_then(|r| r.tag.get("Entities").cloned()));
+                    let list = match own {
+                        Some(list) => list,
+                        None => chunk_entities(region, *x, *z, &root),
+                    };
+                    if let (Some(list), Some(c)) = (list, root.tag.as_compound_mut()) {
+                        c.insert("Entities".into(), list);
+                    }
+                }
+                Some(root)
+            }
+            DocSource::ConsoleChunk { .. } => self.map.edits.read().ok()?.console.get(&id)?.clone(),
+            DocSource::BedrockChunk { dim, x, z } => {
+                if !self.map.edits.read().ok()?.has_chunk(&id) {
+                    return None;
+                }
+                self.bedrock_chunk_root(*dim, *x, *z, true).ok()
+            }
+            _ => None,
+        }
+    }
     /// Opens (or focuses) a document tab.
     /// What a file or record holds at its root (as open, if it is), read once for a menu and
     /// kept until `peeked` is cleared.
@@ -1384,9 +1484,16 @@ impl Workspace {
             self.show_explorer = false;
             return Ok(());
         }
+        let layered = self.layered_root(&source);
         let (title, format, root, read_only) = self.load(&source)?;
         let mut tree = NbtTree::new(root);
         tree.read_only = read_only;
+        // A chunk with the World Explorer's unsaved changes opens over the saved chunk, and the changes are
+        // made in the tree as edits (each marked): saving the tab writes them, and the explorer lets go of
+        // its copy then.
+        if let Some(new) = layered {
+            tree.adopt(new);
+        }
         self.docs.push(Doc {
             uid: next_uid(),
             title,
@@ -1558,6 +1665,57 @@ impl Workspace {
         })
     }
 
+    /// What the World Explorer's edit layer holds of the Java chunk a tab would show (changed and not saved).
+    fn layer_java(&self, source: &DocSource) -> Option<crate::edit::layer::JavaChunk> {
+        let id = self.tab_chunk(source)?;
+        self.map.edits.read().ok()?.java.get(&id).cloned()
+    }
+
+    /// After chunks changed: the flat map's Biomes view takes the biomes they have now (at each column's ground).
+    fn refresh_map_biomes(&mut self, chunks: &[(i32, i32)]) {
+        if chunks.is_empty() || chunks.len() > 96 {
+            return;
+        }
+        let Ok(base) = self.edit_base(&self.map.dimension) else { return };
+        let edits = self.map.edits.clone();
+        let Ok(mut layer) = edits.write() else { return };
+        let ed = crate::edit::chunks::Editor { layer: &mut layer, base, dim: self.map.dimension.clone(), notes: Vec::new() };
+        let mut found = Vec::new();
+        for &(cx, cz) in chunks {
+            if let Some(h) = self.map.chunk_surface(cx, cz) {
+                found.push((cx, cz, crate::edit::tools::biome_columns(&ed, cx, cz, &h)));
+            }
+        }
+        drop(layer);
+        for (cx, cz, names) in found {
+            self.map.put_chunk_biomes(cx, cz, &names);
+        }
+    }
+
+    /// The biome the 3D camera is in, kept for the sky (read again when it moves to another cell or the world changes).
+    pub fn update_sky_biome(&mut self) {
+        let Some(eye) = self.map.eye_block() else {
+            self.map.sky_biome = None;
+            return;
+        };
+        let generation = self.map.edits.read().map_or(0, |l| l.generation);
+        let key = ([eye[0].div_euclid(4), eye[1].div_euclid(4), eye[2].div_euclid(4)], generation);
+        if self.sky_key == Some(key) {
+            return;
+        }
+        self.sky_key = Some(key);
+        self.map.sky_biome = self.biome_at(eye);
+    }
+
+    /// The biome (a Java id) at a block as the world is now, with the explorer's unsaved changes (any edition).
+    pub fn biome_at(&self, p: [i32; 3]) -> Option<String> {
+        let base = self.edit_base(&self.map.dimension).ok()?;
+        let edits = self.map.edits.clone();
+        let mut layer = edits.write().ok()?;
+        let ed = crate::edit::chunks::Editor { layer: &mut layer, base, dim: self.map.dimension.clone(), notes: Vec::new() };
+        crate::edit::tools::biome_at(&ed, p)
+    }
+
     /// The chunk a chunk tab shows (dimension, x, z).
     fn tab_chunk(&self, source: &DocSource) -> Option<crate::edit::layer::ChunkId> {
         match source {
@@ -1583,7 +1741,8 @@ impl Workspace {
     fn release_tabs(&mut self, chunks: &[(i32, i32)]) -> Result<(), String> {
         let dim = self.map.dimension.clone();
         let hit = |ws: &Workspace, d: &Doc| ws.tab_chunk(&d.source).is_some_and(|(dd, x, z)| dd == dim && chunks.contains(&(x, z)));
-        if let Some(d) = self.docs.iter().find(|d| hit(self, d) && d.tree.dirty) {
+        // (A tab holding only the explorer's own changes is let go: it is opened again from them.)
+        if let Some(d) = self.docs.iter().find(|d| hit(self, d) && d.tree.dirty && !d.tree.only_adopted()) {
             return Err(format!("Save or close the tab \u{201c}{}\u{201d} first (it has unsaved changes)", d.title));
         }
         while let Some(i) = self.docs.iter().position(|d| hit(self, d)) {
@@ -1599,8 +1758,50 @@ impl Workspace {
         let sel = self.map.sel_box;
         let chunks: Vec<(i32, i32)> = match (&tool, sel) {
             (EditTool::DeleteChunks, _) => self.map.selected.clone(),
-            (EditTool::DeleteEntity(p) | EditTool::TurnEntity(p) | EditTool::RetypeEntity(p, _), _) => box_chunks([p[0].floor() as i32, 0, p[2].floor() as i32], [p[0].floor() as i32, 0, p[2].floor() as i32]),
-            (EditTool::SetBlock(p, _) | EditTool::TurnBlock(p) | EditTool::BlockProps(p, _), _) => box_chunks(*p, *p),
+            (EditTool::DeleteEntity(p) | EditTool::RetypeEntity(p, _) | EditTool::SetYaw { at: p, .. } | EditTool::Ride(p, _) | EditTool::Unmount { mount: p, .. } | EditTool::Change { at: p, .. } | EditTool::PlaceCloud { at: p, .. } | EditTool::UpdateCloud { at: p, .. } | EditTool::PlaceMob { at: p, .. }, _) => box_chunks([p[0].floor() as i32, 0, p[2].floor() as i32], [p[0].floor() as i32, 0, p[2].floor() as i32]),
+            (EditTool::PlaceEntity { cell, .. }, _) => box_chunks([cell[0], 0, cell[2]], [cell[0], 0, cell[2]]),
+            (EditTool::MoveBox { from, origin, place, .. }, _) => {
+                let clip = self.map.clipboard.as_ref().ok_or("Copy something first")?;
+                let size = place.size(clip.size);
+                let mut v = box_chunks(from.0, from.1);
+                v.extend(box_chunks(*origin, [origin[0] + size[0] - 1, origin[1] + size[1] - 1, origin[2] + size[2] - 1]));
+                v.sort();
+                v.dedup();
+                v
+            }
+            (EditTool::TurnBox { from, turns, .. }, _) => {
+                let (lo, hi) = crate::edit::tools::turned_box(from.0, from.1, *turns);
+                let mut v = box_chunks(from.0, from.1);
+                v.extend(box_chunks(lo, hi));
+                v.sort();
+                v.dedup();
+                v
+            }
+            (EditTool::BoxProps { bounds, .. }, _) => box_chunks(bounds.0, bounds.1),
+            (EditTool::MountMob { mount: a, rider: b, .. }, _) => {
+                let cell = |p: &[f64; 3]| [p[0].floor() as i32, 0, p[2].floor() as i32];
+                let mut v = box_chunks(cell(a), cell(a));
+                v.extend(box_chunks(cell(b), cell(b)));
+                v.sort();
+                v.dedup();
+                v
+            }
+            (EditTool::MoveEntity(a, b), _) => {
+                let mut v = box_chunks([a[0].floor() as i32, 0, a[2].floor() as i32], [a[0].floor() as i32, 0, a[2].floor() as i32]);
+                v.extend(box_chunks([b[0].floor() as i32, 0, b[2].floor() as i32], [b[0].floor() as i32, 0, b[2].floor() as i32]));
+                v.sort();
+                v.dedup();
+                v
+            }
+            (EditTool::MoveBlock(a, b), _) => {
+                let mut v = box_chunks(*a, *a);
+                v.extend(box_chunks(*b, *b));
+                v.sort();
+                v.dedup();
+                v
+            }
+            (EditTool::SetBlock(p, _) | EditTool::BlockProps(p, _) | EditTool::BlockEntity(p, _), _) => box_chunks(*p, *p),
+            (EditTool::BiomeBrush { lo, hi, .. }, _) => box_chunks([lo[0] * 4, lo[1] * 4, lo[2] * 4], [hi[0] * 4 + 3, hi[1] * 4 + 3, hi[2] * 4 + 3]),
             (EditTool::Brush { center: c, radius: r, .. }, _) => box_chunks([c[0] - r, c[1] - r, c[2] - r], [c[0] + r, c[1] + r, c[2] + r]),
             (EditTool::Paste { origin, place, .. }, _) => {
                 let clip = self.map.clipboard.as_ref().ok_or("Copy something first")?;
@@ -1627,7 +1828,7 @@ impl Workspace {
             m
         };
         let clip = self.map.clipboard.clone();
-        let resume = matches!(tool, EditTool::Brush { stroke: true, .. });
+        let resume = matches!(tool, EditTool::Brush { stroke: true, .. } | EditTool::BiomeBrush { stroke: true, .. } | EditTool::SetYaw { stroke: true, .. } | EditTool::UpdateCloud { stroke: true, .. } | EditTool::TurnBox { stroke: true, .. });
         let (msg, notes) = self.edit_step(tool.label(), &chunks, resume, |ed| match &tool {
             EditTool::DeleteBlocks => {
                 let n = tools::delete_blocks(ed, sel.expect("checked"));
@@ -1635,7 +1836,7 @@ impl Workspace {
             }
             EditTool::DeleteEntities => format!("Removed {}", plural(tools::delete_entities(ed, sel.expect("checked")), "entity")),
             EditTool::DeleteChunks => format!("Deleted {}", plural(tools::delete_chunks(ed, &chunks), "chunk")),
-            EditTool::Fill(state) => format!("Filled: {}", blocks(&tools::fill(ed, sel.expect("checked"), state))),
+            EditTool::Fill(palette) => format!("Filled: {}", blocks(&tools::fill(ed, sel.expect("checked"), palette))),
             EditTool::Replace { from, to, keep } => format!("Replaced: {}", blocks(&tools::replace(ed, sel.expect("checked"), from, to, *keep))),
             EditTool::Cut => {
                 let n = tools::delete_blocks(ed, sel.expect("checked"));
@@ -1657,25 +1858,91 @@ impl Workspace {
             EditTool::DeleteEntity(p) => {
                 if tools::delete_entity_at(ed, *p) { "Removed it".to_string() } else { "It was not found there".to_string() }
             }
-            EditTool::Brush { center, radius, sphere, state, .. } => format!("Painted: {}", blocks(&tools::brush(ed, *center, *radius, *sphere, state))),
+            EditTool::Brush { center, radius, sphere, palette, only, .. } => format!("Painted: {}", blocks(&tools::brush(ed, *center, *radius, *sphere, palette, *only))),
             EditTool::SetBlock(p, state) => {
-                tools::fill(ed, (*p, *p), state);
+                tools::fill(ed, (*p, *p), std::slice::from_ref(state));
                 if state.name.ends_with(":air") { "Removed the block".into() } else { format!("Made it {}", crate::item_picker::display_name(&state.name)) }
-            }
-            EditTool::TurnBlock(p) => {
-                tools::turn_block(ed, *p);
-                "Turned the block".into()
             }
             EditTool::BlockProps(p, props) => {
                 tools::set_block_props(ed, *p, props);
                 props.iter().map(|(k, v)| format!("{k}: {v}")).collect::<Vec<_>>().join(", ")
             }
-            EditTool::TurnEntity(p) => {
-                if tools::edit_entity_at(ed, *p, &tools::turn_entity) { "Turned it".into() } else { "It was not found there".into() }
+            EditTool::BiomeBrush { lo, hi, biome, .. } => {
+                let done = tools::biome_brush(ed, *lo, *hi, biome);
+                if done.blocks == 0 {
+                    "This world keeps no such biome there".to_string()
+                } else {
+                    format!("Painted {} {}", plural(done.blocks, "cell"), crate::item_picker::display_name(biome))
+                }
+            }
+            EditTool::BlockEntity(p, change) => {
+                if tools::change_block_entity(ed, *p, change) { change.note() } else { "That block has nothing to change".to_string() }
             }
             EditTool::RetypeEntity(p, id) => {
                 let id = id.clone();
                 if tools::edit_entity_at(ed, *p, &move |e| tools::retype_entity(e, &id)) { "Changed it".into() } else { "It was not found there".into() }
+            }
+            EditTool::MoveEntity(from, to) => {
+                let to = *to;
+                if tools::edit_entity_at(ed, *from, &move |e| tools::set_entity_pos(e, to)) { "Moved it".into() } else { "It was not found there".into() }
+            }
+            EditTool::MoveBlock(from, to) => {
+                tools::move_block(ed, *from, *to);
+                "Moved the block".into()
+            }
+            EditTool::SetYaw { at, yaw, .. } => {
+                let yaw = *yaw;
+                if tools::edit_entity_at(ed, *at, &move |e| tools::set_yaw(e, yaw)) { "Turned it".into() } else { "It was not found there".into() }
+            }
+            EditTool::TurnBox { from, turns, .. } => {
+                tools::turn_box(ed, *from, *turns);
+                "Turned the blocks".into()
+            }
+            EditTool::BoxProps { bounds, props } => format!("Changed: {}", blocks(&tools::set_box_props(ed, *bounds, props))),
+            EditTool::MoveBox { from, origin, place, with_air } => match &clip {
+                Some(c) => {
+                    // What was copied is taken out of where it was, then put where it goes.
+                    tools::delete_blocks(ed, *from);
+                    tools::delete_entities(ed, *from);
+                    let done = tools::paste(ed, c, *origin, *place, *with_air);
+                    let e = tools::paste_entities(ed, c, *origin, *place);
+                    let mut m = format!("Moved: {}", blocks(&done));
+                    if e > 0 {
+                        m.push_str(&format!(" and {}", plural(e, "entity")));
+                    }
+                    m
+                }
+                None => "Copy something first".into(),
+            },
+            EditTool::PlaceMob { at, id } => {
+                if tools::place_mob(ed, id, *at) { format!("Placed a {}", crate::item_picker::display_name(id)) } else { "Mobs are placed in Java worlds".into() }
+            }
+            EditTool::UpdateCloud { at, cloud, .. } => {
+                if tools::update_cloud(ed, *at, cloud) { "Changed the potion cloud".into() } else { "The cloud was not found there".into() }
+            }
+            EditTool::PlaceEntity { cell, id, facing } => {
+                if tools::place_entity(ed, id, *cell, *facing) { format!("Placed {}", crate::item_picker::display_name(id)) } else { "These are placed in Java worlds".into() }
+            }
+            EditTool::Change { at, path, change } => {
+                if tools::change_entity(ed, *at, path, change) { "Changed it".into() } else { "It was not found there".into() }
+            }
+            EditTool::Unmount { mount, path, seat, delete } => {
+                let n = tools::unmount(ed, *mount, path, *seat, *delete);
+                match (n, *delete) {
+                    (0, _) => "No rider was found there".into(),
+                    (_, true) => "Removed the rider".into(),
+                    _ => "Took it off its mount".into(),
+                }
+            }
+            EditTool::MountMob { mount, path, rider } => {
+                if tools::mount_existing(ed, *mount, path, *rider) { "Put it on as a rider".into() } else { "Riders are set in Java worlds, on mobs that are there".into() }
+            }
+            EditTool::PlaceCloud { at, cloud } => {
+                if tools::place_cloud(ed, cloud, *at) { "Placed a potion cloud".into() } else { "Potion clouds are placed in Java worlds".into() }
+            }
+            EditTool::Ride(p, id) => {
+                let id = id.clone();
+                if tools::edit_entity_at(ed, *p, &move |e| tools::add_passenger(e, &id, None)) { "Put a rider on it".into() } else { "It was not found there".into() }
             }
         })?;
         Ok(match notes.first() {
@@ -1705,6 +1972,7 @@ impl Workspace {
         drop(layer);
         let here: Vec<(i32, i32)> = changed.iter().filter(|(d, ..)| *d == dim).map(|(_, x, z)| (*x, *z)).collect();
         self.map.edits_changed(&here);
+        self.refresh_map_biomes(&here);
         Ok((msg, notes))
     }
 
@@ -1770,6 +2038,7 @@ impl Workspace {
         let dim = self.map.dimension.clone();
         let here: Vec<(i32, i32)> = chunks.iter().filter(|(d, ..)| *d == dim).map(|(_, x, z)| (*x, *z)).collect();
         self.map.edits_changed(&here);
+        self.refresh_map_biomes(&here);
         Some(if redo { format!("Redid {label}") } else { format!("Undid {label}") })
     }
 
@@ -1941,12 +2210,23 @@ impl Workspace {
                 let d = &self.docs[i];
                 (d.source.clone(), d.format, d.tree.root.clone())
             };
+            let layer_id = self.tab_chunk(&source);
             match source {
                 DocSource::File(p) => {
                     let bytes =
                         nbt_view::encode(format.unwrap_or(Format::Java(Compression::Gzip)), &root)?;
                     self.backup_file(&p).map_err(|e| e.to_string())?;
                     std::fs::write(&p, bytes).map_err(|e| e.to_string())?;
+                    // A Bedrock world's name is kept twice, in level.dat and in levelname.txt (the
+                    // one the game's list and a conversion read): a changed name is written to both.
+                    if self.edition == UiEdition::Bedrock && p.file_name().is_some_and(|n| n == "level.dat") {
+                        let txt = p.with_file_name("levelname.txt");
+                        if let (true, Some(name)) = (txt.is_file(), root.tag.get("LevelName").and_then(Tag::as_str)) {
+                            if std::fs::read_to_string(&txt).is_ok_and(|old| old != name) {
+                                std::fs::write(&txt, name).map_err(|e| e.to_string())?;
+                            }
+                        }
+                    }
                 }
                 DocSource::JavaChunk { region, x, z } => {
                     // The entities shown among the chunk's tags go back to their own file.
@@ -2019,6 +2299,11 @@ impl Workspace {
                     );
                     e.data = b.build().map_err(|e| e.to_string())?;
                     console_changed = true;
+                }
+            }
+            if let Some(id) = layer_id {
+                if let Ok(mut layer) = self.map.edits.write() {
+                    layer.forget(&id);
                 }
             }
             self.docs[i].tree.mark_saved();

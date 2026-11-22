@@ -1,6 +1,7 @@
 //! The messages shown in the top-right corner ("toasts"). They stack, each unrolls on arrival and
-//! rolls up after a few seconds. They are a little see-through and clicks pass through them;
-//! with the pointer over one it all but fades away. Every page uses them.
+//! rolls up after a few seconds, or at once with the X on it. They are a little see-through and
+//! take the clicks that land on them; with the pointer over one it all but fades away (to see
+//! what it covers). Every page uses them.
 
 use eframe::egui::{self, Align2, Color32, Sense, pos2, vec2};
 
@@ -16,6 +17,8 @@ pub struct Toast {
     delay: f64,
     /// Where it was drawn last frame (the pointer over it makes it fainter).
     rect: Option<egui::Rect>,
+    /// Its X was clicked: it rolls up now, whatever the pointer is over.
+    closing: bool,
 }
 
 /// How long a message stays in the corner.
@@ -23,6 +26,8 @@ const TOAST_SECS: f64 = 3.5;
 /// The widest a toast gets, and the room its text leaves for the margin and the X.
 const TOAST_WIDTH: f32 = 320.0;
 const PAD: f32 = 12.0 + 12.0;
+/// Room beside the text for the close button.
+const CLOSE_ROOM: f32 = 24.0;
 /// Seconds the toast takes to unroll and to roll back up.
 const OPEN_SECS: f64 = 0.45;
 /// How long older toasts take to move down, before the new one starts to unroll.
@@ -61,7 +66,7 @@ impl Toasts {
         }
         let now = ctx.input(|i| i.time);
         let delay = if self.list.is_empty() { 0.0 } else { PUSH_SECS };
-        self.list.push(Toast { id: self.next, text, since: now, frames: 0, delay, rect: None });
+        self.list.push(Toast { id: self.next, text, since: now, frames: 0, delay, rect: None, closing: false });
         self.next += 1;
         if self.list.len() > MAX_TOASTS {
             self.list.remove(0);
@@ -86,7 +91,7 @@ impl Toasts {
             // Clicks go through it to what is under it; with the pointer over it, it all but
             // fades away (to see what it covers) and waits (to be read when the pointer leaves).
             let over = pointer.is_some_and(|p| t.rect.is_some_and(|r| r.contains(p)));
-            if over {
+            if over && !t.closing {
                 t.since = t.since.max(now - (TOAST_SECS - 2.0)).min(now - OPEN_SECS);
             }
             // The first frames only lay the toast out (and may arrive late when the app was
@@ -105,8 +110,10 @@ impl Toasts {
             let error = is_error(&t.text);
             let y = ctx.animate_value_with_time(egui::Id::new(("editor-toast-y", t.id)), top, PUSH_SECS as f32);
             let fade = if over { 0.25 } else { 0.85 };
+            let mut closed = false;
             let shown = egui::Area::new(area_id)
-                .interactable(false)
+                // A toast takes the clicks that land on it (they do not reach what is under it).
+                .interactable(true)
                 // Under the tooltips, so a tooltip on a toast's own button shows above it.
                 .order(egui::Order::Foreground)
                 .anchor(Align2::RIGHT_TOP, vec2(-12.0, y))
@@ -114,12 +121,12 @@ impl Toasts {
                     let (fill, text_color) = if error { (Color32::from_rgb(0xC8, 0x3C, 0x3C), Color32::WHITE) } else { (theme::BLUE, Color32::WHITE) };
                     let font = egui::TextStyle::Body.resolve(ui.style());
                     let galley = ui.fonts(|f| {
-                        f.layout(t.text.clone(), font, text_color, TOAST_WIDTH - PAD)
+                        f.layout(t.text.clone(), font, text_color, TOAST_WIDTH - PAD - CLOSE_ROOM)
                     });
                     let height = (galley.size().y + 16.0).max(38.0);
-                    // As wide as its message needs, up to a limit.
-                    let width = (galley.size().x + PAD).max(150.0);
-                    let (full, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+                    // As wide as its message needs (and its close button), up to a limit.
+                    let width = (galley.size().x + PAD + CLOSE_ROOM).max(150.0);
+                    let (full, _) = ui.allocate_exact_size(vec2(width, height), Sense::click_and_drag());
                     // The card itself grows leftward from its right edge, like a scroll being
                     // unrolled: its left edge, corners included, travels, and what it passes is
                     // uncovered. Nothing here is masked.
@@ -134,7 +141,27 @@ impl Toasts {
                         galley,
                         text_color.gamma_multiply(fade),
                     );
+                    // The X that closes it (once it is unrolled).
+                    if open > 0.95 {
+                        let x_box = egui::Rect::from_center_size(pos2(full.right() - 16.0, full.top() + 19.0), vec2(20.0, 20.0));
+                        let x = ui.interact(x_box, area_id.with("close"), Sense::click());
+                        if x.hovered() {
+                            ui.painter().rect_filled(x_box, theme::radius(4), Color32::from_white_alpha(40));
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
+                        let c = x_box.center();
+                        let line = egui::Stroke::new(1.6_f32, text_color.gamma_multiply(fade.max(0.7)));
+                        ui.painter().line_segment([c + vec2(-4.0, -4.0), c + vec2(4.0, 4.0)], line);
+                        ui.painter().line_segment([c + vec2(-4.0, 4.0), c + vec2(4.0, -4.0)], line);
+                        closed = x.clicked();
+                    }
                 });
+            if closed {
+                // Rolls up now.
+                t.closing = true;
+                t.since = now - (TOAST_SECS - CLOSE_SECS);
+                ctx.request_repaint();
+            }
             // A new toast is drawn over the older ones it pushes down.
             if t.frames <= 2 {
                 ctx.move_to_top(shown.response.layer_id);

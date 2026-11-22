@@ -517,8 +517,8 @@ fn skull(b: &mut Builder, block: &str, props: &str) {
             b.cube(&m, &tex, 2.0, 4.0, [2.0, -2.0, -5.0], [1.0, 2.0, 1.0], 0.0, false);
             b.cube(&m, &tex, 2.0, 0.0, [-3.0, -2.0, -5.0], [1.0, 2.0, 1.0], 0.0, false);
             // Ears, hanging out at the sides.
-            b.cube(&m.pose([4.5, -6.0, 0.0], [0.0, 0.0, -0.5236]), &tex, 51.0, 6.0, [0.0, 0.0, -2.0], [1.0, 5.0, 4.0], 0.0, false);
-            b.cube(&m.pose([-4.5, -6.0, 0.0], [0.0, 0.0, 0.5236]), &tex, 39.0, 6.0, [-1.0, 0.0, -2.0], [1.0, 5.0, 4.0], 0.0, false);
+            b.cube(&m.pose([4.5, -6.0, 0.0], [0.0, 0.0, -std::f32::consts::FRAC_PI_6]), &tex, 51.0, 6.0, [0.0, 0.0, -2.0], [1.0, 5.0, 4.0], 0.0, false);
+            b.cube(&m.pose([-4.5, -6.0, 0.0], [0.0, 0.0, std::f32::consts::FRAC_PI_6]), &tex, 39.0, 6.0, [-1.0, 0.0, -2.0], [1.0, 5.0, 4.0], 0.0, false);
         }
         "dragon_head" => {
             // The dragon's head: its skull and snout (the jaw closed).
@@ -691,9 +691,7 @@ pub fn entity(e: &Tag, origin: [f32; 3]) -> Option<(Vec<EQuad>, [f32; 3])> {
             // A mob: built as the game builds it, else (any other living thing) marked by its
             // spawn egg. Projectiles, orbs and the like are left out.
             if !crate::mobs::mob(&mut b, e, id, &local, yaw) {
-                if e.get("Health").is_none() {
-                    return None;
-                }
+                e.get("Health")?;
                 crate::mobs::marker(&mut b, id, &local, yaw);
             }
             [p[0], p[1] + 0.5, p[2]]
@@ -827,6 +825,11 @@ pub fn armor(b: &mut Builder, parts: &Humanoid, slot: &str, item: &str, dye: [f3
         m => m,
     };
     if material == item {
+        // Not armor: a block worn on the head sits over it, as the game shows it.
+        if slot == "head" && matches!(crate::models::item_model(item).as_deref(), Some(crate::models::ItemModel::Model(_))) {
+            let m = parts.head.t(0.0, -4.0, 0.0).s(-10.0, -10.0, 10.0).t(-0.5, -0.5, -0.5);
+            b.item(&m, item, [1.0; 3]);
+        }
         return;
     }
     let legs = slot == "legs";

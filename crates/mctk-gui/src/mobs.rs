@@ -9,11 +9,6 @@ use crate::entities::{armor, Builder, Humanoid, Mat, Tex};
 const PI: f32 = std::f32::consts::PI;
 const HALF: f32 = std::f32::consts::FRAC_PI_2;
 
-/// A number list in the entity's data.
-fn nums(t: Option<&Tag>) -> Vec<f32> {
-    t.and_then(Tag::as_list).map(|l| l.iter().filter_map(|v| v.as_f64().map(|f| f as f32)).collect()).unwrap_or_default()
-}
-
 /// A variant name saved as `minecraft:cold` (or a number, for the oldest saves).
 fn variant(e: &Tag, key: &str) -> Option<String> {
     let v = e.get(key)?;
@@ -355,7 +350,7 @@ pub fn mob(b: &mut Builder, e: &Tag, id: &str, local: &Mat, yaw: f32) -> bool {
             b.cube(&body, &t, 0.0, 40.0, [-4.0, -7.0, -10.0], [8.0, 8.0, 12.0], 0.0, false);
             b.cube(&body.pose([0.0, -3.0, 1.0], [0.5061, 0.0, 0.0]), &t, 44.0, 53.0, [-0.5, -0.0865, 0.0933], [1.0, 6.0, 1.0], 0.0, false);
             let head = body.pose([0.0, -2.0, -11.0], [0.0; 3]);
-            b.cube(&head.pose([0.0; 3], [-0.3927, 0.0, 0.0]), &t, 43.0, 15.0, [-1.5, -1.0, -1.0], [3.0, 5.0, 2.0], 0.0, false);
+            b.cube(&head.pose([0.0; 3], [-std::f32::consts::FRAC_PI_8, 0.0, 0.0]), &t, 43.0, 15.0, [-1.5, -1.0, -1.0], [3.0, 5.0, 2.0], 0.0, false);
             b.cube(&head.pose([-1.0, -1.0, 0.0], [0.1886, -0.3864, -0.0718]), &t, 43.0, 10.0, [-2.0, -3.0, 0.0], [2.0, 5.0, 0.0], 0.0, false);
             b.cube(&head.pose([1.0, -2.0, 0.0], [0.1886, 0.3864, 0.0718]), &t, 47.0, 10.0, [0.0, -3.0, 0.0], [2.0, 5.0, 0.0], 0.0, false);
             for (x, z, u, v) in [(-2.0, 4.0, 51.0, 31.0), (2.0, 4.0, 42.0, 31.0), (-2.0, -4.0, 51.0, 43.0), (2.0, -4.0, 42.0, 43.0)] {
@@ -384,9 +379,9 @@ pub fn mob(b: &mut Builder, e: &Tag, id: &str, local: &Mat, yaw: f32) -> bool {
             b.cube(&head, &t, 4.0, 24.0, [-5.0, -5.0, -4.2], [10.0, 3.0, 4.0], 0.0, false);
             b.cube(&head, &t, 0.0, 0.0, [-4.0, -8.0, -4.0], [8.0, 8.0, 8.0], 0.0, false);
             let rods = r.pose([0.0, 8.0, 0.0], [0.0; 3]);
-            b.cube(&rods.pose([2.5981, -3.0, 1.5], [-2.7489, -1.0472, PI]), &t, 0.0, 17.0, [-1.0, 0.0, -3.0], [2.0, 8.0, 2.0], 0.0, false);
-            b.cube(&rods.pose([-2.5981, -3.0, 1.5], [-2.7489, 1.0472, PI]), &t, 0.0, 17.0, [-1.0, 0.0, -3.0], [2.0, 8.0, 2.0], 0.0, false);
-            b.cube(&rods.pose([0.0, -3.0, -3.0], [0.3927, 0.0, 0.0]), &t, 0.0, 17.0, [-1.0, 0.0, -3.0], [2.0, 8.0, 2.0], 0.0, false);
+            b.cube(&rods.pose([2.5981, -3.0, 1.5], [-2.7489, -std::f32::consts::FRAC_PI_3, PI]), &t, 0.0, 17.0, [-1.0, 0.0, -3.0], [2.0, 8.0, 2.0], 0.0, false);
+            b.cube(&rods.pose([-2.5981, -3.0, 1.5], [-2.7489, std::f32::consts::FRAC_PI_3, PI]), &t, 0.0, 17.0, [-1.0, 0.0, -3.0], [2.0, 8.0, 2.0], 0.0, false);
+            b.cube(&rods.pose([0.0, -3.0, -3.0], [std::f32::consts::FRAC_PI_8, 0.0, 0.0]), &t, 0.0, 17.0, [-1.0, 0.0, -3.0], [2.0, 8.0, 2.0], 0.0, false);
         }
         "hoglin" | "zoglin" => {
             let t = Tex::new(&format!("entity/hoglin/{id}"), 128.0, 64.0);
@@ -417,7 +412,7 @@ pub fn mob(b: &mut Builder, e: &Tag, id: &str, local: &Mat, yaw: f32) -> bool {
                 ([-8.0, -1.0, -8.0], -1.1345, 49.0, false),
                 ([-8.0, -5.0, -8.0], -0.8727, 33.0, false),
                 ([8.0, -6.0, -8.0], 0.8727, 33.0, true),
-                ([8.0, -2.0, -8.0], 1.0472, 49.0, true),
+                ([8.0, -2.0, -8.0], std::f32::consts::FRAC_PI_3, 49.0, true),
                 ([8.0, 3.0, -8.0], 1.2217, 65.0, true),
             ] {
                 let o = if left { [0.0, 0.0, 0.0] } else { [-12.0, 0.0, 0.0] };
@@ -772,8 +767,8 @@ pub fn mob(b: &mut Builder, e: &Tag, id: &str, local: &Mat, yaw: f32) -> bool {
             b.cube(&r.pose([0.0, 15.0, 0.0], [0.0; 3]), &t, 0.0, 0.0, [-3.0, -3.0, -3.0], [6.0, 6.0, 6.0], 0.0, false);
             b.cube(&r.pose([0.0, 15.0, 9.0], [0.0; 3]), &t, 0.0, 12.0, [-5.0, -4.0, -6.0], [10.0, 8.0, 12.0], 0.0, false);
             // Its legs splayed as it stands (the game's resting angles).
-            let (q, m) = (0.785_398, 0.581_194_6);
-            for (z, zr, yr) in [(2.0, q, q), (1.0, m, 0.392_699_1), (0.0, m, -0.392_699_1), (-1.0, q, -q)] {
+            let (q, m) = (std::f32::consts::FRAC_PI_4, 0.581_194_6);
+            for (z, zr, yr) in [(2.0, q, q), (1.0, m, std::f32::consts::FRAC_PI_8), (0.0, m, -std::f32::consts::FRAC_PI_8), (-1.0, q, -q)] {
                 b.cube(&r.pose([-4.0, 15.0, z], [0.0, yr, -zr]), &t, 18.0, 0.0, [-15.0, -1.0, -1.0], [16.0, 2.0, 2.0], 0.0, false);
                 b.cube(&r.pose([4.0, 15.0, z], [0.0, -yr, zr]), &t, 18.0, 0.0, [-1.0, -1.0, -1.0], [16.0, 2.0, 2.0], 0.0, false);
             }
@@ -1038,7 +1033,7 @@ pub fn mob(b: &mut Builder, e: &Tag, id: &str, local: &Mat, yaw: f32) -> bool {
     }
     // Armor it wears, on humanoid mobs.
     // Armor it wears and what it holds, on humanoid mobs (in any edition's layout).
-    if let (Some(parts), Some(c)) = (humanoid_parts(id, r), e.as_compound()) {
+    if let (Some(parts), Some(c)) = (humanoid_parts(id, r, e.get("MctkMount").is_some()), e.as_compound()) {
         use crate::mob_edit::Slot;
         for (slot, item) in crate::mob_edit::equipment(c, None) {
             let Some((item, _)) = item else { continue };
@@ -1090,17 +1085,20 @@ fn legs(b: &mut Builder, r: &Mat, t: &Tex, u: f32, v: f32, h: f32, at: [(f32, f3
 }
 
 /// Where a humanoid mob's parts are, for its armor.
-fn humanoid_parts(id: &str, r: &Mat) -> Option<Humanoid> {
+fn humanoid_parts(id: &str, r: &Mat, riding: bool) -> Option<Humanoid> {
     let arms_out = matches!(id, "zombie" | "husk" | "drowned" | "giant" | "zombified_piglin" | "zombie_villager");
     let arm = if arms_out { [-HALF + 0.1, 0.0, 0.0] } else { [0.0; 3] };
+    // A rider sits: its legs forward and turned out a little, its arms a little forward.
+    let arm = if riding { [arm[0] - 0.6283, 0.0, 0.0] } else { arm };
+    let (rleg, lleg) = if riding { ([-1.4137, 0.3142, 0.0], [-1.4137, -0.3142, 0.0]) } else { ([0.0; 3], [0.0; 3]) };
     match id {
         "zombie" | "husk" | "drowned" | "giant" | "zombified_piglin" | "piglin" | "piglin_brute" | "skeleton" | "stray" | "bogged" | "wither_skeleton" | "parched" | "player" | "zombie_villager" => Some(Humanoid {
             head: r.pose([0.0; 3], [0.0; 3]),
             body: r.pose([0.0; 3], [0.0; 3]),
             rarm: r.pose([-5.0, 2.0, 0.0], arm),
             larm: r.pose([5.0, 2.0, 0.0], arm),
-            rleg: r.pose([-1.9, 12.0, 0.0], [0.0; 3]),
-            lleg: r.pose([1.9, 12.0, 0.0], [0.0; 3]),
+            rleg: r.pose([-1.9, 12.0, 0.0], rleg),
+            lleg: r.pose([1.9, 12.0, 0.0], lleg),
         }),
         _ => None,
     }
@@ -1125,7 +1123,7 @@ fn humanoid(b: &mut Builder, e: &Tag, id: &str, r: &Mat) {
         _ => ("entity/player/wide/steve", 64.0, false, true),
     };
     let t = Tex::new(file, 64.0, h);
-    let parts = humanoid_parts(id, r).expect("a humanoid");
+    let parts = humanoid_parts(id, r, e.get("MctkMount").is_some()).expect("a humanoid");
     let piglin = id.contains("piglin");
     if piglin {
         b.cube(&parts.head, &t, 0.0, 0.0, [-5.0, -8.0, -4.0], [10.0, 8.0, 8.0], 0.0, false);
@@ -1142,8 +1140,8 @@ fn humanoid(b: &mut Builder, e: &Tag, id: &str, r: &Mat) {
     if skinny {
         b.cube(&parts.rarm, &t, 40.0, 16.0, [-1.0, -2.0, -1.0], [2.0, 12.0, 2.0], 0.0, false);
         b.cube(&parts.larm, &t, 40.0, 16.0, [-1.0, -2.0, -1.0], [2.0, 12.0, 2.0], 0.0, true);
-        b.cube(&r.pose([-2.0, 12.0, 0.0], [0.0; 3]), &t, 0.0, 16.0, [-1.0, 0.0, -1.0], [2.0, 12.0, 2.0], 0.0, false);
-        b.cube(&r.pose([2.0, 12.0, 0.0], [0.0; 3]), &t, 0.0, 16.0, [-1.0, 0.0, -1.0], [2.0, 12.0, 2.0], 0.0, true);
+        b.cube(&parts.rleg, &t, 0.0, 16.0, [-1.0, 0.0, -1.0], [2.0, 12.0, 2.0], 0.0, false);
+        b.cube(&parts.lleg, &t, 0.0, 16.0, [-1.0, 0.0, -1.0], [2.0, 12.0, 2.0], 0.0, true);
     } else {
         b.cube(&parts.rarm, &t, 40.0, 16.0, [-3.0, -2.0, -2.0], [4.0, 12.0, 4.0], 0.0, false);
         b.cube(&parts.rleg, &t, 0.0, 16.0, [-2.0, 0.0, -2.0], [4.0, 12.0, 4.0], 0.0, false);
@@ -1192,6 +1190,7 @@ fn villager(b: &mut Builder, e: &Tag, id: &str, r: &Mat) {
         other => (format!("entity/illager/{other}"), 64.0),
     };
     let mut layers = vec![Tex::new(&file, 64.0, h)];
+    let mut brim = false;
     // A villager's clothes: its biome's, then its job's.
     if matches!(id, "villager" | "zombie_villager") {
         let data = e.get("VillagerData");
@@ -1201,9 +1200,15 @@ fn villager(b: &mut Builder, e: &Tag, id: &str, r: &Mat) {
         layers.push(Tex::new(&format!("entity/{folder}/type/{kind}"), 64.0, 64.0));
         if job != "none" {
             layers.push(Tex::new(&format!("entity/{folder}/profession/{job}"), 64.0, 64.0));
+            // Only the jobs with a wide hat have its brim (a flat 16 x 16 plate, which would otherwise
+            // show in the outline of every villager).
+            brim = matches!(job, "farmer" | "fisherman" | "shepherd");
         }
     }
     let zombie = id == "zombie_villager";
+    // A rider sits: its legs forward and turned out a little.
+    let riding = e.get("MctkMount").is_some();
+    let (rleg, lleg) = if riding { ([-1.4137, 0.3142, 0.0], [-1.4137, -0.3142, 0.0]) } else { ([0.0; 3], [0.0; 3]) };
     // Villagers (and the trader) have a hat over the head and a brim, where the jobs' and
     // biomes' hats are painted (a farmer's straw hat).
     let hatted = matches!(id, "villager" | "zombie_villager" | "wandering_trader");
@@ -1215,7 +1220,10 @@ fn villager(b: &mut Builder, e: &Tag, id: &str, r: &Mat) {
         b.cube(&head, t, 0.0, 0.0, [-4.0, -10.0, -4.0], [8.0, 10.0, 8.0], g, false);
         if hatted {
             b.cube(&head, t, 32.0, 0.0, [-4.0, -10.0, -4.0], [8.0, 10.0, 8.0], 0.51 + g, false);
-            b.cube(&head.pose([0.0; 3], [-HALF, 0.0, 0.0]), t, 30.0, 47.0, [-8.0, -8.0, -6.0], [16.0, 16.0, 1.0], g, false);
+            // (The brim belongs to the job's layer, the last one.)
+            if (brim && k + 1 == layers.len()) || id == "wandering_trader" {
+                b.cube(&head.pose([0.0; 3], [-HALF, 0.0, 0.0]), t, 30.0, 47.0, [-8.0, -8.0, -6.0], [16.0, 16.0, 1.0], g, false);
+            }
         }
         b.cube(&head.pose([0.0, -2.0, 0.0], [0.0; 3]), t, 24.0, 0.0, [-1.0, -1.0, -6.0], [2.0, 4.0, 2.0], g, false);
         b.cube(&head, t, 16.0, 20.0, [-4.0, 0.0, -3.0], [8.0, 12.0, 6.0], g, false);
@@ -1231,8 +1239,8 @@ fn villager(b: &mut Builder, e: &Tag, id: &str, r: &Mat) {
             b.cube(&arms, t, 44.0, 22.0, [4.0, -2.0, -2.0], [4.0, 8.0, 4.0], g, true);
             b.cube(&arms, t, 40.0, 38.0, [-4.0, 2.0, -2.0], [8.0, 4.0, 4.0], g, false);
         }
-        b.cube(&r.pose([-2.0, 12.0, 0.0], [0.0; 3]), t, 0.0, 22.0, [-2.0, 0.0, -2.0], [4.0, 12.0, 4.0], g, false);
-        b.cube(&r.pose([2.0, 12.0, 0.0], [0.0; 3]), t, 0.0, 22.0, [-2.0, 0.0, -2.0], [4.0, 12.0, 4.0], g, true);
+        b.cube(&r.pose([-2.0, 12.0, 0.0], rleg), t, 0.0, 22.0, [-2.0, 0.0, -2.0], [4.0, 12.0, 4.0], g, false);
+        b.cube(&r.pose([2.0, 12.0, 0.0], lleg), t, 0.0, 22.0, [-2.0, 0.0, -2.0], [4.0, 12.0, 4.0], g, true);
     }
     if id == "witch" {
         // Her hat: a brim and three narrowing tiers.
@@ -1641,4 +1649,35 @@ fn humanoid_baby(b: &mut Builder, r: &Mat, t: &Tex) {
         part([0.0, 16.0], [-2.5, 16.0, -1.0], [2.0, 4.0, 2.0]),
         part([8.0, 16.0], [0.5, 16.0, -1.0], [2.0, 4.0, 2.0]),
     ], 0.0);
+}
+
+#[cfg(test)]
+mod tests {
+    use mctk_nbt::{Compound, List, Tag, TagType};
+
+    fn mob(id: &str, riding: bool) -> Tag {
+        let nums = |v: &[f64]| Tag::List(List::from_tags(TagType::Double, v.iter().map(|n| Tag::Double(*n)).collect()).expect("numbers"));
+        let mut c = Compound::new();
+        c.insert("id".into(), Tag::String(format!("minecraft:{id}")));
+        c.insert("Pos".into(), nums(&[0.0, 0.0, 0.0]));
+        if riding {
+            c.insert("MctkMount".into(), nums(&[0.0, 0.0, 0.0]));
+        }
+        Tag::Compound(c)
+    }
+
+    /// The lowest point of the model: a sitting rider's legs are held out, so it is higher.
+    fn reach(t: &Tag) -> f32 {
+        let quads = crate::entities::entity(t, [0.0; 3]).expect("a model").0;
+        quads.iter().flat_map(|q| q.pos.iter()).map(|p| p[1]).fold(f32::MAX, f32::min)
+    }
+
+    #[test]
+    fn riders_sit_with_their_legs_forward() {
+        // (A villager's long robe hangs to the ground over its legs, so it is not judged by its lowest point.)
+        for id in ["zombie", "skeleton", "piglin"] {
+            let (standing, sitting) = (reach(&mob(id, false)), reach(&mob(id, true)));
+            assert!(sitting > standing + 0.3, "{id}: {standing} {sitting}");
+        }
+    }
 }

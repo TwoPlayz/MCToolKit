@@ -101,8 +101,8 @@ pub fn prune_console(
 }
 
 /// Writes the save to `out`. A PS3 save folder becomes a copy of the folder with the new
-/// `GAMEDATA` (its `PARAM.PFD` then needs re-signing before a PS3 accepts it); an
-/// Xbox 360 save becomes a new `savegame.dat` file at `out`.
+/// `GAMEDATA`, its `METADATA` and `PARAM.PFD` re-signed for it (when the folder has a `THUMB`, which
+/// `METADATA` records); an Xbox 360 save becomes a new `savegame.dat` file at `out`.
 pub fn save_console_copy(save: &ConsoleSave, out: &Path) -> Result<(), Error> {
     let bytes = save.encode()?;
     let folder = save
@@ -119,6 +119,10 @@ pub fn save_console_copy(save: &ConsoleSave, out: &Path) -> Result<(), Error> {
                 }
             }
             std::fs::write(out.join("GAMEDATA"), bytes)?;
+            // The copied METADATA and PARAM.PFD describe the old GAMEDATA.
+            if out.join("THUMB").is_file() {
+                mctk_console::resign_save_folder(out)?;
+            }
         }
         None => {
             if out.exists() {

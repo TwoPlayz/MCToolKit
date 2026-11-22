@@ -22,6 +22,11 @@ pub struct ItemInfo {
     pub map: bool,
 }
 
+/// Block ids the newer console games have that the source of the legacy game does not define: a converter
+/// for those games writes them (seen in a save it made: grass path 208, magma block 213, bone block 216,
+/// glazed terracotta 236-249, concrete 251). The converter writes every id from 198 to 252 that its Java-1.12 table\n/// defines, the end blocks (198-209), frosted ice, nether wart and red nether bricks, observer, shulker boxes\n/// (219-234), glazed terracotta, concrete and concrete powder (252), as a save it made from every block state shows.
+pub const NEWER_BLOCKS: [u8; 54] = [34, 138, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 212, 213, 214, 215, 216, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252];
+
 pub struct LegacyTables {
     blocks: HashMap<(u8, u8), BlockState>,
     items: HashMap<(i16, i16), ItemInfo>,
@@ -31,6 +36,9 @@ pub struct LegacyTables {
     /// The other way: a state (without what depends on neighbours) to the lowest id and data.
     by_state: HashMap<BlockState, (u8, u8)>,
     by_name: HashMap<String, Vec<(u8, u8)>>,
+    /// The same with the ids only the newer console games have ([`NEWER_BLOCKS`]) added.
+    by_state_newer: HashMap<BlockState, (u8, u8)>,
+    by_name_newer: HashMap<String, Vec<(u8, u8)>>,
     item_by_name: HashMap<String, (i16, i16, bool)>,
     biome_by_name: HashMap<String, u8>,
 }
@@ -49,9 +57,7 @@ pub fn canonical(state: &BlockState) -> BlockState {
         drop(&mut s, &["shape"]);
     } else if name.ends_with("_fence_gate") {
         drop(&mut s, &["in_wall"]);
-    } else if name.ends_with("_fence") || name.ends_with("_pane") || name == "minecraft:iron_bars" || name.ends_with("_wall") {
-        drop(&mut s, &sides);
-    } else if name == "minecraft:redstone_wire" {
+    } else if name.ends_with("_fence") || name.ends_with("_pane") || name == "minecraft:iron_bars" || name.ends_with("_wall") || name == "minecraft:redstone_wire" {
         drop(&mut s, &sides);
     } else if name == "minecraft:chest" || name == "minecraft:trapped_chest" {
         drop(&mut s, &["type"]);
@@ -167,13 +173,20 @@ impl LegacyTables {
         keys.sort();
         let mut by_state: HashMap<BlockState, (u8, u8)> = HashMap::new();
         let mut by_name: HashMap<String, Vec<(u8, u8)>> = HashMap::new();
+        let mut by_state_newer: HashMap<BlockState, (u8, u8)> = HashMap::new();
+        let mut by_name_newer: HashMap<String, Vec<(u8, u8)>> = HashMap::new();
         for (id, data) in keys {
-            if !console_blocks.contains(&id) {
+            let older = console_blocks.contains(&id);
+            if !older && !NEWER_BLOCKS.contains(&id) {
                 continue;
             }
             let state = &blocks[&(id, data)];
-            by_state.entry(canonical(state)).or_insert((id, data));
-            by_name.entry(state.name.clone()).or_default().push((id, data));
+            by_state_newer.entry(canonical(state)).or_insert((id, data));
+            by_name_newer.entry(state.name.clone()).or_default().push((id, data));
+            if older {
+                by_state.entry(canonical(state)).or_insert((id, data));
+                by_name.entry(state.name.clone()).or_default().push((id, data));
+            }
         }
         let mut keys: Vec<(i16, i16)> = items.keys().copied().collect();
         keys.sort();
@@ -201,18 +214,25 @@ impl LegacyTables {
                 biome_by_name.entry(name.clone()).or_insert(id as u8);
             }
         }
-        LegacyTables { blocks, items, biomes, console_blocks, by_state, by_name, item_by_name, biome_by_name }
+        LegacyTables { blocks, items, biomes, console_blocks, by_state, by_name, by_state_newer, by_name_newer, item_by_name, biome_by_name }
     }
 
     /// The legacy id and data of a Java state, or None when the console game has nothing like it.
     /// States that differ only in what comes from neighbours share an answer; otherwise the block
     /// with the most properties in common is used.
     pub fn console_block(&self, state: &BlockState) -> Option<(u8, u8)> {
+        self.console_block_in(state, false)
+    }
+
+    /// [`console_block`](Self::console_block) for the newer console games when `newer`, which also have the
+    /// ids of [`NEWER_BLOCKS`].
+    pub fn console_block_in(&self, state: &BlockState, newer: bool) -> Option<(u8, u8)> {
+        let (by_state, by_name) = if newer { (&self.by_state_newer, &self.by_name_newer) } else { (&self.by_state, &self.by_name) };
         let key = canonical(state);
-        if let Some(found) = self.by_state.get(&key) {
+        if let Some(found) = by_state.get(&key) {
             return Some(*found);
         }
-        let candidates = self.by_name.get(&state.name)?;
+        let candidates = by_name.get(&state.name)?;
         candidates
             .iter()
             .max_by_key(|(id, data)| {
@@ -233,9 +253,10 @@ impl LegacyTables {
         self.biome_by_name.get(name).copied()
     }
 
-    /// Every state the table has for blocks of the console game, with its legacy id and data.
-    pub fn console_states(&self) -> impl Iterator<Item = (&(u8, u8), &BlockState)> {
-        self.blocks.iter().filter(|((id, _), _)| self.console_blocks.contains(id))
+    /// Every state the table has for blocks of the console game, with its legacy id and data, and with the ids
+    /// of [`NEWER_BLOCKS`] too when `newer`.
+    pub fn console_states_in(&self, newer: bool) -> impl Iterator<Item = (&(u8, u8), &BlockState)> {
+        self.blocks.iter().filter(move |((id, _), _)| self.console_blocks.contains(id) || (newer && NEWER_BLOCKS.contains(id)))
     }
 
     /// The block for a legacy id and data value; unknown data values fall back to data 0.

@@ -792,6 +792,7 @@ fn count_files(dir: &Path) -> usize {
 /// fight, command storage. Between worlds of the same layout they are copied as they are. The two
 /// layouts name and shape them differently, so between layouts they are counted in the notes
 /// instead of being written wrong.
+#[allow(clippy::too_many_arguments)]
 fn copy_saved_data(
     src: &Path,
     dst: &Path,

@@ -557,7 +557,8 @@ impl LevelData {
             d.insert("generatorName".into(), Tag::String("default".into()));
             d.insert("generatorVersion".into(), Tag::Int(1));
             d.insert("MapFeatures".into(), byte(self.generate_structures));
-        }        if let Some(p) = &self.embedded_player {
+        }
+        if let Some(p) = &self.embedded_player {
             d.insert("Player".into(), Tag::Compound(p.clone()));
         }
 
@@ -828,9 +829,11 @@ mod tests {
 
     #[test]
     fn modern_round_trips() {
-        let mut l = LevelData::default();
-        l.name = "M".into();
-        l.seed = 99;
+        let mut l = LevelData {
+            name: "M".into(),
+            seed: 99,
+            ..LevelData::default()
+        };
         l.spawn = [5, 70, -9];
         l.difficulty = 1;
         l.time = 1000;
@@ -851,9 +854,11 @@ mod tests {
 
     #[test]
     fn classic_round_trips_and_inverts_rules() {
-        let mut l = LevelData::default();
-        l.name = "T".into();
-        l.seed = -77;
+        let mut l = LevelData {
+            name: "T".into(),
+            seed: -77,
+            ..LevelData::default()
+        };
         l.spawn = [1, 2, 3];
         l.difficulty = 3;
         l.dimensions.insert("minecraft:overworld".into(), Tag::Compound(Compound::new()));
