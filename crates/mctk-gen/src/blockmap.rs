@@ -212,13 +212,6 @@ impl Global {
             }
         }
     }
-
-    fn get(&self, k: &str, v: &str, q: &str) -> Option<&str> {
-        let counts = self.0.get(&(k.to_string(), v.to_string(), q.to_string()))?;
-        let total: usize = counts.values().sum();
-        let (best, n) = counts.iter().max_by_key(|(_, n)| **n)?;
-        (*n * 10 >= total * 9).then_some(best.as_str())
-    }
 }
 
 /// A block's shape: its properties with their values, which blocks of one family share.
@@ -607,11 +600,10 @@ fn convention(q: &str, bname: &str, j: &JState) -> Option<String> {
             if ceiling_hanging {
                 return java(j, "rotation").and_then(|r| r.parse::<i32>().ok()).map(|r| format!("i:{}", rotation_facing(r)));
             }
-            if bname.ends_with("_head") || bname.ends_with("_skull") {
-                if java(j, "rotation").is_some() {
+            if (bname.ends_with("_head") || bname.ends_with("_skull"))
+                && java(j, "rotation").is_some() {
                     return Some("i:1".into());
                 }
-            }
             if bname.ends_with("end_rod") {
                 return facing.and_then(|f| ["down", "up", "south", "north", "east", "west"].iter().position(|d| *d == f)).map(|n| format!("i:{n}"));
             }
@@ -637,8 +629,8 @@ fn convention(q: &str, bname: &str, j: &JState) -> Option<String> {
         "upper_block_bit" if bname.contains("pale_moss_carpet") => is_true(j, "bottom").map(|b| bit(!b)),
         "upper_block_bit" => java(j, "half").map(|h| bit(h == "upper")),
         "door_hinge_bit" => java(j, "hinge").map(|h| bit(h == "right")),
-        "open_bit" => is_true(j, "open").map(bit),
         "open_bit" if bname.ends_with("lever") => is_true(j, "powered").map(bit),
+        "open_bit" => is_true(j, "open").map(bit),
         "powered_bit" | "toggle_bit" | "rail_data_bit" | "button_pressed_bit" => is_true(j, "powered").map(bit),
         "lit" => is_true(j, "lit").map(bit),
         "extinguished" => is_true(j, "lit").map(|l| bit(!l)),

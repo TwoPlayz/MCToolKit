@@ -18,6 +18,15 @@ fn chunk_nbt(x: i32, z: i32, filler: usize) -> NamedTag {
 }
 
 fn temp_dir(name: &str) -> std::path::PathBuf {
+    // Earlier runs' folders (one per process) are cleared away, so they do not pile up.
+    if let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) {
+        for e in entries.flatten() {
+            let stale = e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age.as_secs() > 3600);
+            if stale && e.file_name().to_string_lossy().starts_with("mctk-anvil-test-") {
+                let _ = std::fs::remove_dir_all(e.path());
+            }
+        }
+    }
     let dir = std::env::temp_dir().join(format!("mctk-anvil-test-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -86,6 +95,7 @@ fn writes_and_reads_chunks() {
     }
     assert!(region.read_chunk(1, 1).unwrap().is_none());
     assert_eq!(std::fs::metadata(&path).unwrap().len() % 4096, 0);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -101,6 +111,7 @@ fn oversized_chunks_go_to_mcc_files() {
     assert!(dir.join("c.3.4.mcc").exists());
     let region = Region::open(&path).unwrap();
     assert_eq!(region.raw_chunk(3, 4).unwrap().unwrap(), big);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

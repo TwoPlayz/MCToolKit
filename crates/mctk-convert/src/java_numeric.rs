@@ -166,9 +166,7 @@ pub fn item(it: &mut Compound, era: u8, notes: &mut Notes) -> bool {
         if era == 8 {
             tag.shift_remove("Potion");
         }
-        for k in ["CustomPotionEffects"] {
-            tag.shift_remove(k);
-        }
+        tag.shift_remove("CustomPotionEffects");
     }
     it.insert("Damage".into(), Tag::Short(damage as i16));
     true

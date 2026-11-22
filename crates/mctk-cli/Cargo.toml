@@ -19,3 +19,4 @@ mctk-console.workspace = true
 clap.workspace = true
 mctk-convert.workspace = true
 mctk-prune.workspace = true
+mctk-replace.workspace = true

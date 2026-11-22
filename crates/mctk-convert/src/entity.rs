@@ -245,6 +245,42 @@ pub(crate) fn actor_to_java(
                 Tag::Short(i64_of(actor, "PickupDelay").unwrap_or(0) as i16),
             );
         }
+        "minecraft:falling_block" => {
+            // The block it is made of: Bedrock's {name, states} as a Java block state.
+            let Some(block) = actor.get("FallingBlock").and_then(Tag::as_compound) else {
+                report.skip("entities: minecraft:falling_block (no block saved in it)", 1);
+                return None;
+            };
+            let states = block.get("states").and_then(Tag::as_compound).cloned().unwrap_or_default();
+            let found = block.get("name").and_then(Tag::as_str).and_then(|n| mctk_mapping::mappings().bedrock_to_java(n, &states));
+            let Some(state) = found else {
+                report.skip("entities: minecraft:falling_block (a block Java has no form for)", 1);
+                return None;
+            };
+            let mut bs = Compound::new();
+            bs.insert("Name".into(), Tag::String(state.name.clone()));
+            if !state.properties.is_empty() {
+                let props: Compound = state.properties.iter().map(|(k, v)| (k.clone(), Tag::String(v.clone()))).collect();
+                bs.insert("Properties".into(), Tag::Compound(props));
+            }
+            out.insert("BlockState".into(), Tag::Compound(bs));
+            out.insert("Time".into(), Tag::Int(i64_of(actor, "Time").unwrap_or(0).max(0) as i32));
+            out.insert("DropItem".into(), Tag::Byte(1));
+        }
+        "minecraft:chest_minecart" | "minecraft:hopper_minecart" | "minecraft:chest_boat" => {
+            // What the chest or hopper holds: Bedrock's `ChestItems` (a hopper's are `Items`).
+            let key = if ident == "minecraft:hopper_minecart" { "Items" } else { "ChestItems" };
+            let held: Vec<Compound> = actor
+                .get(key)
+                .and_then(Tag::as_list)
+                .into_iter()
+                .flat_map(|l| l.iter())
+                .filter_map(|t| t.as_compound().and_then(|c| item_to_java(c, report)))
+                .collect();
+            if !held.is_empty() {
+                out.insert("Items".into(), Tag::List(List::from_tags(TagType::Compound, held.into_iter().map(Tag::Compound).collect()).expect("compounds")));
+            }
+        }
         _ => {}
     }
     *report
@@ -538,7 +574,28 @@ fn minimal_actor(
     if let Some((variant, _)) = boat_of(java_id) {
         out.insert("Variant".into(), Tag::Int(variant as i32));
     }
-    if holds_items(java) {
+    // What a chest minecart, chest boat or hopper minecart holds goes in the actor's own list.
+    let contents = match java_id {
+        "minecraft:chest_minecart" => Some("ChestItems"),
+        "minecraft:hopper_minecart" => Some("Items"),
+        id if id.ends_with("chest_boat") || id.ends_with("chest_raft") => Some("ChestItems"),
+        _ => None,
+    };
+    let mut carried = false;
+    if let Some(list_key) = contents {
+        let held: Vec<Compound> = java
+            .get("Items")
+            .and_then(Tag::as_list)
+            .into_iter()
+            .flat_map(|l| l.iter())
+            .filter_map(|t| t.as_compound().and_then(|c| crate::block_entity::item_to_bedrock(c, report)))
+            .collect();
+        if !held.is_empty() {
+            out.insert(list_key.into(), Tag::List(List::from_tags(TagType::Compound, held.into_iter().map(Tag::Compound).collect()).expect("compounds")));
+        }
+        carried = true;
+    }
+    if !carried && holds_items(java) {
         report.skip(&format!("entity contents: {java_id}"), 1);
     }
     *report.converted_entities.entry(java_id.to_string()).or_insert(0) += 1;
@@ -563,7 +620,7 @@ fn carrier_to_actor(
         let Some(stack) = java.get("Item").and_then(Tag::as_compound) else { return empty(report) };
         match crate::block_entity::item_to_bedrock(stack, report) {
             Some(mut item) => {
-                item.remove("Slot");
+                item.shift_remove("Slot");
                 item
             }
             None => {
@@ -829,15 +886,12 @@ pub(crate) fn entity_to_actor(
     out.insert("identifier".into(), Tag::String(ident.clone()));
     out.insert("internalComponents".into(), internal_components(&key));
 
-    match java_id {
-        "minecraft:sheep" => {
-            out.insert("Color".into(), Tag::Byte(i64_of(java, "Color").unwrap_or(0) as i8));
-            out.insert(
-                "Sheared".into(),
-                Tag::Byte((i64_of(java, "Sheared").unwrap_or(0) != 0) as i8),
-            );
-        }
-        _ => {}
+    if java_id == "minecraft:sheep" {
+        out.insert("Color".into(), Tag::Byte(i64_of(java, "Color").unwrap_or(0) as i8));
+        out.insert(
+            "Sheared".into(),
+            Tag::Byte((i64_of(java, "Sheared").unwrap_or(0) != 0) as i8),
+        );
     }
     *report.converted_entities.entry(java_id.to_string()).or_insert(0) += 1;
     Some(Actor { chunk, key, nbt: out })
@@ -1297,6 +1351,8 @@ mod tests {
         c.insert("Rotation".into(), float_list(&[90.0, 0.0]));
         let mut chest = Compound::new();
         chest.insert("id".into(), Tag::String("minecraft:diamond".into()));
+        chest.insert("count".into(), Tag::Int(3));
+        chest.insert("Slot".into(), Tag::Byte(4));
         c.insert(
             "Items".into(),
             Tag::List(List::from_tags(TagType::Compound, vec![Tag::Compound(chest)]).unwrap()),
@@ -1310,9 +1366,37 @@ mod tests {
         assert_eq!(floats(&a.nbt, "Rotation", 2), vec![90.0, 0.0]);
         assert!(a.nbt.get("definitions").is_none());
         assert!(a.nbt.get("internalComponents").is_some());
-        // The chest's contents are not carried over, and that is reported.
-        assert_eq!(report.skipped.get("entity contents: minecraft:chest_minecart"), Some(&1));
+        // The chest's contents are carried over (Bedrock's `ChestItems`), and come back.
+        let held = a.nbt.get("ChestItems").and_then(Tag::as_list).expect("the chest's items");
+        assert_eq!(held.get(0).and_then(|i| i.get("Name")).and_then(Tag::as_str), Some("minecraft:diamond"));
+        assert_eq!(held.get(0).and_then(|i| i.get("Slot")).and_then(Tag::as_i64), Some(4));
+        assert!(report.skipped.is_empty(), "{:?}", report.skipped);
         assert_eq!(report.converted_entities.get("minecraft:chest_minecart"), Some(&1));
+        let back = actor_to_java(&a.nbt, (0, 0), &mut report).expect("a minecart");
+        let items = back.get("Items").and_then(Tag::as_list).expect("its items");
+        assert_eq!(items.get(0).and_then(|i| i.get("id")).and_then(Tag::as_str), Some("minecraft:diamond"));
+        assert_eq!(items.get(0).and_then(|i| i.get("count")).and_then(Tag::as_i64), Some(3));
+        assert_eq!(items.get(0).and_then(|i| i.get("Slot")).and_then(Tag::as_i64), Some(4));
+    }
+
+    /// A falling block keeps its block going to Bedrock and back.
+    #[test]
+    fn a_falling_block_keeps_its_block_both_ways() {
+        let mut sand = Compound::new();
+        sand.insert("id".into(), Tag::String("minecraft:falling_block".into()));
+        sand.insert("Pos".into(), double_list(&[3.5, 90.0, 4.5]));
+        let mut bs = Compound::new();
+        bs.insert("Name".into(), Tag::String("minecraft:red_sand".into()));
+        sand.insert("BlockState".into(), Tag::Compound(bs));
+        sand.insert("Time".into(), Tag::Int(7));
+        let mut report = EditionReport::default();
+        let a = entity_to_actor(&sand, (0, 0), &mut ActorIds::default(), &mut report).expect("to Bedrock");
+        let back = actor_to_java(&a.nbt, (0, 0), &mut report).expect("back to Java");
+        assert_eq!(back.get("id").and_then(Tag::as_str), Some("minecraft:falling_block"));
+        let state = back.get("BlockState").and_then(Tag::as_compound).expect("its block");
+        assert_eq!(state.get("Name").and_then(Tag::as_str), Some("minecraft:red_sand"));
+        assert_eq!(back.get("Time").and_then(Tag::as_i64), Some(7));
+        assert!(report.skipped.is_empty(), "{:?}", report.skipped);
     }
 
     #[test]

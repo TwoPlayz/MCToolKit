@@ -7,7 +7,9 @@
 //! converted so far: it stays where it is while chunks fill in, and only changes (to the next
 //! size up, or half a window over) when conversion reaches beyond it.
 
-use eframe::egui::{Color32, Pos2, Rect, Vec2, pos2};
+use eframe::egui::Color32;
+#[cfg(test)]
+use eframe::egui::{Pos2, Rect, Vec2, pos2};
 
 /// How many of the newest chunks glow.
 const GLOW: usize = 40;
@@ -36,6 +38,56 @@ fn window(x0: i32, x1: i32, z0: i32, z1: i32) -> (i32, i32, i32) {
     }
 }
 
+/// The picture as an image, a pixel a chunk (several chunks a pixel in a world wider than
+/// `most`), for drawing scaled up with sharp edges: tiny rectangles drawn one by one turned
+/// into stripes and gaps once the page was scaled, which a picture never does. The window and
+/// colors are as [`cells`]'s; chunks are drawn without gaps.
+pub fn image(chunks: &[(i32, i32)], all: Option<&[(i32, i32)]>, running: bool, colors: &Colors, most: usize) -> eframe::egui::ColorImage {
+    let all = all.filter(|a| !a.is_empty());
+    let mut bounds = (i32::MAX, i32::MIN, i32::MAX, i32::MIN);
+    for &(x, z) in all.unwrap_or(chunks) {
+        bounds = (bounds.0.min(x), bounds.1.max(x), bounds.2.min(z), bounds.3.max(z));
+    }
+    let empty = bounds.0 > bounds.1;
+    let (ax, az, width) = if empty {
+        (0, 0, SMALLEST)
+    } else if all.is_some() {
+        // The whole world known: a square just around it, the world in its middle (it never
+        // has to move, so no need for the window's steps).
+        let (w, h) = (bounds.1 - bounds.0 + 1, bounds.3 - bounds.2 + 1);
+        let side = w.max(h).max(SMALLEST);
+        (bounds.0 - (side - w) / 2, bounds.2 - (side - h) / 2, side)
+    } else {
+        window(bounds.0, bounds.1, bounds.2, bounds.3)
+    };
+    let side = (width as usize).min(most.max(1));
+    let mut pixels = vec![colors.frame; side * side];
+    let px = |x: i32, z: i32| -> Option<usize> {
+        let (i, j) = ((x - ax) as i64 * side as i64 / width as i64, (z - az) as i64 * side as i64 / width as i64);
+        (i >= 0 && j >= 0 && (i as usize) < side && (j as usize) < side).then(|| j as usize * side + i as usize)
+    };
+    for &(x, z) in all.unwrap_or(&[]) {
+        if let Some(p) = px(x, z) {
+            pixels[p] = colors.todo;
+        }
+    }
+    let newest = chunks.len().saturating_sub(GLOW);
+    for (i, &(x, z)) in chunks.iter().enumerate() {
+        let color = if running && i >= newest {
+            let age = (chunks.len() - i) as f32 / GLOW as f32;
+            colors.fresh.lerp_to_gamma(colors.chunk, age.clamp(0.0, 1.0))
+        } else {
+            let h = ((x.wrapping_mul(73_856_093) ^ z.wrapping_mul(19_349_663)) & 0xff) as f32 / 255.0;
+            colors.chunk.gamma_multiply(0.9 + 0.1 * h)
+        };
+        if let Some(p) = px(x, z) {
+            pixels[p] = color;
+        }
+    }
+    eframe::egui::ColorImage { size: [side, side], pixels }
+}
+
+#[cfg(test)]
 /// The rectangles of a `size` x `size` picture of `chunks` (in the order they were written),
 /// relative to its top-left corner, back to front: the frame first. `running` makes the newest
 /// chunks glow.
@@ -93,54 +145,6 @@ pub fn cells(chunks: &[(i32, i32)], all: Option<&[(i32, i32)]>, size: f32, runni
         }
     }
     out
-}
-/// The picture as an image, a pixel a chunk (several chunks a pixel in a world wider than
-/// `most`), for drawing scaled up with sharp edges: tiny rectangles drawn one by one turned
-/// into stripes and gaps once the page was scaled, which a picture never does. The window and
-/// colors are as [`cells`]'s; chunks are drawn without gaps.
-pub fn image(chunks: &[(i32, i32)], all: Option<&[(i32, i32)]>, running: bool, colors: &Colors, most: usize) -> eframe::egui::ColorImage {
-    let all = all.filter(|a| !a.is_empty());
-    let mut bounds = (i32::MAX, i32::MIN, i32::MAX, i32::MIN);
-    for &(x, z) in all.unwrap_or(chunks) {
-        bounds = (bounds.0.min(x), bounds.1.max(x), bounds.2.min(z), bounds.3.max(z));
-    }
-    let empty = bounds.0 > bounds.1;
-    let (ax, az, width) = if empty {
-        (0, 0, SMALLEST)
-    } else if all.is_some() {
-        // The whole world known: a square just around it, the world in its middle (it never
-        // has to move, so no need for the window's steps).
-        let (w, h) = (bounds.1 - bounds.0 + 1, bounds.3 - bounds.2 + 1);
-        let side = w.max(h).max(SMALLEST);
-        (bounds.0 - (side - w) / 2, bounds.2 - (side - h) / 2, side)
-    } else {
-        window(bounds.0, bounds.1, bounds.2, bounds.3)
-    };
-    let side = (width as usize).min(most.max(1));
-    let mut pixels = vec![colors.frame; side * side];
-    let px = |x: i32, z: i32| -> Option<usize> {
-        let (i, j) = ((x - ax) as i64 * side as i64 / width as i64, (z - az) as i64 * side as i64 / width as i64);
-        (i >= 0 && j >= 0 && (i as usize) < side && (j as usize) < side).then(|| j as usize * side + i as usize)
-    };
-    for &(x, z) in all.unwrap_or(&[]) {
-        if let Some(p) = px(x, z) {
-            pixels[p] = colors.todo;
-        }
-    }
-    let newest = chunks.len().saturating_sub(GLOW);
-    for (i, &(x, z)) in chunks.iter().enumerate() {
-        let color = if running && i >= newest {
-            let age = (chunks.len() - i) as f32 / GLOW as f32;
-            colors.fresh.lerp_to_gamma(colors.chunk, age.clamp(0.0, 1.0))
-        } else {
-            let h = ((x.wrapping_mul(73_856_093) ^ z.wrapping_mul(19_349_663)) & 0xff) as f32 / 255.0;
-            colors.chunk.gamma_multiply(0.9 + 0.1 * h)
-        };
-        if let Some(p) = px(x, z) {
-            pixels[p] = color;
-        }
-    }
-    eframe::egui::ColorImage { size: [side, side], pixels }
 }
 
 #[cfg(test)]

@@ -320,31 +320,6 @@ pub fn armor_points(c: &Compound, java_id: &str, data_version: Option<i64>) -> i
     own + worn
 }
 
-/// Sets a mob's health where its edition keeps it.
-pub fn set_health(c: &mut Compound, value: f64) {
-    if is_bedrock(c) {
-        if let Some(Tag::List(l)) = c.get_mut("Attributes") {
-            for a in l.iter_mut() {
-                if let Some(a) = a.as_compound_mut() {
-                    if a.get("Name").and_then(Tag::as_str) == Some("minecraft:health") {
-                        a.insert("Current".into(), Tag::Float(value as f32));
-                    }
-                }
-            }
-        }
-        return;
-    }
-    // Before 1.9 health was a short, with the exact value in `HealF` beside it.
-    if c.contains_key("HealF") {
-        c.insert("HealF".into(), Tag::Float(value as f32));
-        c.insert("Health".into(), Tag::Short(value.round() as i16));
-    } else if matches!(c.get("Health"), Some(Tag::Short(_))) {
-        c.insert("Health".into(), Tag::Short(value.round() as i16));
-    } else {
-        c.insert("Health".into(), Tag::Float(value as f32));
-    }
-}
-
 // ---------------------------------------------------------------------------------------------
 // What a mob wears and holds
 // ---------------------------------------------------------------------------------------------
@@ -1011,6 +986,108 @@ pub fn set_lock(c: &mut Compound, key: &str, data_version: Option<i64>) {
     c.insert("lock".into(), Tag::Compound(l));
 }
 
+// ---------------------------------------------------------------------------------------------
+// Beacons
+// ---------------------------------------------------------------------------------------------
+
+/// Java 1.20.2 (data version 3578), where a beacon keeps its powers as effect names
+/// (`primary_effect`, `secondary_effect`) and not as numbers (`Primary`, `Secondary`).
+const DV_BEACON_NAMES: i64 = 3578;
+
+/// An effect's number in the games before 1.20.2 (only the first 33 effects have one).
+fn effect_number(name: &str) -> Option<i64> {
+    crate::effects::cloud_effect_names().iter().position(|n| *n == name).filter(|i| *i < 33).map(|i| i as i64 + 1)
+}
+
+/// The effect a number stands for in those games.
+fn effect_of_number(n: i64) -> Option<&'static str> {
+    usize::try_from(n - 1).ok().filter(|i| *i < 33).and_then(|i| crate::effects::cloud_effect_names().get(i).copied())
+}
+
+/// Whether a block entity is a beacon (Java and the console editions).
+pub fn is_beacon(c: &Compound) -> bool {
+    !bedrock_block(c) && raw_id(c).trim_start_matches("minecraft:").eq_ignore_ascii_case("beacon")
+}
+
+/// A beacon's primary and secondary power, as effect names (`speed`), and how many levels its
+/// pyramid had when it was saved. The game works the levels out again from the blocks below the
+/// beacon, so they only say what it was.
+pub fn beacon_powers(c: &Compound) -> (Option<String>, Option<String>) {
+    let power = |named: &str, numbered: &str| -> Option<String> {
+        if let Some(n) = c.get(named).and_then(Tag::as_str) {
+            return Some(n.trim_start_matches("minecraft:").to_string());
+        }
+        let n = c.get(numbered).and_then(Tag::as_i64).filter(|n| *n > 0)?;
+        effect_of_number(n).map(str::to_string)
+    };
+    (power("primary_effect", "Primary"), power("secondary_effect", "Secondary"))
+}
+
+/// How many levels the pyramid under a beacon had when it was saved (0 to 4).
+pub fn beacon_levels(c: &Compound) -> i64 {
+    c.get("Levels").and_then(Tag::as_i64).unwrap_or(0)
+}
+
+/// What a beacon at `levels` gives, as the game works it out: how far (blocks), how long (seconds)
+/// each time it is renewed, and the first power's level (II when the second power repeats it).
+pub fn beacon_reach(levels: i64, primary: Option<&str>, secondary: Option<&str>) -> (i64, i64, i64) {
+    let level = if levels >= 4 && primary.is_some() && primary == secondary { 2 } else { 1 };
+    (10 + levels * 10, 9 + levels * 2, level)
+}
+
+/// Sets a beacon's primary (or `secondary`) power to an effect name (`None`: no power), in the form
+/// the world keeps it in.
+pub fn set_beacon_power(c: &mut Compound, secondary: bool, effect: Option<&str>, data_version: Option<i64>) {
+    let (named, numbered) = if secondary { ("secondary_effect", "Secondary") } else { ("primary_effect", "Primary") };
+    c.shift_remove(named);
+    c.shift_remove(numbered);
+    let Some(effect) = effect.map(|e| e.trim_start_matches("minecraft:")) else { return };
+    let names = match data_version {
+        Some(v) => v >= DV_BEACON_NAMES,
+        None => !c.contains_key("Primary") && !c.contains_key("Secondary"),
+    };
+    if names {
+        c.insert(named.into(), Tag::String(format!("minecraft:{effect}")));
+    } else if let Some(n) = effect_number(effect) {
+        c.insert(numbered.into(), Tag::Int(n as i32));
+    }
+}
+
+/// The jobs a villager can have, each with the block it works at (for its picture).
+pub const PROFESSIONS: [(&str, &str); 15] = [
+    ("none", "barrier"),
+    ("armorer", "blast_furnace"),
+    ("butcher", "smoker"),
+    ("cartographer", "cartography_table"),
+    ("cleric", "brewing_stand"),
+    ("farmer", "composter"),
+    ("fisherman", "barrel"),
+    ("fletcher", "fletching_table"),
+    ("leatherworker", "cauldron"),
+    ("librarian", "lectern"),
+    ("mason", "stonecutter"),
+    ("nitwit", "bell"),
+    ("shepherd", "loom"),
+    ("toolsmith", "smithing_table"),
+    ("weaponsmith", "grindstone"),
+];
+
+/// A villager's (or zombie villager's) job, by name (`farmer`; `none` for none); `None` for
+/// anything that has no villager data.
+pub fn profession(c: &Compound) -> Option<String> {
+    let data = c.get("VillagerData").and_then(Tag::as_compound)?;
+    Some(data.get("profession").and_then(Tag::as_str).map_or("none", |p| p.trim_start_matches("minecraft:")).to_string())
+}
+
+/// Gives a villager a job (`none`: takes it away). Its level and trades are kept.
+pub fn set_profession(c: &mut Compound, job: &str) {
+    let Some(Tag::Compound(data)) = c.get_mut("VillagerData") else { return };
+    data.insert("profession".into(), Tag::String(format!("minecraft:{job}")));
+    if data.get("level").and_then(Tag::as_i64).is_none_or(|l| l < 1) {
+        data.insert("level".into(), Tag::Int(1));
+    }
+}
+
 /// A shulker's color (0 white ... 15 black, 16 its own purple), for shulkers only.
 pub fn shulker_color(c: &Compound, java_id: &str) -> Option<i64> {
     java_id.ends_with(":shulker").then(|| c.get("Color").and_then(Tag::as_i64).unwrap_or(16))
@@ -1048,6 +1125,10 @@ pub enum MobEdit {
     Lock(String),
     /// A shulker's color (16: its own).
     ShulkerColor(i64),
+    /// A beacon's primary (or secondary) power: an effect name, or (`None`) none.
+    BeaconPower { secondary: bool, effect: Option<String> },
+    /// A villager's job (the name `none` is no job).
+    Profession(String),
 }
 
 impl MobEdit {
@@ -1074,6 +1155,12 @@ impl MobEdit {
             MobEdit::Lock(k) => format!("Locked it with the key \u{201c}{k}\u{201d}"),
             MobEdit::ShulkerColor(16) => "Gave the shulker its own color".into(),
             MobEdit::ShulkerColor(c) => format!("Made the shulker {}", crate::item_picker::display_name(COLORS.get(*c as usize).copied().unwrap_or("purple"))),
+            MobEdit::BeaconPower { secondary, effect: Some(e) } => {
+                format!("Set the beacon's {} power to {}", if *secondary { "secondary" } else { "primary" }, crate::item_picker::display_name(e))
+            }
+            MobEdit::Profession(p) if p == "none" => "Took the villager's job away".into(),
+            MobEdit::Profession(p) => format!("Made the villager a {}", crate::item_picker::display_name(p)),
+            MobEdit::BeaconPower { secondary, effect: None } => format!("Took the beacon's {} power away", if *secondary { "secondary" } else { "primary" }),
         }
     }
 
@@ -1101,7 +1188,35 @@ impl MobEdit {
             MobEdit::ShulkerColor(v) => {
                 c.insert("Color".into(), Tag::Byte(*v as i8));
             }
+            MobEdit::BeaconPower { secondary, effect } => set_beacon_power(c, *secondary, effect.as_deref(), data_version),
+            MobEdit::Profession(p) => set_profession(c, p),
         }
+    }
+}
+
+#[cfg(test)]
+/// Sets a mob's health where its edition keeps it.
+pub fn set_health(c: &mut Compound, value: f64) {
+    if is_bedrock(c) {
+        if let Some(Tag::List(l)) = c.get_mut("Attributes") {
+            for a in l.iter_mut() {
+                if let Some(a) = a.as_compound_mut() {
+                    if a.get("Name").and_then(Tag::as_str) == Some("minecraft:health") {
+                        a.insert("Current".into(), Tag::Float(value as f32));
+                    }
+                }
+            }
+        }
+        return;
+    }
+    // Before 1.9 health was a short, with the exact value in `HealF` beside it.
+    if c.contains_key("HealF") {
+        c.insert("HealF".into(), Tag::Float(value as f32));
+        c.insert("Health".into(), Tag::Short(value.round() as i16));
+    } else if matches!(c.get("Health"), Some(Tag::Short(_))) {
+        c.insert("Health".into(), Tag::Short(value.round() as i16));
+    } else {
+        c.insert("Health".into(), Tag::Float(value as f32));
     }
 }
 
@@ -1156,6 +1271,27 @@ mod tests {
         assert!(!c.contains_key("lock") && lock(&c).is_empty());
         // Bedrock has no locks.
         assert!(!lockable(&of(&[("id", s("Chest")), ("isMovable", Tag::Byte(1))])));
+    }
+
+    #[test]
+    fn a_beacons_powers_are_read_and_set_in_the_form_of_its_version() {
+        let mut modern = of(&[("id", s("minecraft:beacon")), ("Levels", Tag::Int(4)), ("primary_effect", s("minecraft:speed"))]);
+        assert!(is_beacon(&modern));
+        assert_eq!(beacon_powers(&modern), (Some("speed".into()), None));
+        set_beacon_power(&mut modern, true, Some("minecraft:speed"), Some(4400));
+        assert_eq!(beacon_powers(&modern), (Some("speed".into()), Some("speed".into())));
+        assert_eq!(beacon_reach(beacon_levels(&modern), Some("speed"), Some("speed")), (50, 17, 2));
+        set_beacon_power(&mut modern, false, None, Some(4400));
+        assert_eq!(beacon_powers(&modern).0, None);
+        // Before 1.20.2 and in the console games the powers are numbers.
+        let mut old = of(&[("id", s("Beacon")), ("Levels", Tag::Int(1)), ("Primary", Tag::Int(11))]);
+        assert_eq!(beacon_powers(&old).0.as_deref(), Some("resistance"));
+        set_beacon_power(&mut old, true, Some("regeneration"), Some(3465));
+        assert_eq!(old.get("Secondary"), Some(&Tag::Int(10)));
+        set_beacon_power(&mut old, false, Some("haste"), None);
+        assert_eq!(old.get("Primary"), Some(&Tag::Int(3)));
+        assert!(!old.contains_key("primary_effect"));
+        assert!(lockable(&old));
     }
 
     #[test]

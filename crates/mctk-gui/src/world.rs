@@ -448,6 +448,11 @@ fn intern_biome(name: &str) -> u16 {
     })
 }
 
+/// The number a biome name is known by on the map (for patching the picture after biome edits).
+pub(crate) fn map_biome(name: &str) -> u16 {
+    intern_biome(name)
+}
+
 /// The biome name a map number stands for (without "minecraft:").
 pub fn biome_name(id: u16) -> Option<String> {
     let g = BIOME_NAMES.lock().ok()?;
@@ -610,8 +615,7 @@ fn biome_colors(biome: &str) -> ([f32; 3], [f32; 3]) {
     else if b.contains("swamp") { c(0x6A7039, 0x6A7039) }
     else if b.contains("jungle") || b.contains("bamboo") { c(0x59C93C, 0x30BB0B) }
     else if b.contains("mushroom") { c(0x55C93F, 0x2BBB0F) }
-    else if b.contains("wooded_badlands") || b.contains("eroded") { c(0x90814D, 0x9E814D) }
-    else if b.contains("badlands") { c(0x90814D, 0x9E814D) }
+    else if b.contains("wooded_badlands") || b.contains("eroded") || b.contains("badlands") { c(0x90814D, 0x9E814D) }
     else if b.contains("desert") || b.contains("savanna") { c(0xBFB755, 0xAEA42A) }
     else if b.contains("snowy") || b.contains("frozen") || b.contains("ice") || b.contains("grove") && !b.contains("cherry") || b.contains("cold") { c(0x80B497, 0x60A17B) }
     else if b.contains("cherry") { c(0xB6DB61, 0x9EDE36) }
@@ -1033,7 +1037,7 @@ pub fn render_map_with(
                     _ => Vec::new(),
                 };
                 let mut named: std::collections::HashMap<(u8, u8), String> = Default::default();
-                let top_y = chunk.height.min((max_y.max(-1) + 1) as usize);
+                let top_y = chunk.height.min(max_y.max(-1).saturating_add(1) as usize);
                 let mut cols = [None; 256];
                 for z in 0..16 {
                     for x in 0..16 {

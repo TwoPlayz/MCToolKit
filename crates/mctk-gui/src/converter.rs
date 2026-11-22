@@ -6,6 +6,7 @@ use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use eframe::egui::{self, Align2, Color32, Rect, RichText, Sense, Ui, Vec2, pos2, vec2};
+use mctk_console::{Ps3Random, Ps3Region};
 use mctk_convert::{ConvertOptions, Progress};
 use mctk_registry::Registry;
 use mctk_replace::{Choice, Plan, ReplacementMap};
@@ -52,6 +53,10 @@ struct Scanned {
     registry: Registry,
 }
 
+/// Whether the banner under the stepper (the "early and untested" notice, or another message to
+/// give in future) is shown.
+const SHOW_BANNER: bool = false;
+
 /// Which Bedrock version the version list has chosen (an index into the built-in versions, newest first).
 static BEDROCK_INDEX: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
@@ -66,7 +71,7 @@ pub struct ConverterPage {
     scan_job: Option<Job<Scanned>>,
     scan_error: Option<String>,
     /// What the scan was made for, so it is redone when either changes.
-    scan_for: Option<(PathBuf, usize, u8)>,
+    scan_for: Option<(PathBuf, usize, u8, String)>,
     /// Search text of the open replacement picker.
     search: String,
     dims: [bool; 3],
@@ -108,6 +113,22 @@ pub struct ConverterPage {
     preview_tex: Option<egui::TextureHandle>,
     /// What the finished conversion was made from and for (see `choice_key`).
     converted_for: Option<String>,
+    /// When the world being converted last changed on disk (checked now and then), so a result made
+    /// from it before is not taken for the world as it is.
+    /// The Save dialog of a PlayStation 3 world, while it is open.
+    ps3_dialog: Option<Ps3Dialog>,
+    /// The dialog for choosing what a block becomes, while it is open.
+    replace_dialog: Option<ReplaceDialog>,
+    /// How far the REPLACE list is scrolled (kept here, so the wheel works in the scaled page).
+    replace_scroll: f32,
+    /// The same for the Convert step's list of what was left out.
+    notes_scroll: f32,
+    /// The converted world has been saved (the Save step shows its tick).
+    saved: bool,
+    /// The first dimension converted, as the picture shows it once the conversion is done.
+    pic_first: Option<(String, Vec<(i32, i32)>)>,
+    source_stamp: Option<(PathBuf, std::time::SystemTime)>,
+    stamp_checked: Option<Instant>,
     pub status: String,
 }
 
@@ -161,6 +182,14 @@ impl ConverterPage {
             dev_start: false,
             preview_tex: None,
             converted_for: None,
+            ps3_dialog: None,
+            replace_dialog: None,
+            replace_scroll: 0.0,
+            notes_scroll: 0.0,
+            saved: false,
+            pic_first: None,
+            source_stamp: None,
+            stamp_checked: None,
             status: String::new(),
         }
     }
@@ -199,6 +228,36 @@ impl ConverterPage {
         }
     }
 
+    /// Notices when the world to convert was changed (saved in the NBT editor, played in the game)
+    /// after a conversion or a scan of it: they are forgotten, so the next one is of the world as
+    /// it is now.
+    fn watch_source(&mut self) {
+        let Some((path, _)) = self.input.clone() else {
+            self.source_stamp = None;
+            return;
+        };
+        if self.job.is_some() || self.stamp_checked.is_some_and(|t| t.elapsed().as_secs_f32() < 1.0) {
+            return;
+        }
+        self.stamp_checked = Some(Instant::now());
+        let Some(now) = crate::cleanup::newest(&path) else { return };
+        match &self.source_stamp {
+            Some((p, then)) if *p == path && *then != now => {
+                self.result = None;
+                self.progress = None;
+                self.elapsed = 0.0;
+                self.converted_for = None;
+                self.real_height = [0.0; 6];
+                self.scanned = None;
+                self.scan_for = None;
+                self.scan_error = None;
+                self.status = "The world changed since it was last looked at, so it will be converted as it is now".into();
+            }
+            _ => {}
+        }
+        self.source_stamp = Some((path, now));
+    }
+
     /// Lets go of the world: back to choosing one. Not while it is being converted.
     pub fn reset(&mut self) -> bool {
         if self.job.is_some() {
@@ -213,6 +272,8 @@ impl ConverterPage {
         self.scan_for = None;
         self.scan_error = None;
         self.converted_for = None;
+        self.saved = false;
+        self.pic_first = None;
         self.real_height = [0.0; 6];
         true
     }
@@ -232,13 +293,10 @@ impl ConverterPage {
     /// Java worlds converted to Java or Bedrock, and Bedrock worlds converted to Java, get a
     /// REPLACE step for what the target cannot hold.
     fn has_replace_step(&self) -> bool {
-        match (self.input.as_ref().map(|i| i.1), self.output) {
-            (Some(UiEdition::Java), Some(UiEdition::Java | UiEdition::Bedrock | UiEdition::Xbox360 | UiEdition::Ps3 | UiEdition::WiiU)) => true,
-            // Bedrock worlds go through a Java world to a Bedrock version or a console game, and
-            // what that one cannot hold is chosen against the Java world.
-            (Some(UiEdition::Bedrock), Some(_)) => true,
-            _ => false,
-        }
+        // Bedrock worlds go through a Java world to a Bedrock version or a console game, and
+        // what that one cannot hold is chosen against the Java world. (The step is in the
+        // stepper from the start, before an output is chosen.)
+        matches!(self.input.as_ref().map(|i| i.1), Some(UiEdition::Java | UiEdition::Bedrock))
     }
 
     /// The console game version the writer produces saves for.
@@ -309,6 +367,10 @@ impl ConverterPage {
             game_mode: self.game_mode.checked_sub(1).map(|g| g as i32),
             difficulty: self.difficulty.checked_sub(1).map(|d| d as i32),
             offset,
+            // The console version offered (the latest game) is the current save format, in the
+            // classic 54-chunk world.
+            console_format: mctk_convert::ConsoleFormat::Current,
+            classic_world_size: true,
         }
     }
 
@@ -318,6 +380,10 @@ impl ConverterPage {
         };
         let Some(out_ed) = self.output else { return };
         let name = world_name(&src);
+        // The last conversion (not saved, or it would have been looked at by now) is replaced.
+        if let Some(old) = self.out_dir.take() {
+            let _ = std::fs::remove_dir_all(old);
+        }
         let out = match settings.new_workspace("CONVERTER", &name) {
             Ok(p) => p,
             Err(e) => {
@@ -347,6 +413,8 @@ impl ConverterPage {
         }));
         self.converted_for = Some(self.choice_key());
         self.progress = Some(progress);
+        self.saved = false;
+        self.pic_first = None;
         self.started = Some(Instant::now());
         self.out_dir = Some(out);
         self.result = None;
@@ -373,6 +441,7 @@ impl ConverterPage {
         if self.has_replace_step() && self.step == 3 {
             self.ensure_scan(ui.ctx());
         }
+        self.watch_source();
         // A finished conversion stays while the user looks back at the steps. It is forgotten when
         // they choose another world to convert, or another edition or version to convert to.
         if self.job.is_none() && self.result.is_some() && self.converted_for.as_deref() != Some(self.choice_key().as_str()) {
@@ -401,11 +470,26 @@ impl ConverterPage {
         };
         let running = self.job.is_some();
         let convert_idx = self.convert_idx();
-        let labels: &[&str] = if self.has_replace_step() { &STEPS_JAVA } else { &STEPS };
+        // The REPLACE step is shown from the start (every input but a console save has one).
+        let input_ed = self.input.as_ref().map(|i| i.1);
+        let labels: &[&str] = if matches!(input_ed, None | Some(UiEdition::Java | UiEdition::Bedrock)) { &STEPS_JAVA } else { &STEPS };
+        // Once the conversion has started the steps before it are closed (Start Over begins again).
+        let locked = running || matches!(self.result, Some(Ok(_)));
+        // On the Save step the Convert step is closed too.
+        let lowest = if !locked {
+            0
+        } else if self.step > convert_idx {
+            convert_idx + 1
+        } else {
+            convert_idx
+        };
+        // Once the world is saved every step shows its tick, the Save step's too.
+        let shown = if self.saved { labels.len() } else { self.step };
         if let Some(s) = widgets::stepper(
             &mut child,
             labels,
-            self.step,
+            shown,
+            lowest,
             if running { self.step } else { reachable.min(convert_idx) },
             k,
         ) {
@@ -433,7 +517,7 @@ impl ConverterPage {
         let cx = band.center().x;
         // Beyond the first and last step buttons, whatever the number of steps.
         let reach = (60.0 * (labels.len() - 1) as f32 + 48.0) * k;
-        if self.step > 0
+        if self.step > lowest
             && !running
             && self.step <= convert_idx
             && arrow(ui, cx - reach, Icon::ChevronLeft, "back")
@@ -459,10 +543,9 @@ impl ConverterPage {
         let galley = ui
             .painter()
             .layout(text.into(), font, theme::YELLOW, width - 28.0 * k);
-        let banner = Rect::from_min_size(
-            pos2(full.center().x - width / 2.0, band.bottom() + margin),
-            vec2(width, galley.size().y + invite.y + 36.0 * k),
-        );
+        // (Hidden, it takes no room: the content starts right under the stepper.)
+        let banner_h = if SHOW_BANNER { galley.size().y + invite.y + 36.0 * k } else { 0.0 };
+        let banner = Rect::from_min_size(pos2(full.center().x - width / 2.0, band.bottom() + margin), vec2(width, banner_h));
         // The same margin all round: below the banner and under the content.
         let body = Rect::from_min_max(
             pos2(full.left(), banner.bottom() + margin),
@@ -472,7 +555,7 @@ impl ConverterPage {
         let need: f32 = match self.step {
             0 => 0.0,
             1 => 300.0,
-            2 => 372.0,
+            2 => 396.0,
             // (Its list gives up height to fit: at the least, the list's shortest.)
             3 if self.has_replace_step() => 470.0 - 262.0 + 60.0,
             _ if self.job.is_some() || self.result.is_some() => 420.0,
@@ -486,7 +569,8 @@ impl ConverterPage {
         let need = if need > 0.0 { need.max(real) } else { need };
         ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("converter-real-height"), real));
         let scale = if need > 0.0 {
-            (body.height() / need).min(body.width() / 720.0).clamp(0.7, 1.0)
+            // Scaled down to fit the window (never so small it cannot be read); what still does not fit scrolls.
+            (body.height() / need).min(body.width() / 720.0).clamp(0.6, 1.0)
         } else {
             1.0
         };
@@ -496,7 +580,13 @@ impl ConverterPage {
         ctx.set_transform_layer(layer, transform);
         widgets::set_page_transform(&ctx, Some(transform));
         let inner = Rect::from_min_size(egui::Pos2::ZERO, body.size() / scale);
-        self.card_w = (inner.width() - 48.0).clamp(680.0, 980.0);
+        // How wide the cards are follows the window's width only, not how tall it is (a short
+        // window scales the page down, which would widen them).
+        // The card is as wide on the screen as the window's width alone makes it: when the page is
+        // scaled down to the height, it is made that much wider in the page's own units.
+        let width_scale = (body.width() / 720.0).clamp(0.6, 1.0);
+        let on_screen = (body.width() / width_scale - 48.0).clamp(680.0, 980.0) * width_scale;
+        self.card_w = (on_screen / scale).min(inner.width() - 8.0).max(680.0);
         self.room_h = inner.height();
         let mut measured: Option<(usize, f32)> = None;
         egui::Area::new(egui::Id::new("converter-step"))
@@ -508,8 +598,11 @@ impl ConverterPage {
                 ui.set_clip_rect(inner);
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner));
                 child.set_clip_rect(inner);
+                // A step taller than the window scrolls; its bar is always in view then, so a card
+                // that runs past the bottom is seen to continue.
                 egui::ScrollArea::vertical()
                     .auto_shrink(false)
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
                     .show(&mut child, |ui| {
                         let (area, _) = ui.allocate_exact_size(
                             vec2(inner.width(), inner.height().max(need)),
@@ -538,8 +631,14 @@ impl ConverterPage {
                     });
             });
         widgets::set_page_transform(&ctx, None);
+        // (Outside the scaled page, or its drop-down lists would be placed as if it were scaled.)
+        self.ps3_dialog_ui(&ctx, settings);
+        self.replace_dialog_ui(&ctx);
         if let Some((step, height)) = measured {
             self.real_height[step.min(5)] = height;
+        }
+        if !SHOW_BANNER {
+            return request;
         }
         ui.painter().rect_filled(banner, 6.0, theme::card());
         ui.painter().rect_stroke(
@@ -597,10 +696,20 @@ impl ConverterPage {
             (_, Some(UiEdition::Xbox360 | UiEdition::Ps3 | UiEdition::WiiU)) => 3,
             _ => 0,
         };
-        let key = (src.clone(), self.java_version + 1000 * BEDROCK_INDEX.load(std::sync::atomic::Ordering::Relaxed), mode);
+        // A console save holds only the classic 54-chunk world (moved to the new center, in the
+        // dimensions chosen), so only those chunks are scanned: what lies beyond is left out.
+        let offset = self.options().offset;
+        let dims = self.dims;
+        let console = matches!(mode, 3 | 5);
+        let area = if console { format!("{offset:?}{dims:?}") } else { String::new() };
+        let key = (src.clone(), self.java_version + 1000 * BEDROCK_INDEX.load(std::sync::atomic::Ordering::Relaxed), mode, area);
         if self.scan_for.as_ref() == Some(&key) {
             return;
         }
+        let keep = move |dim: i32, cx: i32, cz: i32| {
+            !console
+                || (dims[match dim { 0 => 0, -1 => 1, _ => 2 }] && mctk_convert::classic_keeps(dim, cx, cz, offset))
+        };
         self.scan_for = Some(key);
         self.scanned = None;
         self.scan_error = None;
@@ -625,7 +734,7 @@ impl ConverterPage {
                     &ConvertOptions::default(),
                     &Progress::default(),
                 );
-                let scan = made.and_then(|_| mctk_replace::Scan::java_world(&stage).map_err(|e| e.to_string()));
+                let scan = made.and_then(|_| mctk_replace::Scan::java_world_where(&stage, keep).map_err(|e| e.to_string()));
                 let _ = std::fs::remove_dir_all(&stage);
                 scan
             };
@@ -648,15 +757,15 @@ impl ConverterPage {
                     mctk_registry::Renames::java_blocks(),
                 ),
                 5 => (
-                    mctk_convert::legacy_registry(&java()?),
+                    mctk_convert::legacy_registry_in(&java()?, true),
                     through_java()?,
                     mctk_registry::Renames::java_blocks(),
                 ),
                 // What a console game can hold, in Java's names (the console game's own source
                 // says which blocks exist).
                 3 => (
-                    mctk_convert::legacy_registry(&java()?),
-                    mctk_replace::Scan::java_world(&src).map_err(|e| e.to_string())?,
+                    mctk_convert::legacy_registry_in(&java()?, true),
+                    mctk_replace::Scan::java_world_where(&src, keep).map_err(|e| e.to_string())?,
                     mctk_registry::Renames::java_blocks(),
                 ),
                 _ => (
@@ -665,7 +774,14 @@ impl ConverterPage {
                     mctk_registry::Renames::java_blocks(),
                 ),
             };
-            let plan = Plan::build(&scan, &registry, &renames);
+            // A console game also has blocks its registry does not describe (ones the conversion
+            // writes itself): they are not listed.
+            let plan = if console {
+                let reg = java()?;
+                Plan::build_where(&scan, &registry, &renames, |s| mctk_convert::console_supports(&reg, s, true))
+            } else {
+                Plan::build(&scan, &registry, &renames)
+            };
             Ok(Scanned { plan, registry })
         }));
     }
@@ -736,7 +852,7 @@ impl ConverterPage {
                             .color(theme::text_muted()),
                         );
                         ui.add_space(8.0);
-                        let Scanned { plan, registry } = s;
+                        let Scanned { plan, .. } = s;
                         // The list takes exactly the height the rest of the card leaves in the
                         // window (as the card came out last time; it scrolls), so the card fits.
                         let rest = match self.replace_list_h {
@@ -746,94 +862,50 @@ impl ConverterPage {
                         let list_h = (self.room_h - rest - 12.0).clamp(60.0, 520.0).floor();
                         self.replace_list_h = Some(list_h);
                         let extra = (card.x - 680.0).max(0.0);
-                        egui::ScrollArea::vertical()
-                            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
-                            .min_scrolled_height(list_h)
-                            .max_height(list_h).auto_shrink([false, false]).show(ui, |ui| {
+                        let mut scroll = self.replace_scroll;
+                        let mut open: Option<usize> = None;
+                        widgets::scroll_list(ui, "replace-list", list_h, &mut scroll, |ui| {
                             for i in 0..plan.groups.len() {
                                 ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 8.0;
                                     let g = &plan.groups[i];
                                     let name = g.name.trim_start_matches("minecraft:").to_string();
                                     let count = fmt_int(g.total() as usize);
                                     let font = theme::regular(15.0);
-                                    let shown = widgets::elide(ui, &name, &font, 215.0 + extra * 0.5);
+                                    let shown = widgets::elide(ui, &name, &font, 190.0 + extra * 0.5);
+                                    block_icon(ui, &RowIcon::Block(g.name.clone()), 26.0);
                                     ui.add_sized(
                                         [80.0, 28.0],
                                         egui::Label::new(RichText::new(count).font(font.clone()).color(theme::text_muted())),
                                     );
                                     ui.add_sized(
-                                        [220.0 + extra * 0.5, 28.0],
+                                        [190.0 + extra * 0.5, 28.0],
                                         egui::Label::new(RichText::new(shown).font(font).color(theme::text())),
                                     );
                                     ui.label(RichText::new("\u{2192}").color(theme::text_dim()));
-                                    let label = match &g.choice {
-                                        Choice::Suggested => format!("Suggested: {}", g.suggestion_text().trim_start_matches("minecraft:")),
-                                        Choice::Air => "Remove".into(),
-                                        Choice::Keep => "Keep as is".into(),
-                                        Choice::Block(b) => b.trim_start_matches("minecraft:").to_string(),
-                                    };
-                                    let suggested_text = g.suggestion_text().trim_start_matches("minecraft:").to_string();
-                                    let label = widgets::elide(ui, &label, &theme::regular(14.0), 190.0 + extra * 0.45);
-                                    let resp = widgets::button(ui, None, &label, 230.0 + extra * 0.45, true);
-                                    let popup = ui.id().with(("replace-choice", i));
-                                    if resp.clicked() {
-                                        self.search.clear();
-                                        ui.memory_mut(|m| m.toggle_popup(popup));
-                                    }
-                                    let mut chosen: Option<Choice> = None;
-                                    // The list is a layer of its own: it takes the page's scale.
-                                    if let Some(t) = widgets::page_transform(ui.ctx()) {
-                                        ui.ctx().set_transform_layer(
-                                            egui::LayerId::new(egui::Order::Foreground, popup),
-                                            t,
-                                        );
-                                    }
-                                    egui::popup_below_widget(
-                                        ui,
-                                        popup,
-                                        &resp,
-                                        egui::PopupCloseBehavior::CloseOnClickOutside,
-                                        |ui| {
-                                            ui.set_min_width(250.0);
-                                            let cur = &plan.groups[i].choice;
-                                            if ui
-                                                .selectable_label(*cur == Choice::Suggested, format!("Suggested: {suggested_text}"))
-                                                .clicked()
-                                            {
-                                                chosen = Some(Choice::Suggested);
-                                            }
-                                            if ui.selectable_label(*cur == Choice::Air, "Remove (leave air)").clicked() {
-                                                chosen = Some(Choice::Air);
-                                            }
-                                            if ui
-                                                .selectable_label(*cur == Choice::Keep, "Keep as is (may not load)")
-                                                .clicked()
-                                            {
-                                                chosen = Some(Choice::Keep);
-                                            }
-                                            ui.separator();
-                                            ui.label(RichText::new("Use another block").size(12.0).color(theme::text_muted()));
-                                            ui.add(
-                                                egui::TextEdit::singleline(&mut self.search)
-                                                    .hint_text("search blocks")
-                                                    .desired_width(240.0),
-                                            );
-                                            for c in mctk_replace::candidates(registry, &self.search, 8) {
-                                                let short = c.trim_start_matches("minecraft:").to_string();
-                                                if ui.selectable_label(*cur == Choice::Block(c.clone()), short).clicked() {
-                                                    chosen = Some(Choice::Block(c));
-                                                }
-                                            }
+                                    // What it becomes: its picture, and the button that opens the choice.
+                                    let (icon, label) = match &g.choice {
+                                        Choice::Suggested => match suggested_block(g) {
+                                            Some(b) => (RowIcon::Block(b.clone()), b.trim_start_matches("minecraft:").to_string()),
+                                            None => (RowIcon::Glyph(Icon::Trash), "Remove".to_string()),
                                         },
-                                    );
-                                    if let Some(c) = chosen {
-                                        plan.groups[i].choice = c;
-                                        ui.memory_mut(|m| m.close_popup());
+                                        Choice::Air => (RowIcon::Glyph(Icon::Trash), "Remove".into()),
+                                        Choice::Keep => (RowIcon::Block(g.name.clone()), "Keep as is".into()),
+                                        Choice::Block(b) => (RowIcon::Block(b.clone()), b.trim_start_matches("minecraft:").to_string()),
+                                    };
+                                    block_icon(ui, &icon, 26.0);
+                                    let label = widgets::elide(ui, &label, &theme::regular(14.0), 175.0 + extra * 0.45);
+                                    if widgets::button(ui, None, &label, 210.0 + extra * 0.45, true).clicked() {
+                                        open = Some(i);
                                     }
-                                    let _ = mctk_replace::reason_label;
                                 });
                             }
                         });
+                        self.replace_scroll = scroll;
+                        if let Some(i) = open {
+                            self.search.clear();
+                            self.replace_dialog = Some(ReplaceDialog { group: i, sel: plan.groups[i].choice.clone(), scroll: 0.0 });
+                        }
                         ui.add_space(8.0);
                         let removed = plan.blocks_removed();
                         let line = if removed > 0 {
@@ -843,6 +915,7 @@ impl ConverterPage {
                         };
                         ui.label(RichText::new(line).size(14.0).color(theme::text_muted()));
                         ui.add_space(6.0);
+                        // The choices' buttons share a row with Next, which sits at its right.
                         ui.horizontal(|ui| {
                             if widgets::button(ui, None, "Accept All Suggestions", 0.0, plan.changed() > 0).clicked() {
                                 plan.reset();
@@ -873,10 +946,9 @@ impl ConverterPage {
                                     };
                                 }
                             }
-                        });
-                        ui.add_space(10.0);
-                        ui.vertical_centered(|ui| {
-                            next = widgets::primary(ui, "Next", vec2(160.0, 46.0), true).clicked();
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                next = widgets::primary(ui, "Next", vec2(120.0, 36.0), true).clicked();
+                            });
                         });
                     }
                 }
@@ -890,6 +962,110 @@ impl ConverterPage {
         }
         if next {
             self.step = 4;
+        }
+    }
+
+    /// The dialog for choosing what a kind of block becomes: the block with its picture, then the
+    /// ways out (the suggestion, remove it, keep it) and every block the target has, searchable, each
+    /// with its picture. Apply writes the choice; Cancel or the cross leaves it as it was.
+    fn replace_dialog_ui(&mut self, ctx: &egui::Context) {
+        let Some(mut d) = self.replace_dialog.take() else { return };
+        let Some(Scanned { plan, registry }) = self.scanned.as_mut() else { return };
+        if d.group >= plan.groups.len() {
+            return;
+        }
+        let (mut close, mut apply) = (false, false);
+        let modal = egui::Modal::new(egui::Id::new("replace-dialog")).frame(
+            egui::Frame::new()
+                .fill(theme::card())
+                .stroke(egui::Stroke::new(1.0_f32, theme::border()))
+                .corner_radius(theme::radius(6)),
+        );
+        let width = 460.0;
+        // The list of blocks takes what height the window leaves after the rest of the dialog, so
+        // the dialog fits the smallest window.
+        let list_h = (ctx.screen_rect().height() - 410.0).clamp(48.0, 210.0).floor();
+        let g = &plan.groups[d.group];
+        let suggested = suggested_block(g);
+        modal.show(ctx, |ui| {
+            ui.set_width(width);
+            ui.spacing_mut().item_spacing = vec2(6.0, 10.0);
+            let (bar, _) = ui.allocate_exact_size(vec2(width, 38.0), Sense::hover());
+            ui.painter().text(bar.left_center() + vec2(16.0, 0.0), Align2::LEFT_CENTER, "Replace Block", theme::regular(16.0), theme::text());
+            let cross = Rect::from_center_size(bar.right_center() - vec2(22.0, 0.0), Vec2::splat(28.0));
+            if crate::editor::close_button(ui, cross, egui::Id::new("replace-close")).clicked() {
+                close = true;
+            }
+            let inner = width - 32.0;
+            ui.horizontal(|ui| {
+                ui.add_space(16.0);
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 4.0;
+                    // The block being replaced.
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 12.0;
+                        block_icon(ui, &RowIcon::Block(g.name.clone()), 40.0);
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 2.0;
+                            ui.label(RichText::new(g.name.trim_start_matches("minecraft:")).size(18.0).color(theme::strong()));
+                            ui.label(
+                                RichText::new(format!("{} blocks in {} kinds of state", fmt_int(g.total() as usize), g.states.len()))
+                                    .size(13.0)
+                                    .color(theme::text_muted()),
+                            );
+                        });
+                    });
+                    ui.label(RichText::new("Replace with").size(13.0).color(theme::text_muted()));
+                    let (sug_icon, sug_label) = match &suggested {
+                        Some(b) => (RowIcon::Block(b.clone()), format!("Suggested: {}", b.trim_start_matches("minecraft:"))),
+                        None => (RowIcon::Glyph(Icon::Trash), "Suggested: remove".to_string()),
+                    };
+                    if choice_row(ui, inner, &sug_icon, &sug_label, "", d.sel == Choice::Suggested).clicked() {
+                        d.sel = Choice::Suggested;
+                    }
+                    if choice_row(ui, inner, &RowIcon::Glyph(Icon::Trash), "Remove (leave air)", "", d.sel == Choice::Air).clicked() {
+                        d.sel = Choice::Air;
+                    }
+                    if choice_row(ui, inner, &RowIcon::Block(g.name.clone()), "Keep as is", "may not load", d.sel == Choice::Keep).clicked() {
+                        d.sel = Choice::Keep;
+                    }
+                    ui.add_space(2.0);
+                    widgets::labeled_text(ui, "Search", &mut self.search, 80.0, inner, "another block");
+                    let found = mctk_replace::candidates(registry, &self.search, 80);
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    widgets::scroll_list(ui, "replace-candidates", list_h, &mut d.scroll, |ui| {
+                        if found.is_empty() {
+                            ui.label(RichText::new("No block matches").size(13.5).color(theme::text_dim()));
+                        }
+                        for c in found {
+                            let short = c.trim_start_matches("minecraft:").to_string();
+                            let on = d.sel == Choice::Block(c.clone());
+                            if choice_row(ui, inner - 14.0, &RowIcon::Block(c.clone()), &short, "", on).clicked() {
+                                d.sel = Choice::Block(c);
+                            }
+                        }
+                    });
+                    // The two buttons side by side, centered under the list.
+                    ui.horizontal(|ui| {
+                        ui.add_space(((inner - 306.0) / 2.0).max(0.0));
+                        if widgets::big_button(ui, "Cancel", vec2(150.0, 38.0)).clicked() {
+                            close = true;
+                        }
+                        ui.add_space(6.0);
+                        if widgets::primary(ui, "Apply", vec2(150.0, 38.0), true).clicked() {
+                            apply = true;
+                        }
+                    });
+                    ui.add_space(2.0);
+                });
+            });
+        });
+        if apply {
+            plan.groups[d.group].choice = d.sel.clone();
+            return;
+        }
+        if !close {
+            self.replace_dialog = Some(d);
         }
     }
 
@@ -1156,21 +1332,30 @@ impl ConverterPage {
                         widgets::toggle(ui, &mut self.older_chunks, "Allow Older Chunk Versions", true)
                             .on_hover_text("Off leaves out chunks saved by a version older than the world's own (Java sources)");
                         ui.add_space(10.0);
-                        ui.label(RichText::new("Depth Fixer").size(15.0).color(theme::text_muted()))
-                            .on_hover_text("For targets whose world starts at y 0 (Java before 1.18, Bedrock before 1.18, consoles): what to do with the overworld below it");
+                        ui.horizontal(|ui| {
+                            // The label itself explains the option when hovered.
+                            ui.label(RichText::new("Depth Fixer").size(15.0).color(theme::text_muted())).on_hover_text(
+                                "Worlds built for the newer game versions reach below y 0 (down to -64). Older Java and Bedrock versions and the console games start at y 0, so what is below has to go somewhere.\n\n\
+                                 Clip + Bedrock: cut everything below y 0 and make y 0 a layer of bedrock.\n\
+                                 Clip: cut everything below y 0.\n\
+                                 Raise: move the whole world up by 64 blocks so the deep layers survive (what then rises above y 255 is cut).",
+                            );
+                        });
                         widgets::segmented(ui, &mut self.depth, &["Clip + Bedrock", "Clip", "Raise"], col - 20.0, true);
                         ui.add_space(8.0);
-                        ui.label(
-                            RichText::new("New World Center")
-                                .size(15.0)
-                                .color(theme::text_muted()),
-                        )
-                        .on_hover_text(
-                            "Moves the output so this point becomes 0, 0 (snapped to chunks)",
-                        );
                         ui.horizontal(|ui| {
-                            widgets::labeled_number(ui, "X", &mut self.center.0, 40.0, 1.0);
-                            widgets::labeled_number(ui, "Z", &mut self.center.1, 40.0, 1.0);
+                            ui.label(RichText::new("New World Center").size(15.0).color(theme::text_muted())).on_hover_text(
+                                "Moves the converted world so that this point becomes 0, 0 (snapped to a chunk). Useful when the part of the world you care about is far from the origin, or to fit a console world, which only holds a limited area around 0, 0.\n\n\
+                                 Coords: use the X and Z you type.\n\
+                                 Spawn Point: use the world's spawn point.",
+                            );
+                        });
+                        ui.horizontal(|ui| {
+                            // The typed coordinates only count in Coords mode.
+                            ui.add_enabled_ui(!self.center_spawn, |ui| {
+                                widgets::labeled_number(ui, "X", &mut self.center.0, 40.0, 1.0);
+                                widgets::labeled_number(ui, "Z", &mut self.center.1, 40.0, 1.0);
+                            });
                             let mut mode = self.center_spawn as usize;
                             if widgets::segmented(
                                 ui,
@@ -1274,6 +1459,7 @@ impl ConverterPage {
                         "Conversion Successful! {} Chunks Converted",
                         fmt_int(c.lines().next().unwrap_or("").parse().unwrap_or(n))
                     ),
+                    (Some(Err(e)), _) if e.contains("conversion stopped") => "Conversion Stopped".into(),
                     (Some(Err(e)), _) => format!("Conversion Failed: {e}"),
                     (None, false) => "Ready to Convert".into(),
                 };
@@ -1295,19 +1481,16 @@ impl ConverterPage {
                     let want = notes.len() as f32 * 20.0;
                     let notes_h = (self.room_h - rest - 12.0).clamp(40.0, want.max(40.0)).floor();
                     self.notes_h = Some(notes_h);
-                    egui::ScrollArea::vertical()
-                        .id_salt("convert-notes")
-                        .max_height(notes_h)
-                        .min_scrolled_height(notes_h.min(want))
-                        .auto_shrink([false, true])
-                        .show(ui, |ui| {
-                            ui.vertical_centered(|ui| {
-                                ui.spacing_mut().item_spacing.y = 2.0;
-                                for line in &notes {
-                                    ui.label(RichText::new(line).size(13.5).color(theme::text_muted()));
-                                }
-                            });
+                    let mut scroll = self.notes_scroll;
+                    widgets::scroll_list(ui, "convert-notes", notes_h, &mut scroll, |ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.spacing_mut().item_spacing.y = 2.0;
+                            for line in &notes {
+                                ui.label(RichText::new(line).size(13.5).color(theme::text_muted()));
+                            }
                         });
+                    });
+                    self.notes_scroll = scroll;
                 } else {
                     self.notes_h = None;
                 }
@@ -1322,14 +1505,13 @@ impl ConverterPage {
                 widgets::progress_bar(ui, frac, card.x - 40.0);
                 ui.add_space(14.0);
                 // (Once done, in a short window, the stats give way so the buttons fit.)
-                let short = self.room_h < 470.0;
-                if tall && !(done && short) {
+                if tall {
                     self.stats(ui, card.x - 40.0, running);
                     ui.add_space(20.0);
                 }
                 ui.vertical_centered(|ui| {
                     if running {
-                        if widgets::big_button(ui, "Stop Conversion", vec2(200.0, 50.0)).clicked() {
+                        if widgets::stop_button(ui, "Stop Conversion", vec2(200.0, 50.0)).clicked() {
                             if let Some(p) = &self.progress {
                                 p.cancel();
                             }
@@ -1349,9 +1531,19 @@ impl ConverterPage {
                             ui.add_space(20.0);
                             if widgets::primary(ui, "Save World", vec2(200.0, 50.0), true).clicked()
                             {
-                                self.save(settings);
+                                if self.output == Some(UiEdition::Ps3) {
+                                    let name = self.input.as_ref().map_or("My Converted World".into(), |i| world_name(&i.0));
+                                    self.ps3_dialog = Some(Ps3Dialog::new(name));
+                                } else {
+                                    self.save(settings);
+                                }
                             }
                         });
+                    } else if matches!(self.result, Some(Err(_))) {
+                        // Stopped or failed: back to the start, as the Save step has.
+                        if widgets::big_button(ui, "Start Over", vec2(200.0, 50.0)).clicked() {
+                            self.reset();
+                        }
                     } else if widgets::primary(ui, "Start Conversion", vec2(200.0, 50.0), true)
                         .clicked()
                     {
@@ -1406,8 +1598,10 @@ impl ConverterPage {
     }
 
     fn stats(&mut self, ui: &mut Ui, width: f32, running: bool) {
-        // With room, a bigger picture of the conversion.
-        let side = if self.room_h >= 560.0 { 160.0 } else { 96.0 };
+        // The picture is one size (never so big that the three columns of numbers beside it would not
+        // fit the card).
+        let side = 104.0_f32.min(width - 54.0 - 3.0 * 150.0).max(80.0);
+        let col_w = ((width - 54.0 - side) / 3.0).clamp(130.0, 166.0);
         let (r, _) = ui.allocate_exact_size(vec2(width, side + 26.0), Sense::hover());
         let dim_now = self.progress.as_ref().map(|p| p.dimension.lock().expect("progress lock").clone()).unwrap_or_default();
         let all = self.footprint(ui.ctx(), &dim_now);
@@ -1431,7 +1625,18 @@ impl ConverterPage {
             };
             // A picture, a pixel a chunk, scaled up with sharp edges (so it stays whole however
             // the page is scaled).
-            let img = crate::chunk_preview::image(&pts[start..], all.as_deref().map(|v| v.as_slice()), running, &colors, 256);
+            // While converting: the dimension now. Done: the first one converted (the last may be
+            // empty), kept from while it was converting.
+            if running {
+                match &mut self.pic_first {
+                    Some((name, v)) if *name == dim_now => *v = pts[start..].to_vec(),
+                    None if !dim_now.is_empty() => self.pic_first = Some((dim_now.clone(), pts[start..].to_vec())),
+                    _ => {}
+                }
+            }
+            let kept = (!running).then(|| self.pic_first.as_ref().map(|(_, v)| v.as_slice())).flatten();
+            let shown: &[(i32, i32)] = kept.unwrap_or(&pts[start..]);
+            let img = crate::chunk_preview::image(shown, all.as_deref().map(|v| v.as_slice()), running, &colors, 256);
             drop(pts);
             let tex = match &mut self.preview_tex {
                 Some(t) => {
@@ -1506,10 +1711,10 @@ impl ConverterPage {
                 // Java and Bedrock worlds are lit by the game as they load (Java's chunks are
                 // marked for it); a console save's light is worked out in the conversion.
                 (
-                    "Lighting:",
+                    "Relighting:",
                     match self.output {
-                        Some(UiEdition::Java | UiEdition::Bedrock) => "By the game".into(),
-                        Some(_) => "Worked out".into(),
+                        Some(UiEdition::Java | UiEdition::Bedrock) => "No".into(),
+                        Some(_) => "Yes".into(),
                         None => String::new(),
                     },
                 ),
@@ -1518,7 +1723,7 @@ impl ConverterPage {
         for (ci, col) in cols.iter().enumerate() {
             for (ri, (k, v)) in col.iter().enumerate() {
                 let pos = pos2(
-                    r.left() + 132.0 + ci as f32 * 166.0,
+                    r.left() + 16.0 + side + 22.0 + ci as f32 * col_w,
                     r.top() + 27.0 + ri as f32 * 34.0,
                 );
                 let kg = p.layout_no_wrap(k.to_string(), theme::regular(14.0), theme::text_muted());
@@ -1531,6 +1736,197 @@ impl ConverterPage {
                     theme::bold(13.0),
                     theme::strong(),
                 );
+            }
+        }
+    }
+
+    /// The Save dialog of a PlayStation 3 world: its name, the game it is for (Region, which names the
+    /// save folder), the account, console and user it belongs to (Account ID, PSID, User ID, which can
+    /// be imported from a save of the game), and how it is saved. Signed on the way out unless it is
+    /// saved unencrypted for an emulator.
+    fn ps3_dialog_ui(&mut self, ctx: &egui::Context, settings: &mut Settings) {
+        let Some(mut d) = self.ps3_dialog.take() else { return };
+        let (mut close, mut save) = (false, false);
+        // The frame, title bar and close cross of the open-a-world dialogs.
+        let modal = egui::Modal::new(egui::Id::new("ps3-save-dialog")).frame(
+            egui::Frame::new()
+                .fill(theme::card())
+                .stroke(egui::Stroke::new(1.0_f32, theme::border()))
+                .corner_radius(theme::radius(6)),
+        );
+        let width = 420.0;
+        modal.show(ctx, |ui| {
+            ui.set_width(width);
+            ui.spacing_mut().item_spacing = vec2(6.0, 10.0);
+            let (bar, _) = ui.allocate_exact_size(vec2(width, 38.0), Sense::hover());
+            ui.painter().text(
+                bar.left_center() + vec2(16.0, 0.0),
+                Align2::LEFT_CENTER,
+                "Save PlayStation 3 World",
+                theme::regular(16.0),
+                theme::text(),
+            );
+            let cross = Rect::from_center_size(bar.right_center() - vec2(22.0, 0.0), Vec2::splat(28.0));
+            if crate::editor::close_button(ui, cross, egui::Id::new("ps3-save-close")).clicked() {
+                close = true;
+            }
+            let label_w = 100.0;
+            let inner = width - 32.0;
+            ui.horizontal(|ui| {
+                ui.add_space(16.0);
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 10.0;
+                    widgets::labeled_text(ui, "World Name", &mut d.world_name, label_w, inner, "");
+                    // The console's sub-title holds at most 127 UTF-8 bytes.
+                    while d.world_name.len() > 127 {
+                        d.world_name.pop();
+                    }
+                    let imported = widgets::primary(ui, "Import Metadata\u{2026}", vec2(inner, 38.0), true)
+                        .on_hover_text("Fill in Region, Account ID, PSID and User ID from a save of the game that you have (a folder under PS3/SAVEDATA), and take its icon for this save.");
+                    if imported.clicked() {
+                        let mut dialog = rfd::FileDialog::new().set_title("Pick a PlayStation 3 save folder of the game");
+                        if std::path::Path::new(&settings.ps3_worlds).is_dir() {
+                            dialog = dialog.set_directory(&settings.ps3_worlds);
+                        }
+                        if let Some(folder) = dialog.pick_folder() {
+                            match read_case_insensitive(&folder, "PARAM.SFO") {
+                                Some(sfo) => {
+                                    let ids = mctk_console::read_sfo_ids(&sfo);
+                                    d.account_id = if ids.account_id.is_empty() { "0".repeat(16) } else { ids.account_id };
+                                    d.psid = if ids.psid.is_empty() { "0".repeat(32) } else { ids.psid };
+                                    d.user_id = format!("{:08}", ids.user_id);
+                                    let title = folder.file_name().and_then(|n| n.to_str()).and_then(|n| n.split("--").next()).and_then(Ps3Region::from_title_id);
+                                    if let Some(i) = title.and_then(|r| Ps3Region::ALL.iter().position(|x| *x == r)) {
+                                        d.region = i;
+                                    }
+                                    d.error = None;
+                                }
+                                None => d.error = Some("That folder has no PARAM.SFO".into()),
+                            }
+                            d.metadata = Some(folder);
+                        }
+                    }
+                    if let Some(n) = d.metadata.as_ref().and_then(|m| m.file_name()).map(|n| n.to_string_lossy().to_string()) {
+                        ui.label(RichText::new(format!("Imported from: {n}")).size(12.5).color(theme::text_muted()));
+                    }
+                    // One tab for each thing the save records; the field of the one chosen shows below.
+                    widgets::segmented(ui, &mut d.tab, &["Region", "Account ID", "PSID", "User ID"], inner, true);
+                    match d.tab {
+                        0 => {
+                            let names: Vec<String> = PS3_REGION_NAMES.iter().zip(Ps3Region::ALL).map(|(n, r)| format!("{n} ({})", r.title_id())).collect();
+                            let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+                            if let Some(i) = widgets::choice_wide(ui, "ps3-region", d.region, &refs, inner) {
+                                d.region = i;
+                            }
+                        }
+                        1 => {
+                            widgets::labeled_text(ui, "Account ID", &mut d.account_id, label_w, inner, &"0".repeat(16));
+                            d.account_id.retain(|c| c.is_ascii_hexdigit());
+                            d.account_id.truncate(16);
+                        }
+                        2 => {
+                            widgets::labeled_text(ui, "PSID", &mut d.psid, label_w, inner, &"0".repeat(32));
+                            d.psid.retain(|c| c.is_ascii_hexdigit());
+                            d.psid.truncate(32);
+                        }
+                        _ => {
+                            widgets::labeled_text(ui, "User ID", &mut d.user_id, label_w, inner, "00000001");
+                            d.user_id.retain(|c| c.is_ascii_digit());
+                            d.user_id.truncate(8);
+                        }
+                    }
+                    widgets::toggle(ui, &mut d.unencrypted, "Save unencrypted (for emulators)", !d.gamedata_only)
+                        .on_hover_text("For an emulator such as RPCS3, which cannot read a console's protected files: METADATA is plain and there is no PARAM.PFD. Pick the emulator's dev_hdd0/home/00000001/savedata folder. A real PlayStation 3 will not accept it.");
+                    widgets::toggle(ui, &mut d.gamedata_only, "Save GAMEDATA only", true)
+                        .on_hover_text("Save just the GAMEDATA file, not a whole save folder.");
+                    if let Some(e) = &d.error {
+                        ui.label(RichText::new(e).size(12.5).color(theme::YELLOW));
+                    }
+                    if widgets::primary(ui, "Save", vec2(inner, 38.0), true).clicked() {
+                        match d.ids().check() {
+                            Ok(()) => save = true,
+                            Err(e) => d.error = Some(e.to_string()),
+                        }
+                    }
+                    ui.add_space(6.0);
+                });
+            });
+        });
+        if close {
+            return;
+        }
+        if save && self.save_ps3(&d, settings) {
+            return;
+        }
+        self.ps3_dialog = Some(d);
+    }
+
+    /// Writes the converted PlayStation 3 world: its GAMEDATA alone, or a save folder (named for the
+    /// game and the time, as the console names them), signed or unencrypted. Whether it was saved
+    /// (not when the folder to save into was not picked).
+    fn save_ps3(&mut self, d: &Ps3Dialog, settings: &mut Settings) -> bool {
+        let Some(out) = self.out_dir.clone() else { return false };
+        let gamedata = out.join("GAMEDATA");
+        if !gamedata.is_file() {
+            self.status = "The converted world has no GAMEDATA".into();
+            return false;
+        }
+        if d.gamedata_only {
+            let Some(path) = rfd::FileDialog::new().set_title("Save GAMEDATA as").set_file_name("GAMEDATA").save_file() else { return false };
+            return match std::fs::copy(&gamedata, &path) {
+                Ok(_) => {
+                    self.saved = true;
+                    self.status = format!("Saved GAMEDATA to {}", path.display());
+                    true
+                }
+                Err(e) => {
+                    self.status = format!("Save failed: {e}");
+                    false
+                }
+            };
+        }
+        let mut dialog = rfd::FileDialog::new().set_title("Save the PlayStation 3 save into\u{2026}");
+        if std::path::Path::new(&settings.ps3_worlds).is_dir() {
+            dialog = dialog.set_directory(&settings.ps3_worlds);
+        }
+        let Some(parent) = dialog.pick_folder() else { return false };
+        // The folder is named for the game and the time; PARAM.SFO, METADATA and PARAM.PFD are
+        // generated and signed here, so no save of the game is needed to copy them from.
+        let region = Ps3Region::ALL[d.region.min(Ps3Region::ALL.len() - 1)];
+        let name = if d.world_name.trim().is_empty() { "My Converted World" } else { d.world_name.trim() };
+        // The menu icon (320x176) and the world thumbnail (64x64) are two images; take both from the
+        // save imported, else the default logo image at each size.
+        let icon = d.metadata.as_ref().and_then(|m| read_case_insensitive(m, "ICON0.png")).unwrap_or_else(default_ps3_icon);
+        let thumb = d.metadata.as_ref().and_then(|m| read_case_insensitive(m, "THUMB")).unwrap_or_else(|| default_png(64, 64));
+        let ids = d.ids();
+        let result = std::fs::read(&gamedata).map_err(mctk_console::Error::from).and_then(|bytes| {
+            let stamp = utc_stamp(std::time::SystemTime::now());
+            let folder = if d.unencrypted {
+                let mut f = mctk_console::build_save_folder_unencrypted(bytes, icon, thumb, region, name, &stamp)?;
+                mctk_console::apply_ids(&mut f, &ids, None)?;
+                f
+            } else {
+                let random = Ps3Random::generate();
+                let mut f = mctk_console::build_save_folder(bytes, icon, thumb, region, name, &stamp, &random)?;
+                mctk_console::apply_ids(&mut f, &ids, Some(&random))?;
+                f
+            };
+            mctk_console::write_save_folder(&parent, &folder)
+        });
+        crate::jobs::finished();
+        match result {
+            Ok(dest) => {
+                self.saved = true;
+                self.status = if d.unencrypted {
+                    format!("Saved an unencrypted save for an emulator to {}", dest.display())
+                } else {
+                    format!("Saved a signed save to {}", dest.display())
+                };
+                true
+            }
+            Err(e) => {
+                self.status = format!("Save failed: {e}");
+                false
             }
         }
     }
@@ -1562,11 +1958,121 @@ impl ConverterPage {
             n += 1;
         }
         self.status = match copy_dir(&out, &dest) {
-            Ok(()) => format!("Saved to {}", dest.display()),
+            Ok(()) => {
+                self.saved = true;
+                format!("Saved to {}", dest.display())
+            }
             Err(e) => format!("Save failed: {e}"),
         };
         crate::jobs::finished();
     }
+}
+
+/// The PlayStation 3 Save dialog (see `ConverterPage::ps3_dialog_ui`).
+struct Ps3Dialog {
+    region: usize,
+    /// The tab shown: Region, Account ID, PSID or User ID.
+    tab: usize,
+    /// A save of the game imported from: its `ICON0.png` and `THUMB` become the new save's images.
+    metadata: Option<PathBuf>,
+    /// Shown by the console as the save's sub-title.
+    world_name: String,
+    account_id: String,
+    psid: String,
+    user_id: String,
+    /// For an emulator: plain `METADATA`, no `PARAM.PFD`.
+    unencrypted: bool,
+    /// Only the `GAMEDATA` file, not a save folder.
+    gamedata_only: bool,
+    error: Option<String>,
+}
+
+impl Ps3Dialog {
+    fn new(world_name: String) -> Self {
+        Ps3Dialog {
+            region: 0,
+            tab: 0,
+            metadata: None,
+            world_name,
+            account_id: "0".repeat(16),
+            psid: "0".repeat(32),
+            user_id: "00000001".into(),
+            unencrypted: false,
+            gamedata_only: false,
+            error: None,
+        }
+    }
+
+    fn ids(&self) -> mctk_console::Ps3Ids {
+        // All zeros is no account or console at all.
+        let none = |s: &str| if s.bytes().all(|b| b == b'0') { String::new() } else { s.to_string() };
+        mctk_console::Ps3Ids { account_id: none(&self.account_id), psid: none(&self.psid), user_id: self.user_id.parse().unwrap_or(0) }
+    }
+}
+
+/// Names of the regions, in the order of `mctk_console::Ps3Region::ALL`.
+const PS3_REGION_NAMES: [&str; 5] = ["US Digital", "US Disc", "EU Digital", "EU Disc", "JP Digital"];
+
+/// The app's logo on a dark card of this size, as an 8-bit RGB PNG (what the converter writes for
+/// thumbnails).
+fn default_png(width: u32, height: u32) -> Vec<u8> {
+    use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
+    let mut canvas = RgbaImage::from_pixel(width, height, Rgba([29, 33, 40, 255]));
+    if let Ok(logo) = image::load_from_memory_with_format(include_bytes!("../assets/logo.png"), ImageFormat::Png) {
+        let logo = logo.to_rgba8();
+        let room = width.min(height) as f32 * 0.82;
+        let scale = (room / logo.width() as f32).min(room / logo.height() as f32);
+        let (w, h) = (((logo.width() as f32 * scale) as u32).max(1), ((logo.height() as f32 * scale) as u32).max(1));
+        let small = image::imageops::resize(&logo, w, h, image::imageops::FilterType::Lanczos3);
+        image::imageops::overlay(&mut canvas, &small, i64::from((width - w) / 2), i64::from((height - h) / 2));
+    }
+    let mut out = std::io::Cursor::new(Vec::new());
+    let _ = DynamicImage::ImageRgba8(canvas).to_rgb8().write_to(&mut out, ImageFormat::Png);
+    out.into_inner()
+}
+
+/// The icon of a PlayStation 3 save when none is picked: 320x176, the size of the console's own.
+fn default_ps3_icon() -> Vec<u8> {
+    default_png(320, 176)
+}
+
+/// A world's thumbnail, 64x64 RGB: the world's own `icon.png` scaled down (as the original converter
+/// does), else the default image.
+fn world_thumbnail(world: &std::path::Path) -> Vec<u8> {
+    use image::{DynamicImage, ImageFormat};
+    let scaled = std::fs::read(world.join("icon.png")).ok().and_then(|b| image::load_from_memory(&b).ok()).and_then(|img| {
+        let small = image::imageops::resize(&img.to_rgba8(), 64, 64, image::imageops::FilterType::Lanczos3);
+        let mut out = std::io::Cursor::new(Vec::new());
+        DynamicImage::ImageRgba8(small).to_rgb8().write_to(&mut out, ImageFormat::Png).ok()?;
+        Some(out.into_inner())
+    });
+    scaled.unwrap_or_else(|| default_png(64, 64))
+}
+
+/// A file of a genuine save folder, whose names are not consistently cased (`ICON0.PNG`).
+fn read_case_insensitive(dir: &std::path::Path, name: &str) -> Option<Vec<u8>> {
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .find(|e| e.file_name().to_string_lossy().eq_ignore_ascii_case(name))
+        .and_then(|e| std::fs::read(e.path()).ok())
+}
+
+/// A time as the console names its saves: UTC, `YYMMDDHHMMSS`.
+fn utc_stamp(t: std::time::SystemTime) -> String {
+    let secs = t.duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()) as i64;
+    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    // Civil date from days since 1970 (Howard Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{:02}{:02}{:02}{:02}{:02}{:02}", year.rem_euclid(100), month, day, rem / 3600, rem % 3600 / 60, rem % 60)
 }
 
 /// What a world is called: the folder for Java and Bedrock worlds (`.mcworld` files without
@@ -1643,7 +2149,14 @@ fn route_job(
                 UiEdition::WiiU => format!("{}.wii", target.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "World".into())),
                 _ => "GAMEDATA".to_string(),
             });
-            return java_to_console_job(&stage, &file, platform, choices, &last, p);
+            let report = java_to_console_job(&stage, &file, platform, choices, &last, p)?;
+            if out_ed == UiEdition::WiiU {
+                // The Wii U companion: the world's name and a 64x64 thumbnail (its own icon, if it has one),
+                // beside the save (`<name>.wii` gets `<name>.ext`).
+                let name = target.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "World".into());
+                mctk_console::write_wiiu_ext(&file, &name, &world_thumbnail(&stage)).map_err(|e| e.to_string())?;
+            }
+            return Ok(report);
         }
         match (ed, out_ed) {
             (UiEdition::Java, UiEdition::Java) => java_to_java_job(src, target, java_version, replacements, options, p),
@@ -1712,7 +2225,7 @@ fn java_to_console_job(
         lines.push((*n, format!("{n}\u{00D7} {what}")));
     }
     lines.push((0, "player data is not written: console player files belong to a console profile".to_string()));
-    lines.sort_by(|a, b| b.0.cmp(&a.0));
+    lines.sort_by_key(|l| std::cmp::Reverse(l.0));
     for (_, line) in lines.iter().take(6) {
         text += &format!("\n{line}");
     }
@@ -1791,7 +2304,7 @@ fn bedrock_to_java_job(
     for (what, n) in &report.skipped {
         lines.push((*n, skipped_line(*n, what)));
     }
-    lines.sort_by(|a, b| b.0.cmp(&a.0));
+    lines.sort_by_key(|l| std::cmp::Reverse(l.0));
     for (_, line) in lines.iter().take(6) {
         text += &format!("\n{line}");
     }
@@ -1826,7 +2339,7 @@ fn java_to_bedrock_job(
     for (what, n) in &report.skipped {
         lines.push((*n, skipped_line(*n, what)));
     }
-    lines.sort_by(|a, b| b.0.cmp(&a.0));
+    lines.sort_by_key(|l| std::cmp::Reverse(l.0));
     for (_, line) in lines.iter().take(6) {
         text += &format!("\n{line}");
     }
@@ -1834,6 +2347,63 @@ fn java_to_bedrock_job(
         text += &format!("\nand {} more kinds", lines.len() - 6);
     }
     Ok(text)
+}
+
+/// The choice dialog of the REPLACE step (see `ConverterPage::replace_dialog_ui`).
+struct ReplaceDialog {
+    /// Which group of the plan it is for.
+    group: usize,
+    /// What is picked now (applied with Apply).
+    sel: Choice,
+    scroll: f32,
+}
+
+/// A picture for a row: a block's, a glyph of the app's, or none.
+enum RowIcon {
+    Block(String),
+    Glyph(Icon),
+}
+
+/// The block a group's suggestion puts in its place (`None` when the suggestion is to remove it).
+fn suggested_block(g: &mctk_replace::PlanGroup) -> Option<String> {
+    let t = g.suggestion_text();
+    t.starts_with("minecraft:").then_some(t)
+}
+
+/// Draws a row's picture in a `size` square.
+fn block_icon(ui: &mut Ui, icon: &RowIcon, size: f32) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
+    match icon {
+        RowIcon::Block(id) => {
+            icons::item_icon(ui.painter(), rect.shrink(size * 0.04), id, Color32::WHITE);
+        }
+        RowIcon::Glyph(g) => icons::paint(ui.painter(), rect.shrink(size * 0.2), *g, theme::text_dim()),
+    }
+}
+
+/// A selectable row of the choice dialog: picture, name, a few words at the right.
+fn choice_row(ui: &mut Ui, width: f32, icon: &RowIcon, label: &str, note: &str, selected: bool) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, 34.0), Sense::click());
+    let fill = if selected {
+        theme::accent().gamma_multiply(0.35)
+    } else if resp.hovered() {
+        theme::wash(14)
+    } else {
+        Color32::TRANSPARENT
+    };
+    ui.painter().rect_filled(rect, theme::radius(5), fill);
+    let pic = Rect::from_min_size(rect.min + vec2(6.0, 4.0), Vec2::splat(26.0));
+    match icon {
+        RowIcon::Block(id) => {
+            icons::item_icon(ui.painter(), pic.shrink(1.0), id, Color32::WHITE);
+        }
+        RowIcon::Glyph(g) => icons::paint(ui.painter(), pic.shrink(5.0), *g, theme::text_dim()),
+    }
+    ui.painter().text(rect.left_center() + vec2(42.0, 0.0), Align2::LEFT_CENTER, label, theme::regular(14.5), theme::text());
+    if !note.is_empty() {
+        ui.painter().text(rect.right_center() - vec2(10.0, 0.0), Align2::RIGHT_CENTER, note, theme::regular(12.5), theme::text_dim());
+    }
+    resp
 }
 
 fn fmt_int(n: usize) -> String {
@@ -2255,4 +2825,71 @@ mod tests {
         };
         let (before, after) = (count_bedrock(&default_map, "default"), count_bedrock(&chosen_map, "chosen"));
         assert_eq!(after, before + 1, "the chosen block replaced the one block, nothing else");
+    }
+
+    /// A Bedrock world edited in the NBT editor, saved and closed, converts as it was saved (not as
+    /// it was before the edit).
+    #[test]
+    fn saves_are_named_as_the_console_names_them() {
+        // The user's own save: NPUB31419--131226152509 is 2013-12-26 15:25:09 UTC.
+        let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_388_071_509);
+        assert_eq!(utc_stamp(t), "131226152509");
+        assert_eq!(utc_stamp(std::time::UNIX_EPOCH), "700101000000");
+    }
+
+    #[test]
+    fn a_saved_edit_to_a_bedrock_world_is_in_its_conversion() {
+        use crate::world_picker::UiEdition;
+        let Ok(world) = std::env::var("MCTK_SNAPSHOT_WORLD") else { return };
+        let base = std::env::temp_dir().join(format!("mctk-edit-convert-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let bedrock = base.join("bedrock");
+        mctk_convert::java_to_bedrock(std::path::Path::new(&world), &bedrock).expect("to Bedrock");
+        let settings = crate::settings::Settings::default();
+        let convert = |tag: &str| -> Vec<((i32, i32), usize)> {
+            let dst = base.join(tag);
+            bedrock_to_java_job(&bedrock, &dst, &ReplacementMap::default(), &ConvertOptions::default(), &Progress::default()).unwrap();
+            let mut found = Vec::new();
+            for cx in -40..40 {
+                for cz in -40..40 {
+                    let n = crate::gpu_world::entity_places(&dst, mctk_world::Edition::Java, &Default::default(), cx, cz).len();
+                    if n > 0 {
+                        found.push(((cx, cz), n));
+                    }
+                }
+            }
+            found
+        };
+        let before = convert("before");
+        eprintln!("entities by chunk before: {before:?}");
+        assert!(!before.is_empty(), "the world has entities to take away");
+        // Open the world in the editor (in place), take every entity out of the chunk that has
+        // them, save, and close.
+        let mut ws = crate::workspace::Workspace::open(&bedrock, UiEdition::Bedrock, &settings, false, false).expect("opens");
+        let mut status = String::new();
+        // The world's own settings too: its name, in level.dat.
+        ws.open_doc(crate::workspace::DocSource::File(bedrock.join("level.dat"))).expect("level.dat opens");
+        let level_doc = ws.docs.len() - 1;
+        if let Some(c) = ws.docs[level_doc].tree.root.tag.as_compound_mut() {
+            c.insert("LevelName".into(), mctk_nbt::Tag::String("Edited Name".into()));
+        }
+        ws.docs[level_doc].tree.dirty = true;
+        let chunks: Vec<(i32, i32)> = before.iter().take(3).map(|(c, _)| *c).collect();
+        crate::editor::open_chunks(&mut ws, &chunks, &mut status);
+        eprintln!("opened {} tabs: {status}", ws.docs.len());
+        for d in ws.docs.iter_mut() {
+            if let Some(mctk_nbt::Tag::List(l)) = d.tree.root.tag.as_compound_mut().and_then(|c| c.get_mut("Entities")) {
+                *l = mctk_nbt::List::new(mctk_nbt::TagType::Compound);
+                d.tree.dirty = true;
+            }
+        }
+        ws.save().expect("saves");
+        drop(ws);
+        let after = convert("after");
+        eprintln!("entities by chunk after: {} chunks (before {})", after.len(), before.len());
+        let name = mctk_java::JavaWorld::open(base.join("after")).map(|w| w.level.name).unwrap_or_default();
+        eprintln!("level name in the converted world: {name:?}");
+        let _ = std::fs::remove_dir_all(&base);
+        assert!(after.len() < before.len(), "the chunk edits are in the conversion");
+        assert_eq!(name, "Edited Name", "the level.dat edit is in the conversion");
     }}

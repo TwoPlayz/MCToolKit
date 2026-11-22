@@ -50,12 +50,26 @@ pub struct Scan {
 impl Scan {
     /// Scans every chunk of every dimension of a Java world.
     pub fn java_world(path: impl AsRef<std::path::Path>) -> Result<Scan, Error> {
+        Self::java_world_where(path, |_, _, _| true)
+    }
+
+    /// Scans the chunks of a Java world that `keep(dimension, chunk x, chunk z)` accepts (the
+    /// dimension is 0, -1 for the Nether or 1 for the End), for a conversion that leaves the rest out.
+    pub fn java_world_where(path: impl AsRef<std::path::Path>, keep: impl Fn(i32, i32, i32) -> bool) -> Result<Scan, Error> {
         let world = JavaWorld::open(path)?;
         let mut scan = Scan::default();
         for dim in &world.dimensions {
+            let number = match dim.id.as_str() {
+                "minecraft:the_nether" => -1,
+                "minecraft:the_end" => 1,
+                _ => 0,
+            };
             for rpos in dim.regions()? {
                 let region = mctk_anvil::Region::open(dim.region_dir().join(rpos.file_name()))?;
                 for (lx, lz) in region.chunks() {
+                    if !keep(number, rpos.x * 32 + lx as i32, rpos.z * 32 + lz as i32) {
+                        continue;
+                    }
                     let Some(nbt) = region.read_chunk(lx, lz)? else {
                         continue;
                     };

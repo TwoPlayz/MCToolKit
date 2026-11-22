@@ -3,7 +3,7 @@
 //! trial spawners, brushable blocks, and the data-less ones (bells, conduits, sculk blocks, ...).
 //!
 //! Shapes of the Bedrock side were read from entities the Bedrock server saved when the blocks were
-//! placed (see `examples/be_dump.rs`); the Java side follows the game's own field names. Some Java
+//! placed; the Java side follows the game's own field names. Some Java
 //! blocks have no block entity at all but Bedrock needs one (beds, flower pots, note blocks,
 //! pistons): [`from_block`] makes those from the block.
 

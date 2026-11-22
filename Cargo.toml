@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.1.1"
+version = "1.0.0"
 edition = "2024"
 license = "LGPL-3.0-or-later"
 rust-version = "1.85"
@@ -21,10 +21,23 @@ mctk-mapping = { path = "crates/mctk-mapping" }
 mctk-world = { path = "crates/mctk-world" }
 mctk-registry = { path = "crates/mctk-registry" }
 mctk-replace = { path = "crates/mctk-replace" }
-mctk-gen = { path = "crates/mctk-gen" }
 zip = { version = "2.2.0", default-features = false, features = ["deflate"] }
 flate2 = "1.0.30"
 indexmap = "2.2.6"
 thiserror = "1.0.61"
 clap = { version = "4.5.4", features = ["derive"] }
 serde_json = "1.0.120"
+
+# Release builds: link-time optimisation across the crates, one codegen unit for the biggest
+# (the hot paths are the world meshing and the converters), symbols stripped, no unwinding tables
+# for panics we never catch.
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+strip = "symbols"
+
+# Dev builds: the dependencies (image decoding, compression) optimised, so the app is usable
+# when run from cargo run.
+[profile.dev.package."*"]
+opt-level = 2

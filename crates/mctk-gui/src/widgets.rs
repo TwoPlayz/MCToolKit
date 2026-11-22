@@ -1,4 +1,4 @@
-//! Custom-painted controls.
+﻿//! Custom-painted controls.
 
 use eframe::egui::{
     self, Align2, Color32, CursorIcon, Id, Rect, Response, Sense, Shape, Stroke, StrokeKind, Ui,
@@ -202,6 +202,15 @@ pub fn big_button(ui: &mut Ui, text: &str, size: Vec2) -> Response {
     resp
 }
 
+/// The big button for stopping something: red.
+pub fn stop_button(ui: &mut Ui, text: &str, size: Vec2) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    let fill = if resp.hovered() { theme::RED } else { theme::RED.gamma_multiply(0.85) };
+    ui.painter().rect_filled(rect, theme::radius(5), fill);
+    ui.painter().text(rect.center(), Align2::CENTER_CENTER, text, theme::regular(18.0), Color32::WHITE);
+    resp
+}
+
 /// Green pill switch with a label.
 pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str, enabled: bool) -> Response {
     toggle_with(ui, on, label, enabled, theme::regular(15.0))
@@ -397,9 +406,25 @@ pub fn dropdown_pinned(
     pinned: f32,
     add_pinned: impl FnOnce(&mut Ui, f32),
 ) {
+    dropdown_impl(ui, id, anchor, fill, border, add, pinned, add_pinned, false);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dropdown_impl(
+    ui: &mut Ui,
+    id: Id,
+    anchor: &Response,
+    fill: Color32,
+    border: Option<Stroke>,
+    add: impl FnOnce(&mut Ui, f32),
+    pinned: f32,
+    add_pinned: impl FnOnce(&mut Ui, f32),
+    staying: bool,
+) {
     if !dropdown_open(ui, id) {
         return;
     }
+    let mut list_rect: Option<Rect> = None;
     let width = anchor.rect.width();
     let transform = page_transform(ui.ctx());
     if let Some(t) = transform {
@@ -441,6 +466,7 @@ pub fn dropdown_pinned(
                         add_pinned(ui, width);
                     }
                 });
+            list_rect = Some(shown.response.rect);
             if let Some(stroke) = border {
                 // Drawn a little above the list and clipped to it, so there is no line along the
                 // top where it joins the button.
@@ -455,7 +481,8 @@ pub fn dropdown_pinned(
         });
     let click = ui.input(|i| i.pointer.any_click().then(|| i.pointer.interact_pos()).flatten());
     let click = click.map(|p| transform.map_or(p, |t| t.inverse() * p));
-    if click.is_some_and(|p| !anchor.rect.contains(p)) {
+    let inside_list = staying && click.is_some_and(|p| list_rect.is_some_and(|r| r.contains(p)));
+    if click.is_some_and(|p| !anchor.rect.contains(p)) && !inside_list {
         ui.memory_mut(|m| m.close_popup());
     }
 }
@@ -463,10 +490,15 @@ pub fn dropdown_pinned(
 /// A drop-down for choosing one of `labels`: the button is as wide as the longest of them (so the
 /// list is never wider than it), and the list drops straight from it. Gives the index picked.
 pub fn choice(ui: &mut Ui, id_salt: &str, current: usize, labels: &[&str]) -> Option<usize> {
+    choice_wide(ui, id_salt, current, labels, 0.0)
+}
+
+/// [`choice`] at least `width` wide.
+pub fn choice_wide(ui: &mut Ui, id_salt: &str, current: usize, labels: &[&str], width: f32) -> Option<usize> {
     let font = theme::regular(14.0);
     let widest = labels.iter().map(|l| text_width(ui, l, &font)).fold(0.0, f32::max);
     let id = ui.make_persistent_id(("choice", id_salt));
-    let (r, resp) = ui.allocate_exact_size(vec2(widest + 44.0, 28.0), Sense::click());
+    let (r, resp) = ui.allocate_exact_size(vec2((widest + 44.0).max(width), 28.0), Sense::click());
     let open = dropdown_open(ui, id);
     ui.painter().rect_filled(
         r,
@@ -698,6 +730,38 @@ fn labeled_number_row(
     .inner
 }
 
+/// The lighter label cell of a field row (`Account ID`), `width` wide, with rounded left corners.
+pub fn label_chip(ui: &mut Ui, label: &str, width: f32) -> Rect {
+    let (cell, _) = ui.allocate_exact_size(vec2(width, 28.0), Sense::hover());
+    ui.painter().rect_filled(cell, egui::CornerRadius { nw: 5, sw: 5, ne: 0, se: 0 }, theme::cell());
+    ui.painter().text(cell.left_center() + vec2(10.0, 0.0), Align2::LEFT_CENTER, label, theme::regular(14.0), theme::strong());
+    cell
+}
+
+/// A text field in the style of [`labeled_number`]: a label cell `label_w` wide beside a dark field, the
+/// whole row `total` wide.
+pub fn labeled_text(ui: &mut Ui, label: &str, value: &mut String, label_w: f32, total: f32, hint: &str) -> Response {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        label_chip(ui, label, label_w);
+        let (row, _) = ui.allocate_exact_size(vec2((total - label_w).max(24.0), 28.0), Sense::hover());
+        ui.painter().rect_filled(row, egui::CornerRadius { nw: 0, sw: 0, ne: 5, se: 5 }, theme::well());
+        ui.scope_builder(egui::UiBuilder::new().max_rect(row.shrink2(vec2(8.0, 0.0))), |ui| {
+            ui.add(
+                egui::TextEdit::singleline(value)
+                    .frame(false)
+                    // The example shows, dim, while the field is empty.
+                    .hint_text(egui::RichText::new(hint).color(theme::text_dim()))
+                    .desired_width(f32::INFINITY)
+                    .vertical_align(egui::Align::Center)
+                    .min_size(vec2(10.0, 28.0)),
+            )
+        })
+        .inner
+    })
+    .inner
+}
+
 /// A number field whose whole width, label cell included, is `total`.
 pub fn labeled_field(ui: &mut Ui, label: &str, value: &mut f64, total: f32, speed: f64) -> Response {
     let label_w = text_width(ui, label, &theme::regular(14.0)) + 20.0;
@@ -762,7 +826,7 @@ pub enum StepState {
 }
 
 /// The INPUT → SAVE hexagon stepper; returns the step that was clicked, if any.
-pub fn stepper(ui: &mut Ui, labels: &[&str], current: usize, reachable: usize, k: f32) -> Option<usize> {
+pub fn stepper(ui: &mut Ui, labels: &[&str], current: usize, lowest: usize, reachable: usize, k: f32) -> Option<usize> {
     let spacing = 120.0 * k;
     let width = spacing * (labels.len() - 1) as f32;
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 80.0 * k), Sense::hover());
@@ -789,7 +853,7 @@ pub fn stepper(ui: &mut Ui, labels: &[&str], current: usize, reachable: usize, k
             StepState::Pending
         };
         // Only a step that can be gone to is a button: no hand or highlight on the others.
-        let usable = i <= reachable && i != current;
+        let usable = i >= lowest && i <= reachable && i != current;
         let resp = ui.interact(
             Rect::from_center_size(c, Vec2::splat(36.0 * k)),
             Id::new(("step", i)),
@@ -813,8 +877,10 @@ pub fn stepper(ui: &mut Ui, labels: &[&str], current: usize, reachable: usize, k
             StepState::Current => "STEP_IN_PROGRESS",
             StepState::Pending => "STEP_INCOMPLETE",
         };
-        // The step artwork is green; on a page with another accent the hexagons are drawn instead.
+        // The step artwork is green on dark; on a page with another accent, or the light theme,
+        // the hexagons are drawn instead (in the theme's colors).
         let drawn = theme::current_accent() == theme::Accent::Green
+            && !theme::is_light()
             && icons::image(
                 p,
                 Rect::from_center_size(c, vec2(34.0, 40.0) * k),
@@ -858,6 +924,66 @@ pub fn stepper(ui: &mut Ui, labels: &[&str], current: usize, reachable: usize, k
     }
     clicked
 }
+
+/// A list `height` points tall that scrolls, with the app's own scroll bar (a thin rounded handle
+/// on a faint track) drawn and dragged here, so it works in the scaled converter page too, where
+/// egui's own bar and wheel miss the pointer. `offset` is how far it is scrolled (kept by the
+/// caller). The bar only shows when the list is longer than its height.
+pub fn scroll_list<R>(ui: &mut Ui, id: &str, height: f32, offset: &mut f32, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let out = egui::ScrollArea::vertical()
+        .id_salt(id)
+        .vertical_scroll_offset(*offset)
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+        .min_scrolled_height(height)
+        .max_height(height)
+        .auto_shrink([false, true])
+        .show(ui, add);
+    let view = out.inner_rect;
+    let max = (out.content_size.y - view.height()).max(0.0);
+    *offset = out.state.offset.y.clamp(0.0, max);
+    let to_page = |p: egui::Pos2| page_transform(ui.ctx()).map_or(p, |t| t.inverse() * p);
+    let pointer = ui.ctx().input(|i| i.pointer.hover_pos()).map(to_page);
+    // The wheel over the list (in the page's own units).
+    // (Not while a dialog above this list is open: only the dialog's own lists scroll then.)
+    let behind_dialog = ui.ctx().memory(|m| m.top_modal_layer()).is_some_and(|top| top != ui.layer_id());
+    if max > 0.0 && !behind_dialog && pointer.is_some_and(|p| view.contains(p)) {
+        let wheel = ui.ctx().input(|i| i.smooth_scroll_delta.y);
+        if wheel != 0.0 {
+            *offset = (*offset - wheel).clamp(0.0, max);
+            ui.ctx().request_repaint();
+        }
+    }
+    if max > 0.0 {
+        let track = Rect::from_min_max(egui::pos2(view.right() - 10.0, view.top()), view.right_bottom());
+        let resp = ui.interact(track, Id::new(id).with("bar"), Sense::click_and_drag());
+        let handle_h = (view.height() * view.height() / out.content_size.y).clamp(28.0, view.height());
+        let travel = (view.height() - handle_h).max(1.0);
+        if resp.dragged() || resp.is_pointer_button_down_on() {
+            if let Some(p) = ui.ctx().input(|i| i.pointer.interact_pos()).map(to_page) {
+                *offset = (((p.y - view.top() - handle_h / 2.0) / travel).clamp(0.0, 1.0) * max).clamp(0.0, max);
+            }
+        }
+        // As egui's own floating bar (the one the Settings page has): a thin handle in the text color
+        // while the pointer is over the list, widening onto a track when it is over the bar.
+        let top = view.top() + *offset / max * travel;
+        let over_list = pointer.is_some_and(|p| view.contains(p));
+        let over_bar = resp.hovered() || resp.dragged();
+        if over_list || over_bar {
+            let width = if over_bar { 6.0 } else { 3.0 };
+            // The bar is wider than the handle, which sits in its middle; its ends are rounded as
+            // far as it is wide, as the handle's are.
+            let bar = Rect::from_min_max(egui::pos2(track.right() - 12.0, track.top()), egui::pos2(track.right() - 2.0, track.bottom()));
+            if over_bar {
+                ui.painter().rect_filled(bar, bar.width() / 2.0, theme::field().gamma_multiply(0.7));
+            }
+            let handle = Rect::from_center_size(egui::pos2(bar.center().x, top + handle_h / 2.0), vec2(width, handle_h));
+            let alpha = if over_bar { 1.0 } else { 0.6 };
+            ui.painter().rect_filled(handle, width / 2.0, theme::text().gamma_multiply(alpha));
+        }
+    }
+    out.inner
+}
+
 
 /// Thin progress bar.
 pub fn progress_bar(ui: &mut Ui, fraction: f32, width: f32) {

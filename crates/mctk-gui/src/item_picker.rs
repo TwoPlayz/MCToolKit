@@ -387,6 +387,90 @@ pub fn show_loot_tables(ui: &mut Ui, current: Option<&str>, own: &str) -> Option
     show_choices(ui, "loot", current, &entries, Some((default_name.as_str(), own)))
 }
 
+/// A search box over every biome of the newest Java version, each with a block that stands for it. Gives the one picked, once,
+/// and closes the menu.
+pub fn show_biomes(ui: &mut Ui, current: Option<&str>) -> Option<String> {
+    static ALL: OnceLock<Vec<(String, String, String, String)>> = OnceLock::new();
+    let all = ALL.get_or_init(|| {
+        let newest = mctk_registry::builtin::java_versions()[0];
+        let mut biomes: Vec<String> = mctk_registry::builtin::java(newest).map(|r| r.biomes.clone()).unwrap_or_default();
+        biomes.sort();
+        biomes
+            .into_iter()
+            .map(|b| {
+                let id = if b.contains(':') { b } else { format!("minecraft:{b}") };
+                let name = display_name(&id);
+                let bare = id.trim_start_matches("minecraft:");
+                let icon = match bare {
+                    b if b.contains("ocean") || b.contains("river") => "water_bucket",
+                    b if b.contains("badlands") || b.contains("mesa") => "red_sand",
+                    b if b.contains("desert") || b.contains("beach") => "sand",
+                    b if b.contains("mushroom") => "red_mushroom",
+                    b if b.contains("frozen") || b.contains("ice") || b.contains("snow") || b.contains("grove") => "snow_block",
+                    b if b.contains("jungle") || b.contains("bamboo") => "jungle_log",
+                    b if b.contains("taiga") => "spruce_log",
+                    b if b.contains("birch") => "birch_log",
+                    b if b.contains("dark_forest") || b.contains("pale") => "dark_oak_log",
+                    b if b.contains("cherry") => "cherry_log",
+                    b if b.contains("forest") || b.contains("flower") => "oak_log",
+                    b if b.contains("swamp") || b.contains("mangrove") => "mangrove_log",
+                    b if b.contains("savanna") => "acacia_log",
+                    b if b.contains("crimson") => "crimson_stem",
+                    b if b.contains("warped") => "warped_stem",
+                    b if b.contains("soul_sand") => "soul_sand",
+                    b if b.contains("basalt") => "basalt",
+                    b if b.contains("nether") => "netherrack",
+                    b if b.contains("end") || b.contains("void") => "end_stone",
+                    b if b.contains("deep_dark") => "sculk",
+                    b if b.contains("dripstone") => "pointed_dripstone",
+                    b if b.contains("lush") => "moss_block",
+                    b if b.contains("peaks") || b.contains("slopes") || b.contains("hills") || b.contains("stony") || b.contains("windswept") || b.contains("meadow") => "stone",
+                    _ => "grass_block",
+                };
+                let search = format!("{name} {id}").to_lowercase();
+                (id, name, icon.to_string(), search)
+            })
+            .collect()
+    });
+    let entries: Vec<(&str, &str, &str, &str)> = all.iter().map(|(a, b, c, d)| (a.as_str(), b.as_str(), c.as_str(), d.as_str())).collect();
+    show_choices(ui, "biomes", current, &entries, None).flatten()
+}
+
+/// Whether an item is put down as an entity of its own, not a block: an armor stand, an item
+/// frame, an end crystal, a minecart or a boat.
+pub fn is_placed_entity(id: &str) -> bool {
+    let b = id.trim_start_matches("minecraft:");
+    matches!(b, "armor_stand" | "item_frame" | "glow_item_frame" | "end_crystal") || b.ends_with("minecart") || b.ends_with("_boat") || b.ends_with("_raft")
+}
+
+/// Everything the Place tool can put down, in one list: every block, the things that stand on
+/// their own (armor stands, item frames, minecarts, boats...; their id is given as
+/// `ent:minecraft:armor_stand`) and every mob (named "(mob)"; `mob:minecraft:pig`, since a few
+/// mobs and items share a name). Gives what was picked, once, and closes the menu.
+pub fn show_placeable(ui: &mut Ui, current: &str) -> Option<String> {
+    static ALL: OnceLock<Vec<(String, String, String, String)>> = OnceLock::new();
+    let all = ALL.get_or_init(|| {
+        let mut v: Vec<(String, String, String, String)> = items()
+            .iter()
+            .filter_map(|i| {
+                if is_block(&i.id) {
+                    Some((i.id.clone(), i.name.clone(), i.id.clone(), i.search.clone()))
+                } else if is_placed_entity(&i.id) {
+                    Some((format!("ent:{}", i.id), i.name.clone(), i.id.clone(), format!("{} entity", i.search)))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for (id, name, icon, search) in mobs() {
+            v.push((format!("mob:{id}"), format!("{name} (mob)"), icon.clone(), format!("{search} mob")));
+        }
+        v
+    });
+    let entries: Vec<(&str, &str, &str, &str)> = all.iter().map(|(a, b, c, d)| (a.as_str(), b.as_str(), c.as_str(), d.as_str())).collect();
+    show_choices(ui, "place", Some(current), &entries, None).flatten()
+}
+
 /// Every mob a spawner can spawn: those with a spawn egg, and a few with none.
 pub fn mobs() -> &'static [(String, String, String, String)] {
     static MOBS: OnceLock<Vec<(String, String, String, String)>> = OnceLock::new();

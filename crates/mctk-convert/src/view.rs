@@ -109,7 +109,8 @@ pub fn java_entity_id(e: &Compound) -> Option<String> {
     }
     let id = e.get("id").and_then(Tag::as_str)?;
     if id.contains(':') {
-        return Some(id.to_string());
+        // the current console games use 1.12's names (`minecraft:zombie_pigman`)
+        return Some(crate::legacy_up::entity_id(id).unwrap_or_else(|| id.to_string()));
     }
     crate::legacy_up::entity_id(id)
         .or_else(|| mctk_mapping::legacy::legacy().entity(id).map(str::to_string))

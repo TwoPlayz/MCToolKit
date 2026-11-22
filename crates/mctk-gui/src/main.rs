@@ -2,13 +2,18 @@
 //! Editor (its World Explorer prunes too), the Converter and Settings. Long tasks run on background threads.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// Tuples of a few fields and UI helpers with many parameters read better here than a type alias or a parameter struct for each.
+#![allow(clippy::type_complexity, clippy::too_many_arguments)]
 
 mod array_view;
 mod atlas;
+mod cleanup;
 mod heads;
+mod splash;
 mod hex_editor;
 mod info;
 mod chunk_preview;
+mod cloud;
 mod converter;
 mod ctx_menu;
 mod edit;
@@ -87,7 +92,8 @@ struct App {
     last_statuses: [String; 4],
     zoom: f32,
     update_check: Option<jobs::Job<Option<update::Update>>>,
-    update: Option<update::Update>,
+    /// The screen shown while the app starts (see `splash`).
+    splash: Option<splash::Splash>,
     /// Asking whether to save before closing; and the answer was to close (no asking again).
     confirm_quit: bool,
     quitting: bool,
@@ -99,23 +105,39 @@ impl App {
         icons::install_textures(&cc.egui_ctx);
         gpu_world::install(cc);
         let settings = Settings::load();
+        // A replaced program from an update is removed now it is not running; and what earlier
+        // runs left behind (see `cleanup`).
+        update::clean_up();
+        {
+            let working = settings.working_dir();
+            std::thread::spawn(move || {
+                let n = cleanup::working_folder(&working, cleanup::KEEP) + cleanup::temp_folders();
+                if n > 0 {
+                    eprintln!("cleanup: removed {n} old temporary folders");
+                }
+            });
+        }
         // MCToolKit's own resource pack keeps the latest release's assets, fetched as they are
-        // wanted (and again only when a newer release comes out).
+        // wanted (and again only when a newer release comes out). The splash screen checks it and
+        // the release; the development switches (MCTK_DEV_*) skip the screen.
         let pack = resource_pack::default_dir(&settings.working_dir());
         assets::set_root(pack.clone());
-        std::thread::spawn(move || resource_pack::ensure(&pack));
+        let developing = std::env::vars().any(|(k, _)| k.starts_with("MCTK_DEV_"));
+        let splash = (!developing).then(|| splash::Splash::new(&cc.egui_ctx, &settings, pack.clone()));
+        if developing {
+            std::thread::spawn(move || resource_pack::ensure(&pack));
+        }
         let page = match settings.default_app {
             1 => Some(Page::Editor),
             2 => Some(Page::Converter),
             _ => None,
         };
-        let update_check = settings
-            .check_updates
+        let update_check = (settings.check_updates && developing)
             .then(|| jobs::Job::spawn("Update check", &cc.egui_ctx, update::check));
         let mut app = App {
             page,
             update_check,
-            update: None,
+            splash,
             converter: converter::ConverterPage::new(&settings),
             settings,
             editor: Default::default(),
@@ -128,6 +150,11 @@ impl App {
             quitting: false,
         };
         // It closed by crashing last time: say so, and where the details are.
+        if std::env::args().any(|a| a == "--updated") {
+            let text = format!("MCToolKit was updated to version {}", env!("CARGO_PKG_VERSION"));
+            app.log.push(text.clone());
+            app.toasts.push(&cc.egui_ctx, text);
+        }
         let (log, pending) = crash_files();
         if pending.exists() {
             let _ = std::fs::remove_file(&pending);
@@ -261,32 +288,6 @@ impl App {
                     "max" => ctx.send_viewport_cmd(ViewportCommand::Maximized(!maximized)),
                     _ => ctx.send_viewport_cmd(ViewportCommand::Minimized(true)),
                 }
-            }
-        }
-        if let Some(u) = &self.update {
-            let font = theme::regular(13.0);
-            let text = format!("Update available: v{}", u.version);
-            let galley = ui
-                .painter()
-                .layout_no_wrap(text, font, Color32::WHITE);
-            let size = vec2(galley.size().x + 24.0, 24.0);
-            let r = Rect::from_center_size(pos2(x - 12.0 - size.x / 2.0, rect.center().y), size);
-            let resp = ui
-                .interact(r, egui::Id::new("update-pill"), Sense::click())
-                .on_hover_cursor(CursorIcon::PointingHand)
-                .on_hover_text("Open the download page on GitHub");
-            ui.painter().rect_filled(
-                r,
-                theme::radius(4),
-                if resp.hovered() { theme::button_hover() } else { theme::button() },
-            );
-            ui.painter().galley(
-                pos2(r.left() + 12.0, r.center().y - galley.size().y / 2.0),
-                galley,
-                theme::strong(),
-            );
-            if resp.clicked() {
-                ctx.open_url(egui::OpenUrl::new_tab(&u.url));
             }
         }
         if drag.double_clicked() {
@@ -671,12 +672,35 @@ impl eframe::App for App {
                 self.settings.save();
             }
         }
+        // The start-up screen: its checks run, and the app opens when they are done.
+        if let Some(sp) = self.splash.as_mut() {
+            match sp.step(ctx) {
+                splash::Outcome::Waiting => {}
+                splash::Outcome::Relaunch => {
+                    update::relaunch();
+                    std::process::exit(0);
+                }
+                splash::Outcome::Ready(found, notes) => {
+                    self.log.extend(notes);
+                    // One that could not be installed here (not Windows, a folder that cannot be
+                    // written to): said, with where to get it.
+                    if let Some(u) = found {
+                        let text = format!("MCToolKit {} is available but could not be installed here. Download it from {}", u.version, u.url);
+                        self.log.push(text.clone());
+                        self.toasts.push(ctx, text);
+                    }
+                    self.splash = None;
+                    // The rest of the game files, fetched ahead of use in the background.
+                    let pack = resource_pack::default_dir(&self.settings.working_dir());
+                    std::thread::spawn(move || resource_pack::fetch_rest(&pack));
+                }
+            }
+        }
         if let Some(r) = self.update_check.as_ref().and_then(jobs::Job::take) {
             self.update_check = None;
             match r {
                 Ok(Some(u)) => {
-                    self.log.push(format!("MCToolKit {} is available", u.version));
-                    self.update = Some(u);
+                    self.log.push(format!("MCToolKit {} is available: {}", u.version, u.url));
                 }
                 Ok(None) => self.log.push("MCToolKit is up to date".into()),
                 Err(e) => self.log.push(format!("Update check failed: {e}")),
@@ -701,6 +725,10 @@ impl eframe::App for App {
                 let full = ui.max_rect();
                 let mut body =
                     Rect::from_min_max(pos2(full.left(), full.top() + TITLE_BAR), full.max);
+                if let Some(sp) = &self.splash {
+                    sp.draw(ui, body);
+                    return;
+                }
                 let Some(page) = self.page else {
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(body));
                     self.home(&mut child);

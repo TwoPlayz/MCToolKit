@@ -34,6 +34,20 @@ pub fn properties(name: &str) -> &'static [(String, Vec<String>)] {
     table().get(&full).map_or(&[], Vec::as_slice)
 }
 
+/// A block's properties as the block really is, in the game's order: the value the map recorded
+/// (`props` as `key=value` pairs joined by commas, maybe none: a block saved without them is in
+/// its usual state) and, for any not recorded, the game's default.
+pub fn full_properties(name: &str, props: &str) -> Vec<(String, String)> {
+    let usual = default_state(name);
+    properties(name)
+        .iter()
+        .map(|(k, _)| {
+            let recorded = props.split(',').find_map(|kv| kv.strip_prefix(k.as_str())?.strip_prefix('=')).map(str::to_string);
+            (k.clone(), recorded.or_else(|| usual.properties.get(k).cloned()).unwrap_or_default())
+        })
+        .collect()
+}
+
 /// A block in its usual state (every property at the game's default).
 pub fn default_state(name: &str) -> BlockState {
     let full = if name.contains(':') { name.to_string() } else { format!("minecraft:{name}") };
@@ -53,5 +67,16 @@ mod tests {
         let s = default_state("minecraft:oak_stairs");
         assert!(s.properties.contains_key("facing") && s.properties.contains_key("half"));
         assert!(properties("stone").is_empty());
+    }
+
+    /// A block saved with no properties is its usual state; what was recorded wins.
+    #[test]
+    fn a_block_with_no_recorded_state_is_in_its_usual_state() {
+        let none = full_properties("minecraft:barrel", "");
+        assert!(none.iter().any(|(k, v)| k == "facing" && !v.is_empty()), "{none:?}");
+        assert!(none.iter().any(|(k, v)| k == "open" && v == "false"), "{none:?}");
+        let set = full_properties("minecraft:barrel", "facing=up");
+        assert_eq!(set.iter().find(|(k, _)| k == "facing").map(|(_, v)| v.as_str()), Some("up"));
+        assert!(full_properties("minecraft:stone", "").is_empty());
     }
 }

@@ -746,7 +746,8 @@ pub fn color_menu(ui: &mut egui::Ui, cx: &mut crate::ctx_menu::Cx, id: &str) -> 
 /// new name (empty: none) once it is entered or taken away.
 pub fn name_menu(ui: &mut egui::Ui, cx: &mut crate::ctx_menu::Cx, current: &str) -> Option<String> {
     use crate::ctx_menu;
-    let picked = ctx_menu::submenu_painted(ui, cx, ctx_menu::item_icon("name_tag"), "Display Name", 280.0, 80.0, |ui| {
+    
+    ctx_menu::submenu_painted(ui, cx, ctx_menu::item_icon("name_tag"), "Display Name", 280.0, 80.0, |ui| {
         let old = ctx_menu::set_row_width(ui.ctx(), 280.0);
         let mut out = None;
         if let Some(n) = ctx_menu::text_row(ui, crate::icons::Icon::Rename, "Name", current, "Type a name") {
@@ -759,8 +760,7 @@ pub fn name_menu(ui: &mut egui::Ui, cx: &mut crate::ctx_menu::Cx, current: &str)
         }
         ctx_menu::set_row_width(ui.ctx(), old);
         out
-    });
-    picked
+    })
 }
 
 /// A stack's attribute and adventure-mode rows: its attribute modifiers (each its own sub-menu

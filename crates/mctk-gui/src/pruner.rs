@@ -80,7 +80,7 @@ fn draw_thumb(p: &egui::Painter, rect: Rect, layer: &PLayer, inverted: bool) {
     let c = inner.center();
     // Where the shape is, in the picture.
     let inside: Box<dyn Fn(Pos2) -> bool>;
-    let mut outline: Vec<Pos2> = Vec::new();
+    let mut outline: Vec<Pos2>;
     match layer {
         PLayer::Box { w, h, .. } => {
             let s = (inner.width() / (*w as f32).max(0.01)).min(inner.height() / (*h as f32).max(0.01));
@@ -1181,11 +1181,21 @@ impl PruneTools {
                             // The resize cursor along the line from the shape's middle to the dot.
                             let from = to_screen(l.anchor());
                             let deg = (s.y - from.y).atan2(s.x - from.x).to_degrees().rem_euclid(180.0);
-                            match deg {
-                                d if !(22.5..157.5).contains(&d) => egui::CursorIcon::ResizeHorizontal,
-                                d if d < 67.5 => egui::CursorIcon::ResizeNwSe,
-                                d if d < 112.5 => egui::CursorIcon::ResizeVertical,
-                                _ => egui::CursorIcon::ResizeNeSw,
+                            if matches!(l, PLayer::Box { .. }) {
+                                // A box is reshaped by its corners only: the cursor points along the
+                                // corner's own diagonal, however wide or tall the box is.
+                                if (s.x - from.x) * (s.y - from.y) >= 0.0 {
+                                    egui::CursorIcon::ResizeNwSe
+                                } else {
+                                    egui::CursorIcon::ResizeNeSw
+                                }
+                            } else {
+                                match deg {
+                                    d if !(22.5..157.5).contains(&d) => egui::CursorIcon::ResizeHorizontal,
+                                    d if d < 67.5 => egui::CursorIcon::ResizeNwSe,
+                                    d if d < 112.5 => egui::CursorIcon::ResizeVertical,
+                                    _ => egui::CursorIcon::ResizeNeSw,
+                                }
                             }
                         };
                         ui.ctx().set_cursor_icon(cursor);
@@ -1252,6 +1262,17 @@ impl PruneTools {
             };
             if let Some(pts) = preview {
                 ants(&p, &pts, !matches!(self.tool, Some(Tool::Split)));
+            }
+            // Its dots, as they will be once it is made (the reshaping ones; not the move dot).
+            if let Some(l) = self.preview_layer(None) {
+                for (hi, h) in l.handles().into_iter().enumerate() {
+                    if l.is_move_handle(hi) {
+                        continue;
+                    }
+                    let sq = Rect::from_center_size(to_screen(h), Vec2::splat(10.0));
+                    p.rect_filled(sq, 0.0, Color32::WHITE);
+                    p.rect_stroke(sq, 0.0, Stroke::new(1.0_f32, Color32::BLACK), egui::StrokeKind::Outside);
+                }
             }
         }
         if !self.polygon.is_empty() {

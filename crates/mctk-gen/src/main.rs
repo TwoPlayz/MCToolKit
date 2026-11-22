@@ -14,6 +14,9 @@
 //! What the game refuses to place (an id that is not a block, a state or value it does not
 //! have) stays stone, so the results are the game's own answer.
 
+// Tuples of a few fields and UI helpers with many parameters read better here than a type alias or a parameter struct for each.
+#![allow(clippy::type_complexity, clippy::too_many_arguments)]
+
 mod bedrock_finish;
 mod bedrock_legacy;
 mod blockmap;
@@ -511,7 +514,7 @@ fn biome_audit(ids: &Path) -> Result<(), String> {
         let verdict = match (&java, back) {
             (Some(j), Some(b)) if b == id => {
                 ok += 1;
-                format!("{j}")
+                j.to_string()
             }
             (Some(j), b) => {
                 bad += 1;

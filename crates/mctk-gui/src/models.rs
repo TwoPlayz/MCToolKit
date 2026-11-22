@@ -94,11 +94,6 @@ fn asset_json(rel: &str) -> Option<Value> {
     std::fs::read_to_string(p).ok().and_then(|t| serde_json::from_str(&t).ok())
 }
 
-/// Whether the game's files can be had (fetched, or kept from before).
-pub fn available() -> bool {
-    asset_json("blockstates/stone.json").is_some()
-}
-
 static MODEL_FILES: LazyLock<Mutex<HashMap<String, Option<Arc<Value>>>>> = LazyLock::new(Default::default);
 
 /// `minecraft:block/stone` or `block/stone` as `block/stone`.
@@ -512,7 +507,7 @@ pub fn default_state(name: &str) -> String {
 /// as [`default_state`].
 pub fn shown_state(name: &str) -> String {
     let last = asset_json(&format!("blockstates/{name}.json"))
-        .and_then(|j| j.get("variants").and_then(|v| v.as_object()).and_then(|v| v.keys().last().cloned()));
+        .and_then(|j| j.get("variants").and_then(|v| v.as_object()).and_then(|v| v.keys().next_back().cloned()));
     last.unwrap_or_else(|| default_state(name))
 }
 
@@ -594,6 +589,12 @@ pub fn painting(variant: &str) -> Option<(u32, u32, Arc<str>)> {
     let d: Value = serde_json::from_str(&std::fs::read_to_string(p).ok()?).ok()?;
     let asset = d["asset_id"].as_str().unwrap_or(v).trim_start_matches("minecraft:").to_string();
     Some((d["width"].as_u64().unwrap_or(1) as u32, d["height"].as_u64().unwrap_or(1) as u32, format!("painting/{asset}.png").into()))
+}
+
+#[cfg(test)]
+/// Whether the game's files can be had (fetched, or kept from before).
+pub fn available() -> bool {
+    asset_json("blockstates/stone.json").is_some()
 }
 
 #[cfg(test)]

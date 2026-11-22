@@ -336,6 +336,17 @@ pub fn bedrock_aliases(version: &str) -> Vec<(&'static str, &'static str)> {
         .unwrap_or_default()
 }
 
+
+/// Pre-1.13 string id and numeric id of every block and item.
+pub fn legacy_ids_text() -> &'static str {
+    include_str!("../data/legacy/ids.tsv")
+}
+
+/// Pre-1.11 entity names and the entity they became.
+pub fn legacy_entities_text() -> &'static str {
+    include_str!("../data/legacy/entities.tsv")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -381,14 +392,4 @@ mod tests {
         let known = aliases.iter().filter(|(_, to)| r.has_block(to)).count();
         assert!(known * 10 > aliases.len() * 8, "{known} of {}", aliases.len());
     }
-}
-
-/// Pre-1.13 string id and numeric id of every block and item.
-pub fn legacy_ids_text() -> &'static str {
-    include_str!("../data/legacy/ids.tsv")
-}
-
-/// Pre-1.11 entity names and the entity they became.
-pub fn legacy_entities_text() -> &'static str {
-    include_str!("../data/legacy/entities.tsv")
 }

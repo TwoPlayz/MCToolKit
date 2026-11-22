@@ -81,7 +81,25 @@ fn decode_frames(
     Ok(out)
 }
 
+/// Bytes of zeros that end an XMem stream written by the real compressor (`XMemCompress` returns
+/// them as part of its output; the decoder treats a zero block size as the end).
+pub(crate) const XMEM_TERMINATOR_LEN: usize = 5;
+
+/// Frames from [`xmem_store`](crate::xmem_store) followed by the terminator the real compressor
+/// ends every stream with. Measured on 3,564 chunk streams of a genuine Xbox 360 save and 2,588 of a
+/// converter's: each ends with exactly these 5 zero bytes, and a chunk record's length includes them.
+pub(crate) fn terminated(mut frames: Vec<u8>) -> Vec<u8> {
+    frames.extend_from_slice(&[0u8; XMEM_TERMINATOR_LEN]);
+    frames
+}
+
 /// The 12-byte header of an Xbox 360 `savegame.dat`, followed by the XMem stream.
+///
+/// `compressed_len` is **not** the length of the stream. It counts everything after the word itself:
+/// the other 8 header bytes, the frames and the 5-byte zero terminator, so
+/// `compressed_len = 8 + frames + 5` and the meaningful part of the file ends at
+/// `4 + compressed_len`. This was measured on a genuine console save and on a converter's output (both
+/// have `compressed_len = frames + 13`); the console's file carries further padding after that point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Xbox360SaveHeader {
     pub compressed_len: u32,
@@ -91,6 +109,21 @@ pub struct Xbox360SaveHeader {
 
 impl Xbox360SaveHeader {
     pub const LEN: usize = 12;
+
+    /// The header for `frames_len` bytes of XMem frames (without terminator) that decode to
+    /// `decompressed_len` bytes.
+    pub fn for_stream(frames_len: usize, decompressed_len: usize) -> Self {
+        Xbox360SaveHeader {
+            compressed_len: (8 + frames_len + XMEM_TERMINATOR_LEN) as u32,
+            reserved: 0,
+            decompressed_len: decompressed_len as u32,
+        }
+    }
+
+    /// File offset where the frames and terminator end (`4 + compressed_len`).
+    pub fn end_offset(&self) -> usize {
+        4 + self.compressed_len as usize
+    }
 
     pub fn parse(bytes: &[u8]) -> Result<Self, Error> {
         let w = |o: usize| {

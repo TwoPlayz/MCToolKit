@@ -232,7 +232,7 @@ impl EditorPage {
                         return;
                     }
                     let tool = match tool.strip_prefix("fill:") {
-                        Some(block) => crate::workspace::EditTool::Fill(crate::edit::states::default_state(block)),
+                        Some(block) => crate::workspace::EditTool::Fill(vec![crate::edit::states::default_state(block)]),
                         None if tool == "entities" => crate::workspace::EditTool::DeleteEntities,
                         None => crate::workspace::EditTool::DeleteBlocks,
                     };
@@ -657,12 +657,35 @@ impl EditorPage {
             .workspaces
             .get(self.current)
             .map_or((false, false), |w| (w.can_undo_any(), w.can_redo_any()));
+        // In the World Explorer the steps are named: shown on the buttons, and listed (right-click)
+        // to go back or forward to any of them at once.
+        let (done, undone) = self
+            .workspaces
+            .get(self.current)
+            .filter(|w| w.show_explorer)
+            .and_then(|w| w.map.edits.read().ok().map(|l| l.history()))
+            .unwrap_or_default();
+        let mut jump: Option<(bool, usize)> = None;
         ui.horizontal(|ui| {
+            let next = done.first().map_or(String::new(), |l| format!(": {l}"));
             let undo = widgets::button(ui, Some(Icon::Undo), "Undo", half, can_undo)
-                .on_hover_text(format!("Undo ({})", ctx_menu::shortcut("Z")));
+                .on_hover_text(format!("Undo{next} ({}); right-click for the steps", ctx_menu::shortcut("Z")));
+            let next = undone.first().map_or(String::new(), |l| format!(": {l}"));
             let redo = widgets::button(ui, Some(Icon::Redo), "Redo", half, can_redo).on_hover_text(
-                format!("Redo ({} or {})", ctx_menu::shortcut("Y"), ctx_menu::shortcut("Shift+Z")),
+                format!("Redo{next} ({} or {})", ctx_menu::shortcut("Y"), ctx_menu::shortcut("Shift+Z")),
             );
+            for (button, redo_side, steps) in [(&undo, false, &done), (&redo, true, &undone)] {
+                if steps.is_empty() {
+                    continue;
+                }
+                ctx_menu::context(ui, button, |ui, _| {
+                    for (i, label) in steps.iter().take(12).enumerate() {
+                        if ctx_menu::item(ui, if redo_side { Icon::Redo } else { Icon::Undo }, label, "", true) {
+                            jump = Some((redo_side, i + 1));
+                        }
+                    }
+                });
+            }
             if undo.clicked() || redo.clicked() {
                 if let Some(ws) = self.workspaces.get_mut(self.current) {
                     let result = if undo.clicked() { ws.undo_any() } else { ws.redo_any() };
@@ -674,6 +697,19 @@ impl EditorPage {
                 }
             }
         });
+        if let (Some((redo_side, n)), Some(ws)) = (jump, self.workspaces.get_mut(self.current)) {
+            for _ in 0..n {
+                let result = if redo_side { ws.redo_any() } else { ws.undo_any() };
+                match result {
+                    Ok(note) if !note.is_empty() => self.status = note,
+                    Err(e) => {
+                        self.status = e;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        }
         // Ctrl+Z and Ctrl+Y (Ctrl+Shift+Z) for the open tab, as the buttons above.
         // In the World Explorer, for its tools (unless a box is being typed in).
         let in_explorer = self.workspaces.get(self.current).is_some_and(|w| w.show_explorer);
@@ -1064,6 +1100,9 @@ fn file_row_img(
     }
     let color = if icon == Icon::Folder {
         theme::YELLOW
+    } else if icon == Icon::File && theme::is_light() {
+        // A plain file is a quiet gray on the light theme, not as heavy as the names.
+        theme::text_muted()
     } else {
         theme::text()
     };
@@ -2159,6 +2198,7 @@ fn explorer(ui: &mut Ui, ws: &mut Workspace, status: &mut String) {
 
 /// Opens each of the chunks in its own tab; the last one is left showing.
 pub(crate) fn open_chunks(ws: &mut Workspace, chunks: &[(i32, i32)], status: &mut String) {
+    // (A chunk the World Explorer changed opens with its changes, unsaved: see `Workspace::open_doc`.)
     let mut missing = 0;
     for &(x, z) in chunks {
         match ws.chunk_source(x, z) {

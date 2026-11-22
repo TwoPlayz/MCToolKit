@@ -199,13 +199,28 @@ pub fn item_texture(id: &str) -> Option<PathBuf> {
 /// name suggests. Multiplied by `tint` (enchanted items are purple). False when there is
 /// nothing to draw.
 pub fn item_icon(p: &Painter, r: Rect, id: &str, tint: Color32) -> bool {
+    // Water's picture in the pack is gray (the game colors it by the biome): plain water blue.
+    let tint = if matches!(id.trim_start_matches("minecraft:"), "water" | "flowing_water" | "bubble_column") && tint == Color32::WHITE {
+        Color32::from_rgb(0x3F, 0x76, 0xE4)
+    } else {
+        tint
+    };
     let model = crate::models::item_model(id);
     if let Some(crate::models::ItemModel::Flat(layers)) = model.as_deref() {
         let mut drawn = false;
         for (k, layer) in layers.iter().enumerate() {
             if let Some(f) = pack_texture(layer) {
                 // Dyed layers (leather, potions) as the plain undyed color the game shows.
-                let color = if k > 0 && layer_tinted(id, k) { Color32::from_rgb(0xA0, 0x65, 0x40) } else { tint };
+                // A potion's liquid layer (its "overlay": the first layer, under the glass; a tipped
+                // arrow's "head") is the color of water in a bottle; leather and the like undyed brown.
+                let is_potion = id.contains("potion") || id.ends_with("tipped_arrow");
+                let color = if is_potion {
+                    if layer.contains("overlay") || layer.contains("head") { Color32::from_rgb(0x38, 0x5D, 0xC6) } else { tint }
+                } else if k > 0 && layer_tinted(id, k) {
+                    Color32::from_rgb(0xA0, 0x65, 0x40)
+                } else {
+                    tint
+                };
                 drawn |= file_image_tinted(p, r, &f, color);
             }
         }
@@ -501,7 +516,7 @@ fn find_item_texture(name: &str) -> Option<PathBuf> {
     ] {
         if let Some(rest) = base.strip_suffix(suffix) {
             // A stained glass pane is the glass; the rest are made of a block named by the rest.
-            bases.push(if suffix == "_pane" { rest.to_string() } else { rest.to_string() });
+            bases.push(rest.to_string());
             base = rest;
             break;
         }
@@ -664,7 +679,6 @@ fn image_name(icon: Icon) -> Option<&'static str> {
         Icon::Refresh => "REFRESH",
         Icon::Plus => "ADD",
         Icon::Close => "CLOSE",
-        Icon::Cross => "EDITION_CROSS",
         Icon::Check => "EDITION_CHECK",
         Icon::ChevronLeft => "STEP_PREV",
         Icon::ChevronRight => "ARROW_RIGHT",
@@ -679,6 +693,17 @@ fn image_name(icon: Icon) -> Option<&'static str> {
         Icon::ShapePolygon => "PRUNER_POLYGON",
         Icon::ShapeSplit => "PRUNER_SPLIT",
         Icon::Time => "PRUNER_TIME",
+        Icon::Particles => "PARTICLES",
+        Icon::Palette => "PALETTE",
+        Icon::Place => "PLACE",
+        Icon::Sun => "SUN",
+        Icon::Pointer => "POINTER",
+        Icon::BrushBall => "BRUSH_BALL",
+        Icon::BrushCube => "BRUSH_CUBE",
+        Icon::BrushChunk => "BRUSH_CHUNK",
+        Icon::PaintAnywhere => "PAINT_ANYWHERE",
+        Icon::PaintExisting => "PAINT_EXISTING",
+        Icon::PaintBelow => "PAINT_BELOW",
         Icon::Optimize => "PRUNER_OPTIMIZE",
         Icon::Undo => "UNDO",
         Icon::Redo => "REDO",
@@ -703,7 +728,8 @@ fn image_name(icon: Icon) -> Option<&'static str> {
         | Icon::Cut
         | Icon::Paste
         | Icon::Level
-        | Icon::Rename => return None,
+        | Icon::Rename
+        | Icon::Biome => return None,
     })
 }
 
@@ -785,6 +811,19 @@ pub enum Icon {
     ShapePolygon,
     ShapeSplit,
     Time,
+    Particles,
+    Palette,
+    Place,
+    Sun,
+    Pointer,
+    /// Hills with a sun: the biome tool.
+    Biome,
+    BrushBall,
+    BrushCube,
+    BrushChunk,
+    PaintAnywhere,
+    PaintExisting,
+    PaintBelow,
     Optimize,
     Undo,
     Redo,
@@ -799,8 +838,6 @@ pub enum Icon {
     Restore,
     User,
     ArrowRight,
-    /// Red/gray "not supported" cross (extension editions).
-    Cross,
     /// A figure with a cross: removing mobs and other entities.
     MobRemove,
 }
@@ -884,13 +921,29 @@ impl Pen<'_> {
 }
 
 pub fn paint(p: &Painter, r: Rect, icon: Icon, c: Color32) {
+    // The app icons are two white layers, the base in gray and the accent in the color asked for.
+    let layers = match icon {
+        Icon::AppEditor => Some(("APP_EDITOR_BASE", "APP_EDITOR_ACCENT")),
+        Icon::AppConverter => Some(("APP_CONVERTER_BASE", "APP_CONVERTER_ACCENT")),
+        _ => None,
+    };
+    if let Some((base, accent)) = layers {
+        if image(p, r, base, theme::text_muted()) & image(p, r, accent, c) {
+            return;
+        }
+    }
     if paint_image(p, r, icon, c) {
         return;
     }
     let pen = Pen { p, r, c };
-    let gray = theme::text_muted();
     let bg = theme::bg();
     match icon {
+        Icon::Biome => {
+            // Two hills under a sun.
+            pen.closed(&[(0.06, 0.82), (0.34, 0.42), (0.58, 0.82)]);
+            pen.closed(&[(0.42, 0.82), (0.68, 0.5), (0.94, 0.82)]);
+            pen.circle(0.76, 0.24, 0.1);
+        }
         Icon::Logo => {
             // The original box mark. See `examples/gen_logo.rs` for the matching
             // high-resolution render used for the window/taskbar/exe icon.
@@ -911,25 +964,8 @@ pub fn paint(p: &Painter, r: Rect, icon: Icon, c: Color32) {
             w.line(&[(0.22, 0.36), (0.5, 0.52), (0.78, 0.36)]);
             w.line(&[(0.5, 0.52), (0.5, 0.84)]);
         }
-        Icon::AppEditor => {
-            let frame = Pen { p, r, c: gray };
-            frame.rect_stroke(0.14, 0.12, 0.86, 0.88, 3);
-            pen.line(&[(0.36, 0.28), (0.36, 0.72)]);
-            for y in [0.3, 0.5, 0.7] {
-                pen.line(&[(0.36, y), (0.6, y)]);
-                pen.rect_fill(0.6, y - 0.06, 0.72, y + 0.06, 1, c);
-            }
-        }
-        Icon::AppConverter => {
-            // A square loop (Minecraft is blocky), two brackets flowing clockwise, each
-            // ending in an arrowhead. The brackets stop clear of each other's arrowhead
-            // (which has some width behind its tip), leaving a visible gap on each side.
-            pen.line(&[(0.22, 0.42), (0.22, 0.22), (0.78, 0.22), (0.78, 0.42)]);
-            pen.head((0.78, 0.42), PI / 2.0);
-            let g = Pen { p, r, c: gray };
-            g.line(&[(0.78, 0.58), (0.78, 0.78), (0.22, 0.78), (0.22, 0.58)]);
-            g.head((0.22, 0.58), -PI / 2.0);
-        }
+        // Drawn above, from their SVG layers (or their one picture).
+        Icon::AppEditor | Icon::AppConverter | Icon::Particles | Icon::Palette | Icon::Place | Icon::Sun | Icon::Pointer | Icon::BrushBall | Icon::BrushCube | Icon::BrushChunk | Icon::PaintAnywhere | Icon::PaintExisting | Icon::PaintBelow => {}
         Icon::Java => {
             pen.rect_fill(0.08, 0.3, 0.92, 0.72, 3, c);
             for (row, n) in [(0.4, 7), (0.51, 7)] {
@@ -992,7 +1028,7 @@ pub fn paint(p: &Painter, r: Rect, icon: Icon, c: Color32) {
             pen.line(&[(0.5, 0.18), (0.5, 0.82)]);
             pen.line(&[(0.18, 0.5), (0.82, 0.5)]);
         }
-        Icon::Close | Icon::Cross => {
+        Icon::Close => {
             pen.line(&[(0.24, 0.24), (0.76, 0.76)]);
             pen.line(&[(0.76, 0.24), (0.24, 0.76)]);
         }
@@ -1049,7 +1085,8 @@ pub fn paint(p: &Painter, r: Rect, icon: Icon, c: Color32) {
             pen.line(&[(0.45, 0.44), (0.45, 0.82)]);
             let gear = pen.at(0.74, 0.74);
             p.circle_filled(gear, r.width() * 0.24, bg);
-            paint(p, Rect::from_center_size(gear, r.size() * 0.52), Icon::Gear, Color32::WHITE);
+            // White on the dark theme (the highlighted gear); the strong text color on the light one.
+            paint(p, Rect::from_center_size(gear, r.size() * 0.52), Icon::Gear, theme::strong());
         }
         Icon::Gear => {
             pen.circle(0.5, 0.5, 0.2);
@@ -1200,6 +1237,18 @@ pub fn paint(p: &Painter, r: Rect, icon: Icon, c: Color32) {
     }
 }
 
+/// A number tag's badge from its layers, so it follows the theme: a tile in the theme's chip
+/// color (or `[ ]` brackets for an array) with the letter `glyph` (`TAG_BYTE`, ...) in `color`.
+/// False when the pictures are missing.
+pub fn tag_badge(p: &Painter, r: Rect, glyph: &str, color: Color32, array: bool) -> bool {
+    if array {
+        // The letter sits smaller between the brackets.
+        image(p, r, "TAG_BRACKETS", theme::text_dim()) & image(p, r.scale_from_center(0.78), glyph, color)
+    } else {
+        image(p, r, "TAG_TILE", theme::chip()) & image(p, r, glyph, color)
+    }
+}
+
 /// Text badge used for NBT tag types ("B", "I", "Aa", …).
 pub fn badge(p: &Painter, r: Rect, text: &str, fill: Color32, bracketed: bool) {
     if bracketed {
@@ -1274,7 +1323,7 @@ mod tests {
     fn the_icons_the_app_uses_exist() {
         let has = |n: &str| bundled::SVGS.iter().any(|(name, _)| *name == n);
         for n in [
-            "POS", "ROT", "TAG_BYTE", "TAG_COMPOUND", "TAG_LONG_ARRAY", "THUMB_TIME", "PLATFORM_JAVA_h", "FOLDER_h",
+            "APP_EDITOR_BASE", "APP_EDITOR_ACCENT", "APP_CONVERTER_BASE", "APP_CONVERTER_ACCENT", "PARTICLES", "PARTICLES_h", "PALETTE", "PALETTE_h", "PLACE", "PLACE_h", "SUN", "POINTER", "BRUSH_BALL", "BRUSH_BALL_h", "PAINT_BELOW", "PAINT_BELOW_h", "POS", "ROT", "TAG_BYTE", "TAG_COMPOUND", "TAG_TILE", "TAG_BRACKETS", "THUMB_TIME", "PLATFORM_JAVA_h", "FOLDER_h",
         ] {
             assert!(has(n), "{n}");
         }

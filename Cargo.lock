@@ -1972,7 +1972,7 @@ dependencies = [
 
 [[package]]
 name = "mctk-anvil"
-version = "0.1.1"
+version = "1.0.0"
 dependencies = [
  "flate2",
  "mctk-nbt",
@@ -1981,7 +1981,7 @@ dependencies = [
 
 [[package]]
 name = "mctk-bedrock"
-version = "0.1.1"
+version = "1.0.0"
 dependencies = [
  "mctk-leveldb",
  "mctk-nbt",
@@ -1991,7 +1991,7 @@ dependencies = [
 
 [[package]]
 name = "mctk-cli"
-version = "0.1.1"
+version = "1.0.0"
 dependencies = [
  "clap",
  "mctk-anvil",
@@ -2001,11 +2001,12 @@ dependencies = [
  "mctk-java",
  "mctk-nbt",
  "mctk-prune",
+ "mctk-replace",
 ]
 
 [[package]]
 name = "mctk-console"
-version = "0.1.1"
+version = "1.0.0"
 dependencies = [
  "flate2",
  "lzxd",
@@ -2015,7 +2016,7 @@ dependencies = [
 
 [[package]]
 name = "mctk-convert"
-version = "0.1.1"
+version = "1.0.0"
 dependencies = [
  "flate2",
  "indexmap",
@@ -2034,7 +2035,7 @@ dependencies = [
 
 [[package]]
 name = "mctk-gen"
-version = "0.1.1"
+version = "1.0.0"
 dependencies = [
  "flate2",
  "indexmap",
@@ -2047,7 +2048,7 @@ dependencies = [
 
 [[package]]
 name = "mctk-gui"
-version = "0.1.1"
+version = "1.0.0"
 dependencies = [
  "bytemuck",
  "eframe",
@@ -2078,7 +2079,7 @@ dependencies = [
 
 [[package]]
 name = "mctk-java"
-version = "0.1.1"
+version = "1.0.0"
 dependencies = [
  "indexmap",
  "mctk-anvil",
@@ -2088,7 +2089,7 @@ dependencies = [
 
 [[package]]
 name = "mctk-leveldb"
-version = "0.1.1"
+version = "1.0.0"
 dependencies = [
  "flate2",
  "thiserror 1.0.69",
@@ -2096,20 +2097,17 @@ dependencies = [
 
 [[package]]
 name = "mctk-mapping"
-version = "0.1.1"
+version = "1.0.0"
 dependencies = [
  "flate2",
- "mctk-anvil",
- "mctk-bedrock",
  "mctk-java",
  "mctk-nbt",
  "mctk-registry",
- "serde_json",
 ]
 
 [[package]]
 name = "mctk-nbt"
-version = "0.1.1"
+version = "1.0.0"
 dependencies = [
  "flate2",
  "indexmap",
@@ -2118,7 +2116,7 @@ dependencies = [
 
 [[package]]
 name = "mctk-prune"
-version = "0.1.1"
+version = "1.0.0"
 dependencies = [
  "mctk-anvil",
  "mctk-bedrock",
@@ -2130,7 +2128,7 @@ dependencies = [
 
 [[package]]
 name = "mctk-registry"
-version = "0.1.1"
+version = "1.0.0"
 dependencies = [
  "indexmap",
  "serde_json",
@@ -2139,9 +2137,8 @@ dependencies = [
 
 [[package]]
 name = "mctk-replace"
-version = "0.1.1"
+version = "1.0.0"
 dependencies = [
- "flate2",
  "indexmap",
  "mctk-anvil",
  "mctk-bedrock",
@@ -2153,7 +2150,7 @@ dependencies = [
 
 [[package]]
 name = "mctk-world"
-version = "0.1.1"
+version = "1.0.0"
 dependencies = [
  "mctk-anvil",
  "mctk-bedrock",

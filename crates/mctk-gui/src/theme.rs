@@ -152,6 +152,21 @@ pub const BADGE_FLOAT: Color32 = Color32::from_rgb(0x4F, 0xB0, 0x9E);
 pub const BADGE_DOUBLE: Color32 = Color32::from_rgb(0x9B, 0x6A, 0xD8);
 pub const FOLDER: Color32 = Color32::from_rgb(0xB2, 0x90, 0x5E);
 
+/// The color of the letter on a number tag's badge (`B`, `S`, `I`, `L`, `F`, `D`): the bright
+/// colors on the dark theme's tile, deeper ones that stay readable on the light theme's.
+pub fn tag_letter(letter: char) -> Color32 {
+    let (dark, light) = match letter {
+        'B' => ((0xF5, 0x7C, 0x87), (0xD0, 0x40, 0x58)),
+        'S' => ((0xA3, 0xBB, 0x82), (0x4F, 0x82, 0x2E)),
+        'I' => ((0x60, 0x66, 0xF5), (0x3A, 0x41, 0xD6)),
+        'L' => ((0x6D, 0x9E, 0xCF), (0x2A, 0x6C, 0xB4)),
+        'F' => ((0xB6, 0xA6, 0x65), (0x86, 0x6F, 0x14)),
+        _ => ((0xA8, 0x68, 0xE3), (0x86, 0x42, 0xCC)),
+    };
+    let (r, g, b) = if is_light() { light } else { dark };
+    Color32::from_rgb(r, g, b)
+}
+
 /// The color a page uses for what is active or primary in it: green in the NBT editor, blue in
 /// the converter, red in the pruner and blue on the other pages.
 #[derive(Clone, Copy, PartialEq, Eq)]

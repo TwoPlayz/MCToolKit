@@ -462,7 +462,7 @@ pub fn page(ui: &mut Ui, settings: &mut Settings) -> bool {
             titled(ui, "Game Assets", &assets);
             ui.add_space(20.0);
             widgets::toggle_bold(ui, &mut settings.check_updates, "Check for Updates on Startup");
-            describe(ui, "Ask GitHub for the newest MCToolKit release when the application starts and show a notice in the title bar when one is available. Nothing is downloaded automatically.");
+            describe(ui, "Ask GitHub for the newest MCToolKit release when the application starts and download and install it, then restart. If it cannot be installed here (the program is in a folder that cannot be written to), a notice in the title bar opens the download page instead.");
             widgets::toggle_bold(ui, &mut settings.hide_messages, "Hide Non-Warning Messages");
             describe(ui, "Only show the messages in the corner that report a problem. Messages that just say what was done (saved, opened, undone...) are not shown.");
             widgets::toggle_bold(ui, &mut settings.show_log, "Show Debug Log");

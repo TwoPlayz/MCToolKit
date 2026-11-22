@@ -32,6 +32,29 @@ pub enum Format {
     Bedrock(Option<u32>),
 }
 
+thread_local! {
+    /// The tags cut or copied in any tab (the editor draws on one thread), so a tag copied in one
+    /// tab can be pasted in another, and into the inventory screen.
+    static CLIPBOARD: std::cell::RefCell<Vec<(String, Tag)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn clip_set(items: Vec<(String, Tag)>) {
+    CLIPBOARD.with(|c| *c.borrow_mut() = items);
+}
+
+fn clip_get() -> Vec<(String, Tag)> {
+    CLIPBOARD.with(|c| c.borrow().clone())
+}
+
+/// The item stack on the clipboard, when what was copied is one (a compound with an item id and a
+/// count): what the inventory screen's Paste Item puts in a slot.
+pub(crate) fn clipboard_stack() -> Option<Compound> {
+    let items = clip_get();
+    let [(_, Tag::Compound(c))] = items.as_slice() else { return None };
+    let has_id = matches!(c.get("id"), Some(Tag::String(_) | Tag::Short(_) | Tag::Int(_))) || matches!(c.get("Name"), Some(Tag::String(_)));
+    (has_id && (c.contains_key("count") || c.contains_key("Count"))).then(|| c.clone())
+}
+
 pub fn load(bytes: &[u8]) -> Result<(Format, NamedTag), String> {
     if bytes.len() > 9 {
         let len = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
@@ -245,22 +268,31 @@ fn type_rank(t: TagType) -> u8 {
 /// Paints the icon or letter badge for a tag type.
 fn type_icon(p: &egui::Painter, r: Rect, t: TagType) {
     // The tag badges, falling back to drawn ones.
-    let image = match t {
-        TagType::Compound => "TAG_COMPOUND",
-        TagType::List => "TAG_LIST",
-        TagType::String => "TAG_STRING",
-        TagType::Byte => "TAG_BYTE",
-        TagType::Short => "TAG_SHORT",
-        TagType::Int => "TAG_INT",
-        TagType::Long => "TAG_LONG",
-        TagType::Float => "TAG_FLOAT",
-        TagType::Double => "TAG_DOUBLE",
-        TagType::ByteArray => "TAG_BYTE_ARRAY",
-        TagType::IntArray => "TAG_INT_ARRAY",
-        TagType::LongArray => "TAG_LONG_ARRAY",
-        TagType::End => return,
+    // Number tags are a tile (or brackets) with a letter, colored for the theme; the string and
+    // list pictures are light gray, so on the light theme they take the text color instead.
+    let letter = match t {
+        TagType::Byte | TagType::ByteArray => Some(("TAG_BYTE", 'B')),
+        TagType::Short => Some(("TAG_SHORT", 'S')),
+        TagType::Int | TagType::IntArray => Some(("TAG_INT", 'I')),
+        TagType::Long | TagType::LongArray => Some(("TAG_LONG", 'L')),
+        TagType::Float => Some(("TAG_FLOAT", 'F')),
+        TagType::Double => Some(("TAG_DOUBLE", 'D')),
+        _ => None,
     };
-    if icons::image(p, r, image, Color32::WHITE) {
+    if let Some((glyph, ch)) = letter {
+        let array = matches!(t, TagType::ByteArray | TagType::IntArray | TagType::LongArray);
+        if icons::tag_badge(p, r, glyph, theme::tag_letter(ch), array) {
+            return;
+        }
+    }
+    let plain = if theme::is_light() { theme::text() } else { Color32::WHITE };
+    let drawn = match t {
+        TagType::Compound => icons::image(p, r, "TAG_COMPOUND", Color32::WHITE),
+        TagType::List => icons::image(p, r, "TAG_LIST", plain),
+        TagType::String => icons::image(p, r, "TAG_STRING", plain),
+        _ => false,
+    };
+    if drawn || t == TagType::End {
         return;
     }
     match t {
@@ -485,8 +517,9 @@ struct Marks {
 
 /// A menu row whose icon is drawn white, like the other icons of the menu.
 pub fn white_item(ui: &mut Ui, icon: Icon, text: &str) -> bool {
-    // White asks for the highlighted artwork (UNDO_h, REDO_h), which is white like the other icons.
-    ctx_menu::painted(ui, text, "", true, |p, r, _| icons::paint(p, r, icon, Color32::WHITE))
+    // The strong color asks for the highlighted artwork (UNDO_h, REDO_h): white on the dark theme,
+    // near-black on the light one, like the other icons of the menu.
+    ctx_menu::painted(ui, text, "", true, |p, r, _| icons::paint(p, r, icon, theme::strong()))
 }
 
 fn get_ref<'a>(tag: &'a Tag, path: &[Seg]) -> Option<&'a Tag> {
@@ -527,6 +560,19 @@ fn dim_index(v: i32) -> usize {
     }
 }
 
+/// A text item id of the current console games as a number and damage: `"306"`, or a 1.12 name such as
+/// `minecraft:planks` (a current Java item name is no console id).
+fn current_console_item(text: &str) -> Option<(u16, u16)> {
+    let legacy = mctk_mapping::legacy::legacy();
+    if let Ok(n) = text.parse::<u16>() {
+        return Some((n, 0));
+    }
+    if legacy.numeric_item(text).is_some() {
+        return None;
+    }
+    legacy.numeric_id(text).map(|n| (n, 0))
+}
+
 /// An item stack: a compound with an `id` (a name, or a number in console and old worlds) or Bedrock\n/// `Name`, and a `count` or `Count`. Gives the id as a name and the count.
 fn item_stack(c: &Compound) -> Option<(String, Option<i64>)> {
     let count = c.get("count").or_else(|| c.get("Count"))?.as_i64();
@@ -535,6 +581,11 @@ fn item_stack(c: &Compound) -> Option<(String, Option<i64>)> {
         _ => 0,
     };
     let id = match (c.get("id"), c.get("Name")) {
+        // The current console games hold the id as text: the number (`"5"`) or the 1.12 name (`minecraft:planks`).
+        (Some(Tag::String(s)), _) if current_console_item(s).is_some() => {
+            let (n, d) = current_console_item(s)?;
+            mctk_mapping::legacy::legacy().item(n, if d > 0 { d } else { damage })?.to_string()
+        }
         (Some(Tag::String(s)), _) | (None, Some(Tag::String(s))) => s.clone(),
         // Console and old worlds give the item as a number (a short), with its damage value.
         (Some(Tag::Short(n)), _) => mctk_mapping::legacy::legacy().item(*n as u16, damage)?.to_string(),
@@ -662,8 +713,268 @@ fn mob_menu(c: &Compound, block_entity: bool, data_version: Option<i64>) -> Opti
         drops: m::drops(c, data_version).filter(|_| health.is_some() && !id.ends_with(":player")),
         effects: health.map(|_| (m::effects(c), crate::effects::choices(c, crate::effects::Holder::Mob, data_version))),
         shulker_color: m::shulker_color(c, &id),
+        profession: m::profession(c),
         gateway: None,
     })
+}
+
+/// What a mob's menu offers (its trades, switches, equipment, drops, effects, a villager's job, a shulker's
+/// color, a gateway's exit), drawn as the rows of the menu being built: the changes chosen, and whether the
+/// trades screen was asked for. key keeps what is typed apart from other mobs' menus. Shared by the NBT tree
+/// and the World Explorer.
+pub(crate) fn mob_menu_body(ui: &mut Ui, m: &MobMenu, key: &str) -> (Vec<crate::mob_edit::MobEdit>, bool) {
+    use crate::mob_edit::MobEdit;
+    let old = ctx_menu::set_row_width(ui.ctx(), 260.0);
+    let mut inner = ctx_menu::Cx::default();
+    let mut out: Vec<MobEdit> = Vec::new();
+    let mut trades = false;
+    let edit = |out: &mut Vec<MobEdit>, e: MobEdit| out.push(e);
+    if m.trades && ctx_menu::painted(ui, "Edit Trades", "", true, ctx_menu::item_icon("emerald")) {
+        trades = true;
+    }
+    if let Some(on) = m.invulnerable {
+        if ctx_menu::toggle(ui, "Invulnerable", on) {
+            edit(&mut out, MobEdit::Invulnerable(!on));
+        }
+    }
+    if let Some(on) = m.no_ai {
+        if ctx_menu::toggle(ui, "No AI", on) {
+            edit(&mut out, MobEdit::NoAi(!on));
+        }
+    }
+    if let Some(on) = m.invisible {
+        if ctx_menu::toggle(ui, "Invisible", on) {
+            edit(&mut out, MobEdit::Invisible(!on));
+        }
+    }
+    // Shown as the tag is: ticked when `NoGravity` is set (it floats).
+    if let Some(falls) = m.gravity {
+        if ctx_menu::toggle(ui, "No Gravity", !falls) {
+            edit(&mut out, MobEdit::Gravity(!falls));
+        }
+    }
+    if !m.equipment.is_empty() {
+        let rows = m.equipment.len() as f32;
+        let picked = ctx_menu::submenu_painted(ui, &mut inner, ctx_menu::item_icon("iron_chestplate"), "Equipment", 280.0, 20.0 + rows * 32.0, |ui| {
+            let old = ctx_menu::set_row_width(ui.ctx(), 280.0);
+            let mut slots = ctx_menu::Cx::default();
+            let mut out = None;
+            for (slot, item, stack) in &m.equipment {
+                let label = match item {
+                    Some((id, 1)) => format!("{}: {}", slot.name(), crate::item_picker::display_name(id)),
+                    Some((id, n)) => format!("{}: {} \u{d7}{n}", slot.name(), crate::item_picker::display_name(id)),
+                    None => format!("{}: nothing", slot.name()),
+                };
+                // In gray, as the menus' icons are: the item, or the game's picture of
+                // the slot while empty.
+                let (icon_id, empty) = (item.as_ref().map(|i| i.0.clone()), slot.empty_picture());
+                let chosen = ctx_menu::submenu_painted(
+                    ui,
+                    &mut slots,
+                    move |p, r, ink| {
+                        let drawn = match &icon_id {
+                            Some(id) => icons::item_icon_gray(p, r, id),
+                            None => icons::pack_texture(empty).is_some_and(|f| icons::gray_image(p, r, &f)),
+                        };
+                        if !drawn {
+                            p.rect_stroke(r.shrink(2.0), theme::radius(2), egui::Stroke::new(1.0_f32, ink), egui::StrokeKind::Inside);
+                        }
+                    },
+                    &label,
+                    260.0,
+                    if stack.is_some() { 220.0 } else { 40.0 },
+                    |ui| {
+                        let old = ctx_menu::set_row_width(ui.ctx(), 260.0);
+                        let mut rows = ctx_menu::Cx::default();
+                        let mut got = None;
+                        // The item, and how many at the top of the list (the count on
+                        // its own too).
+                        let (now_id, now_n) = item.clone().unwrap_or_default();
+                        let (icon, text) = if item.is_some() { (Icon::Refresh, "Change Item") } else { (Icon::Plus, "Add Item") };
+                        let picked = ctx_menu::submenu_wide(ui, &mut rows, icon, text, crate::item_picker::WIDTH, crate::item_picker::HEIGHT + 30.0, |ui| {
+                            crate::item_picker::show_counted(ui, &now_id, false, now_n.max(1), 99)
+                        });
+                        match picked {
+                            Some((Some(id), n)) => got = Some(MobEdit::Equip(*slot, Some((id, n)))),
+                            Some((None, n)) if !now_id.is_empty() => got = Some(MobEdit::Equip(*slot, Some((now_id.clone(), n)))),
+                            _ => {}
+                        }
+                        if item.is_some() {
+                            if ctx_menu::item(ui, Icon::Trash, "Remove", "", true) {
+                                got = Some(MobEdit::Equip(*slot, None));
+                            }
+                            ctx_menu::separator(ui);
+                        }
+                        // What the stack has: enchantments, attributes (and the slots
+                        // they work in), unbreakable, its name.
+                        if let (Some(stack), Some((id, _))) = (stack, item) {
+                            let key = format!("{}-{}", key, slot.name());
+                            if let Some(e) = crate::item_edit::stack_menu(ui, &mut rows, &key, id, stack, m.data_version) {
+                                got = Some(MobEdit::EquipStack(*slot, e));
+                            }
+                        }
+                        ctx_menu::set_row_width(ui.ctx(), old);
+                        got
+                    },
+                );
+                if chosen.is_some() {
+                    out = chosen;
+                }
+            }
+            ctx_menu::set_row_width(ui.ctx(), old);
+            out
+        });
+        if let Some(e) = picked {
+            edit(&mut out, e);
+        }
+    }
+    // What it drops when it dies (each slot's chance, its loot table) and whether it
+    // picks things up.
+    if let Some(d) = &m.drops {
+        let rows = d.chances.len() as f32 + if d.has_loot_table { 1.0 } else { 0.0 } + 1.0;
+        let picked = ctx_menu::submenu_painted(ui, &mut inner, ctx_menu::item_icon("bone"), "Drops", 300.0, 20.0 + rows * 32.0, |ui| {
+            let old = ctx_menu::set_row_width(ui.ctx(), 300.0);
+            let mut tables = ctx_menu::Cx::default();
+            let mut got: Option<MobEdit> = None;
+            for (slot, chance) in &d.chances {
+                // As a percentage: 100 is always (saved above 1, so it drops as it was).
+                let key = egui::Id::new(("drop-chance", key.to_string(), *slot as u8));
+                let now = (chance.min(1.0) * 100.0 * 100.0).round() / 100.0;
+                let mut v: f64 = ui.ctx().data(|dd| dd.get_temp(key)).unwrap_or(now);
+                // Pictured by what the slot holds (else the slot's own picture), in gray.
+                let held = m.equipment.iter().find(|(s, ..)| s == slot).and_then(|(_, i, _)| i.as_ref().map(|i| i.0.clone()));
+                let empty = slot.empty_picture();
+                let icon = move |p: &egui::Painter, r: Rect, ink: Color32| {
+                    let drawn = match &held {
+                        Some(id) => icons::item_icon_gray(p, r, id),
+                        None => icons::pack_texture(empty).is_some_and(|f| icons::gray_image(p, r, &f)),
+                    };
+                    if !drawn {
+                        icons::paint(p, r, Icon::Rename, ink);
+                    }
+                };
+                let (changed, done) = ctx_menu::decimal_row_painted(ui, icon, &format!("{} %", slot.name()), &mut v, 0.0..=100.0);
+                if changed {
+                    ui.ctx().data_mut(|dd| dd.insert_temp(key, v));
+                }
+                if done {
+                    ui.ctx().data_mut(|dd| dd.remove_temp::<f64>(key));
+                    if (v - now).abs() > 1e-9 {
+                        got = Some(MobEdit::DropChance(*slot, if v >= 100.0 { 2.0 } else { v / 100.0 }));
+                    }
+                }
+            }
+            if d.has_loot_table {
+                // Picked from the list of tables, the mob's own at the top.
+                let own = format!("minecraft:entities/{}", m.id.trim_start_matches("minecraft:"));
+                let label = match d.loot_table.as_deref() {
+                    Some(t) => format!("Loot Table: {}", crate::item_picker::loot_tables().iter().find(|x| x.id == t).map_or_else(|| t.trim_start_matches("minecraft:").to_string(), |x| x.name.clone())),
+                    None => "Loot Table: Default".to_string(),
+                };
+                let chosen = ctx_menu::submenu_painted(ui, &mut tables, ctx_menu::item_icon("chest"), &label, crate::item_picker::WIDTH, crate::item_picker::HEIGHT, |ui| {
+                    crate::item_picker::show_loot_tables(ui, d.loot_table.as_deref(), &own)
+                });
+                if let Some(t) = chosen {
+                    got = Some(MobEdit::LootTable(t));
+                }
+            }
+            if ctx_menu::toggle(ui, "Can Pick Up Loot", d.pick_up) {
+                got = Some(MobEdit::PickUp(!d.pick_up));
+            }
+            ctx_menu::set_row_width(ui.ctx(), old);
+            got
+        });
+        if let Some(e) = picked {
+            edit(&mut out, e);
+        }
+    }
+    // Its status effects: each one's level and time, and adding more.
+    if let Some((effects, choices)) = &m.effects {
+        if let Some(e) = crate::effects::menu(ui, &mut inner, key, "Status Effects", effects, choices) {
+            edit(&mut out, MobEdit::Effect(e));
+        }
+    }
+    // A villager's job.
+    if let Some(job) = &m.profession {
+        if let Some(p) = crate::explorer_ui::profession_menu(ui, &mut inner, job) {
+            edit(&mut out, MobEdit::Profession(p));
+        }
+    }
+    // A shulker's color.
+    if let Some(now) = m.shulker_color {
+        let shown = if now == 16 { "shulker_box".to_string() } else { format!("{}_shulker_box", crate::mob_edit::COLORS.get(now as usize).copied().unwrap_or("purple")) };
+        let picked = ctx_menu::submenu_painted(ui, &mut inner, ctx_menu::item_icon(&shown), "Color", 220.0, 20.0 + 17.0 * 26.0, |ui| {
+            let old = ctx_menu::set_row_width(ui.ctx(), 220.0);
+            let mut got = None;
+            for (k, (cid, name)) in crate::item_edit::shulker_colors().into_iter().enumerate() {
+                // Undyed first in the list; 16 as the shulker keeps it.
+                let v = if k == 0 { 16 } else { k as i64 - 1 };
+                let current = v == now;
+                let clicked = ctx_menu::painted(ui, &name, if current { "\u{2713}" } else { "" }, true, move |p, r, ink| {
+                    if !icons::item_icon(p, r, &cid, Color32::WHITE) {
+                        icons::paint(p, r, Icon::File, ink);
+                    }
+                });
+                if clicked && !current {
+                    got = Some(v);
+                }
+            }
+            ctx_menu::set_row_width(ui.ctx(), old);
+            got
+        });
+        if let Some(v) = picked {
+            edit(&mut out, MobEdit::ShulkerColor(v));
+        }
+    }
+    if let Some((at, exact)) = m.gateway {
+        for (k, axis) in ["Exit X", "Exit Y", "Exit Z"].iter().enumerate() {
+            let key = egui::Id::new(("gateway-exit", key.to_string(), k));
+            let mut v: i64 = ui.ctx().data(|d| d.get_temp(key)).unwrap_or(at[k]);
+            let (changed, done) = ctx_menu::number_row(ui, Icon::Rename, axis, &mut v, -30_000_000..=30_000_000, "");
+            if changed {
+                ui.ctx().data_mut(|d| d.insert_temp(key, v));
+            }
+            if done {
+                ui.ctx().data_mut(|d| d.remove_temp::<i64>(key));
+                if v != at[k] {
+                    let mut to = at;
+                    to[k] = v;
+                    edit(&mut out, MobEdit::GatewayExit(to));
+                }
+            }
+        }
+        if let Some(on) = exact {
+            if ctx_menu::toggle(ui, "Exact Teleport", on) {
+                edit(&mut out, MobEdit::GatewayExact(!on));
+            }
+        }
+    }
+    ctx_menu::set_row_width(ui.ctx(), old);
+    (out, trades)
+}
+
+/// Mob ▸ of the World Explorer's right-click menu: the same rows the NBT tree's menu has for a mob (see
+/// [mob_menu_body]), under the mob's name. Gives the changes chosen and whether its trades were asked for.
+pub(crate) fn mob_submenu(ui: &mut Ui, cx: &mut ctx_menu::Cx, c: &Compound, key: &str) -> Option<(Vec<crate::mob_edit::MobEdit>, bool)> {
+    let m = mob_menu(c, false, None)?;
+    let title = item_name(&m.id);
+    let egg = m.icon.clone();
+    ctx_menu::submenu_painted(
+        ui,
+        cx,
+        move |p, r, ink| {
+            if !icons::item_icon_gray(p, r, &egg) {
+                icons::paint(p, r, Icon::File, ink);
+            }
+        },
+        &title,
+        260.0,
+        320.0,
+        |ui| {
+            let (edits, trades) = mob_menu_body(ui, &m, key);
+            (!edits.is_empty() || trades).then_some((edits, trades))
+        },
+    )
 }
 
 /// An item id as a name to read: `minecraft:diamond_sword` is "Diamond Sword".
@@ -716,6 +1027,9 @@ pub struct NbtTree {
     /// How many edits were behind the document when it was opened or last saved; being back at
     /// that point means nothing is changed. `None` once the history no longer reaches it.
     clean: Option<usize>,
+    /// How many steps of history there were when the World Explorer's changes were made in this tree (see
+    /// `adopt`): while it is still so, nothing else was changed here.
+    adopted: Option<usize>,
     pub read_only: bool,
     /// Set by the page: the root's menu offers deleting the file or record behind this tree.
     pub deletable: bool,
@@ -743,7 +1057,6 @@ pub struct NbtTree {
     find: String,
     finding: bool,
     rename: Option<(TagPath, String)>,
-    clipboard: Vec<(String, Tag)>,
     /// A message for the editor to show as a toast; it takes it.
     pub status: String,
     /// The live count of search matches, drawn in the corner while a search is typed.
@@ -859,7 +1172,7 @@ struct BlockMenu {
 
 /// What a mob's (or gateway's) menu offers, and how things are now; None where it does not apply.
 #[derive(Default)]
-struct MobMenu {
+pub(crate) struct MobMenu {
     /// Its current Java id, and the item to picture it by (its spawn egg).
     id: String,
     icon: String,
@@ -879,6 +1192,8 @@ struct MobMenu {
     effects: Option<(Vec<crate::effects::Effect>, Vec<&'static str>)>,
     /// A shulker: its color (16: its own).
     shulker_color: Option<i64>,
+    /// A villager's job (the name `none` is no job).
+    profession: Option<String>,
     /// An end gateway: where it sends things, and whether exactly there.
     gateway: Option<([i64; 3], Option<bool>)>,
 }
@@ -915,6 +1230,7 @@ impl NbtTree {
             root,
             dirty: false,
             clean: Some(0),
+            adopted: None,
             read_only: false,
             deletable: false,
             delete_requested: false,
@@ -934,7 +1250,6 @@ impl NbtTree {
             find: String::new(),
             finding: false,
             rename: None,
-            clipboard: Vec::new(),
             status: String::new(),
             find_status: String::new(),
             styles: HashMap::new(),
@@ -1057,6 +1372,166 @@ impl NbtTree {
     pub fn mark_saved(&mut self) {
         self.dirty = false;
         self.clean = Some(self.undo.len());
+    }
+
+    /// Makes this document's root the one given, as edits: a tag that is gone from it is deleted (kept, red,
+    /// until the save), one that is new is added (green), one whose value differs is set (orange), and what holds
+    /// any of them is marked changed. For a chunk opened with the World Explorer's unsaved changes.
+    pub fn adopt(&mut self, new: NamedTag) {
+        if new.tag == self.root.tag {
+            return;
+        }
+        /// A tag the new root has and the old one has not: an entry at the end of a list, or a key of a compound.
+        enum Add {
+            Entry(TagPath, Tag),
+            Key(TagPath, String, Tag),
+        }
+        /// Walks the old tag and the new one together: what is gone (`dels`), what is new (`adds`) and what is to be
+        /// set (`sets`).
+        fn walk(old: &Tag, new: &Tag, path: &mut TagPath, dels: &mut Vec<TagPath>, adds: &mut Vec<Add>, sets: &mut Vec<(TagPath, Tag)>) {
+            match (old, new) {
+                (Tag::Compound(a), Tag::Compound(b)) => {
+                    for (k, vb) in b {
+                        if !a.contains_key(k) {
+                            adds.push(Add::Key(path.clone(), k.clone(), vb.clone()));
+                        }
+                    }
+                    for (k, va) in a {
+                        path.push(Seg::Key(k.clone()));
+                        match b.get(k) {
+                            Some(vb) => walk(va, vb, path, dels, adds, sets),
+                            None => dels.push(path.clone()),
+                        }
+                        path.pop();
+                    }
+                }
+                (Tag::List(a), Tag::List(b)) => {
+                    // Matched in order: an entry of the old list that is not in the new one was removed; the new
+                    // list's entries past the end of the old are added. One put in the middle is not told apart:
+                    // the list is set as a whole.
+                    let (mut i, mut j) = (0, 0);
+                    let mut removed = Vec::new();
+                    let mut pairs = Vec::new();
+                    let mut inserted = false;
+                    while i < a.len() && j < b.len() {
+                        let (x, y) = (a.get(i).expect("in range"), b.get(j).expect("in range"));
+                        if x == y {
+                            i += 1;
+                            j += 1;
+                        } else if j + 1 < b.len() && b.get(j + 1) == Some(x) {
+                            inserted = true;
+                            j += 1;
+                        } else if i + 1 < a.len() && a.get(i + 1) == Some(y) {
+                            removed.push(i);
+                            i += 1;
+                        } else {
+                            pairs.push((i, j));
+                            i += 1;
+                            j += 1;
+                        }
+                    }
+                    removed.extend(i..a.len());
+                    if inserted {
+                        sets.push((path.clone(), new.clone()));
+                        return;
+                    }
+                    for k in j..b.len() {
+                        adds.push(Add::Entry(path.clone(), b.get(k).expect("in range").clone()));
+                    }
+                    for i in removed {
+                        path.push(Seg::Index(i));
+                        dels.push(path.clone());
+                        path.pop();
+                    }
+                    for (i, j) in pairs {
+                        path.push(Seg::Index(i));
+                        walk(a.get(i).expect("in range"), b.get(j).expect("in range"), path, dels, adds, sets);
+                        path.pop();
+                    }
+                }
+                _ => {
+                    if old != new {
+                        sets.push((path.clone(), new.clone()));
+                    }
+                }
+            }
+        }
+        let (mut dels, mut adds, mut sets) = (Vec::new(), Vec::new(), Vec::new());
+        let old = self.root.tag.clone();
+        walk(&old, &new.tag, &mut Vec::new(), &mut dels, &mut adds, &mut sets);
+        // What holds a changed tag is changed too (the beacon whose power was set shows edited, not only the power):
+        // for what is set, what is deleted and what is added.
+        let mut holders: Vec<TagPath> = Vec::new();
+        for (p, _) in &sets {
+            holders.extend((1..p.len()).map(|k| p[..k].to_vec()));
+        }
+        for p in &dels {
+            holders.extend((1..p.len()).map(|k| p[..k].to_vec()));
+        }
+        for add in &adds {
+            let p = match add {
+                Add::Entry(p, _) | Add::Key(p, ..) => p,
+            };
+            holders.extend((1..=p.len()).map(|k| p[..k].to_vec()));
+        }
+        holders.sort();
+        holders.dedup();
+        let sets_paths: Vec<TagPath> = sets.iter().map(|(p, _)| p.clone()).collect();
+        if !sets.is_empty() {
+            self.frame_start = Some(self.snap());
+            self.apply(Action::SetValues(sets, "Changes made in the World Explorer".into()));
+        }
+        for p in dels {
+            self.frame_start = Some(self.snap());
+            self.apply(Action::Delete(p));
+        }
+        // What is new goes in at the end of its list or compound, marked as added: one step to undo.
+        let before_adds = (!adds.is_empty()).then(|| self.snap());
+        for add in adds {
+            let (parent, seg, tag) = match add {
+                Add::Entry(p, t) => {
+                    let n = get_ref(&self.root.tag, &p).and_then(Tag::as_list).map_or(0, List::len);
+                    (p, Seg::Index(n), t)
+                }
+                Add::Key(p, k, t) => (p, Seg::Key(k), t),
+            };
+            let name = seg_name(&{
+                let mut q = parent.clone();
+                q.push(seg.clone());
+                q
+            });
+            let done = match (get_mut(&mut self.root.tag, &parent), &seg) {
+                (Some(Tag::List(l)), Seg::Index(_)) => l.push(tag.clone()).is_ok(),
+                (Some(Tag::Compound(c)), Seg::Key(k)) => {
+                    c.insert(k.clone(), tag.clone());
+                    true
+                }
+                _ => false,
+            };
+            if done {
+                let mut at = parent;
+                at.push(seg);
+                self.marks.list.push(Mark { kind: Kind::Fresh, path: at, base: Some((name, tag)) });
+            }
+        }
+        if let Some(before) = before_adds {
+            self.push_undo(before);
+        }
+        for prefix in holders {
+            if sets_paths.contains(&prefix) || self.marks.list.iter().any(|m| m.path == prefix) || self.under_gone(&prefix) {
+                continue;
+            }
+            if let Some(was) = get_ref(&old, &prefix) {
+                self.marks.list.push(Mark { kind: Kind::Edited, path: prefix.clone(), base: Some((seg_name(&prefix), was.clone())) });
+            }
+        }
+        self.dirty = true;
+        self.adopted = Some(self.undo.len());
+    }
+    /// Whether the only changes in this tree are the World Explorer's that it was opened with (nothing was edited here
+    /// since): it can be closed and opened again from the explorer's changes without losing anything.
+    pub fn only_adopted(&self) -> bool {
+        self.adopted.is_some_and(|n| n == self.undo.len())
     }
 
     /// A document that has never been written (a new file): changed until it is saved.
@@ -1946,7 +2421,6 @@ impl NbtTree {
         // A mob (or armor stand, item frame): what it is and has, under its name; an end
         // gateway: where it sends things.
         if let Some(m) = &extras.mob {
-            use crate::mob_edit::MobEdit;
             let gateway = m.gateway.is_some();
             let title = if gateway { "End Gateway".to_string() } else { item_name(&m.id) };
             let egg = if gateway { "end_portal_frame".to_string() } else { m.icon.clone() };
@@ -1955,230 +2429,17 @@ impl NbtTree {
                     icons::paint(p, r, Icon::File, ink);
                 }
             }, &title, 260.0, 320.0, |ui| {
-                let old = ctx_menu::set_row_width(ui.ctx(), 260.0);
-                let mut inner = ctx_menu::Cx::default();
-                let mut out: Vec<Action> = Vec::new();
-                let edit = |out: &mut Vec<Action>, e: MobEdit| out.push(Action::EditMob(path.clone(), e));
-                if m.trades && ctx_menu::painted(ui, "Edit Trades", "", true, ctx_menu::item_icon("emerald")) {
+                let (edits, trades) = mob_menu_body(ui, m, &path_key(path));
+                let mut out: Vec<Action> = edits.into_iter().map(|e| Action::EditMob(path.clone(), e)).collect();
+                if trades {
                     out.push(Action::OpenTrades(path.clone()));
                 }
-                if let Some(on) = m.invulnerable {
-                    if ctx_menu::toggle(ui, "Invulnerable", on) {
-                        edit(&mut out, MobEdit::Invulnerable(!on));
-                    }
-                }
-                if let Some(on) = m.no_ai {
-                    if ctx_menu::toggle(ui, "No AI", on) {
-                        edit(&mut out, MobEdit::NoAi(!on));
-                    }
-                }
-                if let Some(on) = m.invisible {
-                    if ctx_menu::toggle(ui, "Invisible", on) {
-                        edit(&mut out, MobEdit::Invisible(!on));
-                    }
-                }
-                // Shown as the tag is: ticked when `NoGravity` is set (it floats).
-                if let Some(falls) = m.gravity {
-                    if ctx_menu::toggle(ui, "No Gravity", !falls) {
-                        edit(&mut out, MobEdit::Gravity(!falls));
-                    }
-                }
-                if !m.equipment.is_empty() {
-                    let rows = m.equipment.len() as f32;
-                    let picked = ctx_menu::submenu_painted(ui, &mut inner, ctx_menu::item_icon("iron_chestplate"), "Equipment", 280.0, 20.0 + rows * 32.0, |ui| {
-                        let old = ctx_menu::set_row_width(ui.ctx(), 280.0);
-                        let mut slots = ctx_menu::Cx::default();
-                        let mut out = None;
-                        for (slot, item, stack) in &m.equipment {
-                            let label = match item {
-                                Some((id, 1)) => format!("{}: {}", slot.name(), crate::item_picker::display_name(id)),
-                                Some((id, n)) => format!("{}: {} \u{d7}{n}", slot.name(), crate::item_picker::display_name(id)),
-                                None => format!("{}: nothing", slot.name()),
-                            };
-                            // In gray, as the menus' icons are: the item, or the game's picture of
-                            // the slot while empty.
-                            let (icon_id, empty) = (item.as_ref().map(|i| i.0.clone()), slot.empty_picture());
-                            let chosen = ctx_menu::submenu_painted(
-                                ui,
-                                &mut slots,
-                                move |p, r, ink| {
-                                    let drawn = match &icon_id {
-                                        Some(id) => icons::item_icon_gray(p, r, id),
-                                        None => icons::pack_texture(empty).is_some_and(|f| icons::gray_image(p, r, &f)),
-                                    };
-                                    if !drawn {
-                                        p.rect_stroke(r.shrink(2.0), theme::radius(2), egui::Stroke::new(1.0_f32, ink), egui::StrokeKind::Inside);
-                                    }
-                                },
-                                &label,
-                                260.0,
-                                if stack.is_some() { 220.0 } else { 40.0 },
-                                |ui| {
-                                    let old = ctx_menu::set_row_width(ui.ctx(), 260.0);
-                                    let mut rows = ctx_menu::Cx::default();
-                                    let mut got = None;
-                                    // The item, and how many at the top of the list (the count on
-                                    // its own too).
-                                    let (now_id, now_n) = item.clone().unwrap_or_default();
-                                    let (icon, text) = if item.is_some() { (Icon::Refresh, "Change Item") } else { (Icon::Plus, "Add Item") };
-                                    let picked = ctx_menu::submenu_wide(ui, &mut rows, icon, text, crate::item_picker::WIDTH, crate::item_picker::HEIGHT + 30.0, |ui| {
-                                        crate::item_picker::show_counted(ui, &now_id, false, now_n.max(1), 99)
-                                    });
-                                    match picked {
-                                        Some((Some(id), n)) => got = Some(MobEdit::Equip(*slot, Some((id, n)))),
-                                        Some((None, n)) if !now_id.is_empty() => got = Some(MobEdit::Equip(*slot, Some((now_id.clone(), n)))),
-                                        _ => {}
-                                    }
-                                    if item.is_some() {
-                                        if ctx_menu::item(ui, Icon::Trash, "Remove", "", true) {
-                                            got = Some(MobEdit::Equip(*slot, None));
-                                        }
-                                        ctx_menu::separator(ui);
-                                    }
-                                    // What the stack has: enchantments, attributes (and the slots
-                                    // they work in), unbreakable, its name.
-                                    if let (Some(stack), Some((id, _))) = (stack, item) {
-                                        let key = format!("{}-{}", path_key(path), slot.name());
-                                        if let Some(e) = crate::item_edit::stack_menu(ui, &mut rows, &key, id, stack, m.data_version) {
-                                            got = Some(MobEdit::EquipStack(*slot, e));
-                                        }
-                                    }
-                                    ctx_menu::set_row_width(ui.ctx(), old);
-                                    got
-                                },
-                            );
-                            if chosen.is_some() {
-                                out = chosen;
-                            }
-                        }
-                        ctx_menu::set_row_width(ui.ctx(), old);
-                        out
-                    });
-                    if let Some(e) = picked {
-                        edit(&mut out, e);
-                    }
-                }
-                // What it drops when it dies (each slot's chance, its loot table) and whether it
-                // picks things up.
-                if let Some(d) = &m.drops {
-                    let rows = d.chances.len() as f32 + if d.has_loot_table { 1.0 } else { 0.0 } + 1.0;
-                    let picked = ctx_menu::submenu_painted(ui, &mut inner, ctx_menu::item_icon("bone"), "Drops", 300.0, 20.0 + rows * 32.0, |ui| {
-                        let old = ctx_menu::set_row_width(ui.ctx(), 300.0);
-                        let mut tables = ctx_menu::Cx::default();
-                        let mut got: Option<MobEdit> = None;
-                        for (slot, chance) in &d.chances {
-                            // As a percentage: 100 is always (saved above 1, so it drops as it was).
-                            let key = egui::Id::new(("drop-chance", path_key(path), *slot as u8));
-                            let now = (chance.min(1.0) * 100.0 * 100.0).round() / 100.0;
-                            let mut v: f64 = ui.ctx().data(|dd| dd.get_temp(key)).unwrap_or(now);
-                            // Pictured by what the slot holds (else the slot's own picture), in gray.
-                            let held = m.equipment.iter().find(|(s, ..)| s == slot).and_then(|(_, i, _)| i.as_ref().map(|i| i.0.clone()));
-                            let empty = slot.empty_picture();
-                            let icon = move |p: &egui::Painter, r: Rect, ink: Color32| {
-                                let drawn = match &held {
-                                    Some(id) => icons::item_icon_gray(p, r, id),
-                                    None => icons::pack_texture(empty).is_some_and(|f| icons::gray_image(p, r, &f)),
-                                };
-                                if !drawn {
-                                    icons::paint(p, r, Icon::Rename, ink);
-                                }
-                            };
-                            let (changed, done) = ctx_menu::decimal_row_painted(ui, icon, &format!("{} %", slot.name()), &mut v, 0.0..=100.0);
-                            if changed {
-                                ui.ctx().data_mut(|dd| dd.insert_temp(key, v));
-                            }
-                            if done {
-                                ui.ctx().data_mut(|dd| dd.remove_temp::<f64>(key));
-                                if (v - now).abs() > 1e-9 {
-                                    got = Some(MobEdit::DropChance(*slot, if v >= 100.0 { 2.0 } else { v / 100.0 }));
-                                }
-                            }
-                        }
-                        if d.has_loot_table {
-                            // Picked from the list of tables, the mob's own at the top.
-                            let own = format!("minecraft:entities/{}", m.id.trim_start_matches("minecraft:"));
-                            let label = match d.loot_table.as_deref() {
-                                Some(t) => format!("Loot Table: {}", crate::item_picker::loot_tables().iter().find(|x| x.id == t).map_or_else(|| t.trim_start_matches("minecraft:").to_string(), |x| x.name.clone())),
-                                None => "Loot Table: Default".to_string(),
-                            };
-                            let chosen = ctx_menu::submenu_painted(ui, &mut tables, ctx_menu::item_icon("chest"), &label, crate::item_picker::WIDTH, crate::item_picker::HEIGHT, |ui| {
-                                crate::item_picker::show_loot_tables(ui, d.loot_table.as_deref(), &own)
-                            });
-                            if let Some(t) = chosen {
-                                got = Some(MobEdit::LootTable(t));
-                            }
-                        }
-                        if ctx_menu::toggle(ui, "Can Pick Up Loot", d.pick_up) {
-                            got = Some(MobEdit::PickUp(!d.pick_up));
-                        }
-                        ctx_menu::set_row_width(ui.ctx(), old);
-                        got
-                    });
-                    if let Some(e) = picked {
-                        edit(&mut out, e);
-                    }
-                }
-                // Its status effects: each one's level and time, and adding more.
-                if let Some((effects, choices)) = &m.effects {
-                    if let Some(e) = crate::effects::menu(ui, &mut inner, &path_key(path), "Status Effects", effects, choices) {
-                        edit(&mut out, MobEdit::Effect(e));
-                    }
-                }
-                // A shulker's color.
-                if let Some(now) = m.shulker_color {
-                    let shown = if now == 16 { "shulker_box".to_string() } else { format!("{}_shulker_box", crate::mob_edit::COLORS.get(now as usize).copied().unwrap_or("purple")) };
-                    let picked = ctx_menu::submenu_painted(ui, &mut inner, ctx_menu::item_icon(&shown), "Color", 220.0, 20.0 + 17.0 * 26.0, |ui| {
-                        let old = ctx_menu::set_row_width(ui.ctx(), 220.0);
-                        let mut got = None;
-                        for (k, (cid, name)) in crate::item_edit::shulker_colors().into_iter().enumerate() {
-                            // Undyed first in the list; 16 as the shulker keeps it.
-                            let v = if k == 0 { 16 } else { k as i64 - 1 };
-                            let current = v == now;
-                            let clicked = ctx_menu::painted(ui, &name, if current { "\u{2713}" } else { "" }, true, move |p, r, ink| {
-                                if !icons::item_icon(p, r, &cid, Color32::WHITE) {
-                                    icons::paint(p, r, Icon::File, ink);
-                                }
-                            });
-                            if clicked && !current {
-                                got = Some(v);
-                            }
-                        }
-                        ctx_menu::set_row_width(ui.ctx(), old);
-                        got
-                    });
-                    if let Some(v) = picked {
-                        edit(&mut out, MobEdit::ShulkerColor(v));
-                    }
-                }
-                if let Some((at, exact)) = m.gateway {
-                    for (k, axis) in ["Exit X", "Exit Y", "Exit Z"].iter().enumerate() {
-                        let key = egui::Id::new(("gateway-exit", path_key(path), k));
-                        let mut v: i64 = ui.ctx().data(|d| d.get_temp(key)).unwrap_or(at[k]);
-                        let (changed, done) = ctx_menu::number_row(ui, Icon::Rename, axis, &mut v, -30_000_000..=30_000_000, "");
-                        if changed {
-                            ui.ctx().data_mut(|d| d.insert_temp(key, v));
-                        }
-                        if done {
-                            ui.ctx().data_mut(|d| d.remove_temp::<i64>(key));
-                            if v != at[k] {
-                                let mut to = at;
-                                to[k] = v;
-                                edit(&mut out, MobEdit::GatewayExit(to));
-                            }
-                        }
-                    }
-                    if let Some(on) = exact {
-                        if ctx_menu::toggle(ui, "Exact Teleport", on) {
-                            edit(&mut out, MobEdit::GatewayExact(!on));
-                        }
-                    }
-                }
+                let mut inner = ctx_menu::Cx::default();
                 if let Some((false, current)) = &extras.name {
                     if let Some(n) = crate::item_edit::name_menu(ui, &mut inner, current) {
                         out.push(Action::SetName(path.clone(), n));
                     }
                 }
-                ctx_menu::set_row_width(ui.ctx(), old);
                 (!out.is_empty()).then_some(out)
             });
             actions.extend(chosen.into_iter().flatten());
@@ -2194,6 +2455,12 @@ impl NbtTree {
                 });
                 if let Some(id) = picked {
                     actions.push(Action::EditMob(path.clone(), MobEdit::SpawnerMob(id)));
+                }
+            }
+            // A beacon: its powers and their level, together under Beacon.
+            if let Some(c) = tag.as_compound().filter(|c| crate::mob_edit::is_beacon(c)) {
+                if let Some(e) = crate::explorer_ui::beacon_submenu(ui, cx, c) {
+                    actions.push(Action::EditMob(path.clone(), e));
                 }
             }
             // A container: its lock (the name of the key that opens it) and its name.
@@ -2344,7 +2611,7 @@ impl NbtTree {
         } else {
             format!("Copied {} tags", taken.len())
         };
-        self.clipboard = taken;
+        clip_set(taken);
         true
     }
 
@@ -2765,7 +3032,7 @@ impl NbtTree {
                     self.apply(Action::Cut(p));
                 }
             }
-            if paste && !self.clipboard.is_empty() {
+            if paste && !clip_get().is_empty() {
                 // Into the selected compound or list, else into the one holding the selection.
                 let target = match get_mut(&mut self.root.tag, &whole) {
                     Some(Tag::Compound(_) | Tag::List(_)) => whole.clone(),
@@ -3173,10 +3440,11 @@ impl NbtTree {
                 self.announce(format!("Added a {} tag", type_name(t).to_lowercase()));
             }
             Action::Paste(p) => {
-                if self.clipboard.is_empty() {
+                let items = clip_get();
+                if items.is_empty() {
                     return;
                 }
-                let items = self.clipboard.clone();
+                let total = items.len();
                 let mut skipped = 0;
                 match get_mut(&mut self.root.tag, &p) {
                     Some(Tag::Compound(c)) => {
@@ -3213,7 +3481,7 @@ impl NbtTree {
                                 });
                             }
                         }
-                        if skipped == self.clipboard.len() {
+                        if skipped == total {
                             self.status = "The copied tags do not fit this list".into();
                             return;
                         }
@@ -3316,6 +3584,74 @@ impl NbtTree {
     pub fn edit_root(&mut self, e: crate::mob_edit::MobEdit) {
         self.frame_start = Some(self.snap());
         self.apply(Action::EditMob(Vec::new(), e));
+    }
+
+    /// Opens the inventory of the block entity of the block at a world position (a chest, a barrel...)
+    /// in this chunk, as "Edit Inventory" does in the tree; false when there is none that holds items.
+    pub fn open_block_inventory(&mut self, at: [i32; 3]) -> bool {
+        let lists: [TagPath; 3] = [
+            vec![Seg::Key("block_entities".into())],
+            vec![Seg::Key("Level".into()), Seg::Key("TileEntities".into())],
+            vec![Seg::Key("TileEntities".into())],
+        ];
+        for list in lists {
+            let Some(Tag::List(l)) = get_ref(&self.root.tag, &list) else { continue };
+            let found = l.iter().position(|t| {
+                t.as_compound().is_some_and(|c| {
+                    let n = |k: &str| c.get(k).and_then(Tag::as_i64);
+                    n("x") == Some(i64::from(at[0])) && n("y") == Some(i64::from(at[1])) && n("z") == Some(i64::from(at[2])) && matches!(c.get("Items"), Some(Tag::List(_)))
+                })
+            });
+            if let Some(i) = found {
+                let mut path = list.clone();
+                path.push(Seg::Index(i));
+                path.push(Seg::Key("Items".into()));
+                self.apply(Action::OpenInventory(path));
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Opens the inventory of the mob standing at a world position in this chunk's Entities (a villager's,
+    /// a donkey's chest); false when there is none that holds items.
+    /// Opens the trades screen of the villager standing at a world position in this chunk's Entities.
+    pub fn open_mob_trades(&mut self, at: [f64; 3]) -> bool {
+        let list: TagPath = vec![Seg::Key("Entities".into())];
+        let Some(Tag::List(l)) = get_ref(&self.root.tag, &list) else { return false };
+        let found = l.iter().position(|t| {
+            t.as_compound().is_some_and(|c| {
+                let pos: Vec<f64> = c.get("Pos").and_then(Tag::as_list).map(|p| p.iter().filter_map(Tag::as_f64).collect()).unwrap_or_default();
+                pos.len() == 3 && (0..3).all(|k| (pos[k] - at[k]).abs() <= 0.01)
+            })
+        });
+        let Some(i) = found else { return false };
+        let mut path = list;
+        path.push(Seg::Index(i));
+        self.apply(Action::OpenTrades(path));
+        true
+    }
+
+    pub fn open_mob_inventory(&mut self, at: [f64; 3]) -> bool {
+        let list: TagPath = vec![Seg::Key("Entities".into())];
+        let Some(Tag::List(l)) = get_ref(&self.root.tag, &list) else { return false };
+        for (i, t) in l.iter().enumerate() {
+            let Some(c) = t.as_compound() else { continue };
+            let pos: Vec<f64> = c.get("Pos").and_then(Tag::as_list).map(|p| p.iter().filter_map(Tag::as_f64).collect()).unwrap_or_default();
+            if pos.len() != 3 || (0..3).any(|k| (pos[k] - at[k]).abs() > 0.01) {
+                continue;
+            }
+            for key in ["Inventory", "Items"] {
+                if matches!(c.get(key), Some(Tag::List(_))) {
+                    let mut path = list.clone();
+                    path.push(Seg::Index(i));
+                    path.push(Seg::Key(key.into()));
+                    self.apply(Action::OpenInventory(path));
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     pub fn open_player_inventory(&mut self) -> bool {
@@ -3913,6 +4249,43 @@ impl NbtTree {
                 };
                 self.apply(Action::SetValues(vec![(path, Tag::Compound(c))], note));
             }
+            Edit::Paste { slot, stack } => {
+                let into = target(half(slot));
+                let (want_bedrock, modern, legacy_count, empty) = match get_ref(&self.root.tag, &into) {
+                    Some(Tag::List(l)) => (
+                        l.iter().filter_map(Tag::as_compound).any(is_bedrock_item),
+                        l.iter().filter_map(Tag::as_compound).any(|c| c.contains_key("count")),
+                        l.iter().filter_map(Tag::as_compound).any(|c| c.contains_key("Count")),
+                        l.is_empty(),
+                    ),
+                    _ => return,
+                };
+                let mut c = stack;
+                if !empty && is_bedrock_item(&c) != want_bedrock {
+                    self.status = "That item is from a different kind of world".into();
+                    return;
+                }
+                // The count as this list writes it (an int `count`, or a byte `Count`).
+                if modern {
+                    if let Some(n) = c.shift_remove("Count").and_then(|t| t.as_i64()) {
+                        c.insert("count".into(), Tag::Int(n as i32));
+                    }
+                } else if legacy_count {
+                    if let Some(n) = c.shift_remove("count").and_then(|t| t.as_i64()) {
+                        c.insert("Count".into(), Tag::Byte(n.clamp(1, 127) as i8));
+                    }
+                }
+                c.insert("Slot".into(), Tag::Byte(local(slot) as i8));
+                let bedrock_path = if bedrock { self.bedrock_slot_path(list, slot) } else { None };
+                if let Some(path) = bedrock_path {
+                    self.apply(Action::SetValues(vec![(path, Tag::Compound(c))], "Pasted an item".into()));
+                } else if let Some(s) = slot_of(slot) {
+                    self.apply(Action::SetValues(vec![(stack_at(s.index), Tag::Compound(c))], "Pasted an item".into()));
+                } else {
+                    self.apply(Action::AddStack(into, c));
+                }
+                state.selected = Some(slot);
+            }
             Edit::Add { slot, id, count } => {
                 let into = target(half(slot));
                 let Some(stack) = self.new_stack(&into, local(slot) as i8, &id) else { return };
@@ -3947,6 +4320,21 @@ impl NbtTree {
         let modern = existing.clone().any(|c| c.contains_key("count"))
             || (l.is_empty() && self.root.tag.get("DataVersion").and_then(Tag::as_i64).is_some_and(|v| v >= 3837));
         let mut c = Compound::new();
+        // A list of the current console games: text ids next to a byte `Count` and a short `Damage`.
+        let text_ids = existing.clone().any(|c| {
+            matches!(c.get("id"), Some(Tag::String(s)) if current_console_item(s).is_some()) && matches!(c.get("Damage"), Some(Tag::Short(_)))
+        });
+        if text_ids {
+            let Some((n, damage)) = mctk_mapping::legacy::legacy().numeric_item(id) else {
+                self.status = "That item has no number in this kind of world".into();
+                return None;
+            };
+            c.insert("id".into(), Tag::String(mctk_convert::current_item_text(n as i16)));
+            c.insert("Damage".into(), Tag::Short(damage as i16));
+            c.insert("Count".into(), Tag::Byte(1));
+            c.insert("Slot".into(), Tag::Byte(slot));
+            return Some(c);
+        }
         match numeric {
             Some(wide) => {
                 let Some((n, damage)) = mctk_mapping::legacy::legacy().numeric_item(id) else {
@@ -4141,7 +4529,7 @@ impl NbtTree {
         let scroll_by = self.autoscroll;
         let expanded = self.expanded.clone();
         let read_only = self.read_only;
-        let has_clipboard = !self.clipboard.is_empty();
+        let has_clipboard = !clip_get().is_empty();
         let marks = self.marks.list.clone();
         let undone = self.undone.clone();
         let stripe = Cell::new(0);
@@ -4223,6 +4611,43 @@ impl NbtTree {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A chunk opened with the World Explorer's changes: a block entity it removed is still in the tree, marked
+    /// deleted, and the one whose value changed is marked edited.
+    #[test]
+    fn adopting_a_changed_root_marks_what_was_removed_and_what_was_edited() {
+        let entry = |name: &str, n: i32| {
+            let mut c = Compound::new();
+            c.insert("id".into(), Tag::String(name.into()));
+            c.insert("x".into(), Tag::Int(n));
+            Tag::Compound(c)
+        };
+        let root = |entries: Vec<Tag>| {
+            let mut c = Compound::new();
+            c.insert("block_entities".into(), Tag::List(List::from_tags(TagType::Compound, entries).unwrap()));
+            NamedTag { name: String::new(), tag: Tag::Compound(c) }
+        };
+        let mut tree = NbtTree::new(root(vec![entry("chest", 1), entry("beacon", 2), entry("sign", 3)]));
+        // The beacon is gone.
+        tree.adopt(root(vec![entry("chest", 1), entry("sign", 3)]));
+        let list = tree.root.tag.get("block_entities").and_then(Tag::as_list).unwrap();
+        assert_eq!(list.len(), 3, "the removed one stays until the save");
+        let beacon = vec![Seg::Key("block_entities".into()), Seg::Index(1)];
+        assert!(tree.marks.list.iter().any(|m| m.kind == Kind::Gone && m.path == beacon), "the beacon is marked deleted");
+        assert!(tree.dirty);
+
+        // A mob added at the end of the list is marked added, and what holds it changed.
+        let mut tree = NbtTree::new(root(vec![entry("chest", 1)]));
+        tree.adopt(root(vec![entry("chest", 1), entry("zombie", 9)]));
+        let added = vec![Seg::Key("block_entities".into()), Seg::Index(1)];
+        assert!(tree.marks.list.iter().any(|m| m.kind == Kind::Fresh && m.path == added), "the new entry is marked added");
+        assert!(tree.marks.list.iter().any(|m| m.kind == Kind::Edited && m.path == vec![Seg::Key("block_entities".into())]), "the list is marked changed");
+        assert_eq!(tree.root.tag.get("block_entities").and_then(Tag::as_list).map(List::len), Some(2));
+        // The explorer's changes can be undone here: the added mob goes.
+        tree.undo();
+        assert_eq!(tree.root.tag.get("block_entities").and_then(Tag::as_list).map(List::len), Some(1), "undone");
+    }
+
     #[test]
     fn formats_round_trip() {
         let mut c = Compound::new();
@@ -4296,7 +4721,7 @@ mod tests {
         t.frame_start = Some(t.snap());
         t.apply(Action::Cut(item(0)));
         assert_eq!(t.marks.list.iter().filter(|m| m.kind == Kind::Gone).count(), 3);
-        assert_eq!(t.clipboard.len(), 3);
+        assert_eq!(clip_get().len(), 3);
         assert!(t.marked.is_empty());
         t.purge_deleted();
         let l = t.root.tag.get("l").unwrap().as_list().unwrap();
@@ -4439,6 +4864,79 @@ mod tests {
         t.frame_start = Some(t.snap());
         run(&mut t, Edit::Change { index: 0, id: "minecraft:iron_sword".into() });
         assert_eq!(at(&t, 0, "id"), Some(Tag::String("minecraft:iron_sword".into())));
+    }
+
+    /// A tag copied in one tree is pasted in another tab's tree, and a copied item goes into an
+    /// inventory slot (an empty one, or over a stack), written the way that list writes its stacks.
+    #[test]
+    fn a_copied_item_pastes_into_another_tab_and_into_an_inventory() {
+        use crate::inventory::Edit;
+        let mut from = inventory_tree();
+        let item = vec![Seg::Key("Inventory".into()), Seg::Index(0)];
+        assert!(from.copy_tags(&[item]));
+        assert!(clipboard_stack().is_some(), "an item is on the clipboard");
+        // Into another tab's tree: a list takes it.
+        let mut other = inventory_tree();
+        other.frame_start = Some(other.snap());
+        other.apply(Action::Paste(vec![Seg::Key("Inventory".into())]));
+        assert_eq!(other.root.tag.get("Inventory").and_then(Tag::as_list).map(|l| l.len()), Some(3));
+        // Into an inventory screen: an empty slot, then over a stack; a modern list gets `count`.
+        let list = vec![Seg::Key("Inventory".into())];
+        let mut state = crate::inventory::State::default();
+        let mut t = inventory_tree();
+        if let Some(Tag::List(l)) = t.root.tag.as_compound_mut().and_then(|c| c.get_mut("Inventory")) {
+            for i in 0..l.len() {
+                if let Some(c) = l.get_mut(i).and_then(Tag::as_compound_mut) {
+                    if let Some(n) = c.shift_remove("Count").and_then(|t| t.as_i64()) {
+                        c.insert("count".into(), Tag::Int(n as i32));
+                    }
+                }
+            }
+        }
+        let stack = clipboard_stack().unwrap();
+        t.frame_start = Some(t.snap());
+        let slots = t.inventory_slots(&list);
+        t.inventory_edit(&list, &slots, Edit::Paste { slot: 20, stack: stack.clone() }, &mut state);
+        let slots = t.inventory_slots(&list);
+        let pasted = slots.iter().find(|s| s.slot == 20).expect("in the empty slot");
+        assert_eq!(pasted.id, "minecraft:diamond_sword");
+        assert!(t.root.tag.get("Inventory").and_then(Tag::as_list).and_then(|l| l.get(2)).and_then(|c| c.get("count")).is_some(), "written as this list writes counts");
+        t.frame_start = Some(t.snap());
+        t.inventory_edit(&list, &slots, Edit::Paste { slot: 9, stack }, &mut state);
+        let slots = t.inventory_slots(&list);
+        assert_eq!(slots.iter().find(|s| s.slot == 9).map(|s| s.id.as_str()), Some("minecraft:diamond_sword"), "over the apple");
+        assert_eq!(slots.len(), 3);
+    }
+
+    #[test]
+    fn a_current_console_chest_reads_and_writes_text_ids() {
+        use crate::inventory::Edit;
+        let stack = |id: &str, damage: i16, slot: i8| {
+            let mut c = Compound::new();
+            c.insert("id".into(), Tag::String(id.into()));
+            c.insert("Count".into(), Tag::Byte(1));
+            c.insert("Slot".into(), Tag::Byte(slot));
+            c.insert("Damage".into(), Tag::Short(damage));
+            Tag::Compound(c)
+        };
+        // as the current games write a chest: a number as text for a block, the 1.12 name for another item
+        let list = List::from_tags(TagType::Compound, vec![stack("5", 4, 0), stack("minecraft:apple", 0, 1)]).unwrap();
+        let mut root = Compound::new();
+        root.insert("Items".into(), Tag::List(list));
+        let mut t = NbtTree::new(NamedTag { name: String::new(), tag: Tag::Compound(root) });
+        let path = vec![Seg::Key("Items".into())];
+        let slots = t.inventory_slots(&path);
+        assert_eq!(slots.iter().find(|s| s.slot == 0).map(|s| s.id.as_str()), Some("minecraft:acacia_planks"));
+        assert_eq!(slots.iter().find(|s| s.slot == 1).map(|s| s.id.as_str()), Some("minecraft:apple"));
+        // a stack added to it is written the same way
+        let mut state = crate::inventory::State::default();
+        t.frame_start = Some(t.snap());
+        t.inventory_edit(&path, &slots, Edit::Add { slot: 5, id: "minecraft:diamond".into(), count: 1 }, &mut state);
+        t.inventory_edit(&path, &t.inventory_slots(&path), Edit::Add { slot: 6, id: "minecraft:stone".into(), count: 1 }, &mut state);
+        let slots = t.inventory_slots(&path);
+        let id_tag = |slot: i8| slots.iter().find(|s| s.slot == slot).and_then(|s| s.stack.get("id").cloned());
+        assert_eq!(id_tag(5), Some(Tag::String("minecraft:diamond".into())));
+        assert_eq!(id_tag(6), Some(Tag::String("1".into())));
     }
 
     #[test]

@@ -88,6 +88,7 @@ impl View {
 }
 
 #[derive(Clone)]
+#[derive(Default)]
 struct State {
     view: Option<View>,
     page: usize,
@@ -108,25 +109,6 @@ struct State {
     text: Option<String>,
 }
 
-impl Default for State {
-    fn default() -> Self {
-        State {
-            view: None,
-            page: 0,
-            goto: 0,
-            from: 0,
-            to: None,
-            fill: 0,
-            new_len: None,
-            layer: 0,
-            draft: None,
-            tools: false,
-            import: false,
-            clear: false,
-            text: None,
-        }
-    }
-}
 
 /// Where and how an array is drawn.
 pub struct Panel<'a> {
@@ -267,7 +249,7 @@ pub fn pictures<E: Elem>(name: &str, len: usize) -> Vec<Picture> {
 }
 
 /// Draws one picture of the array, with nothing around it.
-pub fn show_picture<E: Elem>(ui: &mut Ui, p: &Panel, values: &mut Vec<E>, picture: Picture) -> Outcome {
+pub fn show_picture<E: Elem>(ui: &mut Ui, p: &Panel, values: &mut [E], picture: Picture) -> Outcome {
     let id = egui::Id::new(("array-view", p.key));
     let mut st: State = ui.data(|d| d.get_temp(id)).unwrap_or_default();
     let mut out = Outcome::default();
@@ -1016,6 +998,7 @@ struct Draft {
 
 /// How an imported picture is made to fit the square map.
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::enum_variant_names)]
 enum Fit {
     /// Squashed to the full map.
     Stretch,
